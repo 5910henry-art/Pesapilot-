@@ -1,0 +1,269 @@
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 28px 16px;
+  background:
+    radial-gradient(circle at 10% 10%, rgba(16, 185, 129, .10), transparent 32%),
+    #f4f7f6;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 450px;
+  padding: 36px;
+  background: #fff;
+  border: 1px solid #e8eeeb;
+  border-radius: 20px;
+  box-shadow: 0 18px 55px rgba(20, 45, 36, .08);
+}
+
+.auth-card-wide {
+  max-width: 510px;
+}
+
+.auth-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  color: #142b25;
+  text-decoration: none;
+  margin-bottom: 34px;
+}
+
+.auth-brand-icon {
+  width: 43px;
+  height: 43px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: #087f5b;
+  color: white;
+}
+
+.auth-brand strong,
+.auth-brand small {
+  display: block;
+}
+
+.auth-brand strong {
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.auth-brand small {
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 1.1px;
+  color: #84938c;
+  font-weight: 700;
+}
+
+.auth-heading {
+  margin-bottom: 25px;
+}
+
+.auth-eyebrow {
+  color: #07845d;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+}
+
+.auth-heading h1 {
+  margin: 9px 0 7px;
+  color: #172d26;
+  font-size: 27px;
+  letter-spacing: -.8px;
+}
+
+.auth-heading p {
+  color: #78877f;
+  font-size: 13px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.auth-form label {
+  color: #33483f;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 5px;
+}
+
+.auth-form input,
+.auth-form select {
+  width: 100%;
+  min-height: 47px;
+  padding: 0 13px;
+  border: 1px solid #dce5e0;
+  border-radius: 9px;
+  outline: none;
+  background: #fff;
+  color: #24382f;
+  font: inherit;
+  font-size: 13px;
+}
+
+.auth-form input:focus,
+.auth-form select:focus {
+  border-color: #0b9b6d;
+  box-shadow: 0 0 0 3px rgba(11, 155, 109, .10);
+}
+
+.auth-form input::placeholder {
+  color: #a3afa9;
+}
+
+.auth-password-field {
+  position: relative;
+}
+
+.auth-password-field input {
+  padding-right: 48px;
+}
+
+.auth-password-field button {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: #7b8b83;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 6px;
+}
+
+.auth-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.auth-form-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.auth-optional {
+  color: #98a69f;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.auth-submit {
+  min-height: 49px;
+  margin-top: 13px;
+  border: 0;
+  border-radius: 10px;
+  background: #087f5b;
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: background .2s ease;
+}
+
+.auth-submit:hover {
+  background: #066b4d;
+}
+
+.auth-submit:disabled {
+  opacity: .65;
+  cursor: not-allowed;
+}
+
+.auth-error,
+.auth-success {
+  padding: 12px 14px;
+  border-radius: 9px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auth-error {
+  color: #a52d35;
+  background: #fff0f0;
+  border: 1px solid #f5d4d6;
+}
+
+.auth-success {
+  color: #08734f;
+  background: #edfaf4;
+  border: 1px solid #d1f0df;
+}
+
+.auth-switch {
+  text-align: center;
+  color: #78877f;
+  font-size: 13px;
+  margin-top: 23px;
+}
+
+.auth-switch a {
+  color: #087f5b;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-footer {
+  text-align: center;
+  color: #9aa69f;
+  font-size: 11px;
+  margin-top: 25px;
+}
+
+.auth-loading {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+  color: #687970;
+  font-size: 13px;
+}
+
+.auth-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid #dcebe4;
+  border-top-color: #087f5b;
+  border-radius: 50%;
+  animation: auth-spin .8s linear infinite;
+}
+
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 520px) {
+  .auth-card {
+    padding: 27px 21px;
+    border-radius: 15px;
+  }
+
+  .auth-heading h1 {
+    font-size: 24px;
+  }
+}
+
+@media (max-width: 360px) {
+  .auth-form-grid {
+    grid-template-columns: 1fr;
+  }
+}

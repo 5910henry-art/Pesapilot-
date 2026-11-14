@@ -1,10 +1,11 @@
 import uuid
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     UniqueConstraint,
     String,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     JSON,
+    Date,
 )
 
 from sqlalchemy.orm import Mapped, mapped_column
@@ -328,6 +330,11 @@ class FinancialAccount(db.Model):
     )
 
     __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "id",
+            name="uq_financial_account_workspace_id",
+        ),
         CheckConstraint(
             "account_type IN "
             "('cash', 'bank', 'mobile_money', 'savings', 'investment', 'credit')",
@@ -394,6 +401,16 @@ class LedgerAccount(db.Model):
     )
 
     __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "id",
+            name="uq_ledger_account_workspace_id",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "financial_account_id"],
+            ["financial_accounts.workspace_id", "financial_accounts.id"],
+            name="fk_ledger_financial_account_workspace",
+        ),
         UniqueConstraint(
             "workspace_id",
             "code",
@@ -665,4 +682,229 @@ class RefreshToken(db.Model):
         DateTime(timezone=True),
         default=utc_now,
         nullable=False,
+    )
+
+
+class ExpenseCategory(db.Model):
+    __tablename__ = "expense_categories"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        primary_key=True,
+        default=new_uuid,
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    ledger_account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ledger_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "id",
+            name="uq_expense_category_workspace_id",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "ledger_account_id"],
+            ["ledger_accounts.workspace_id", "ledger_accounts.id"],
+            name="fk_expense_category_ledger_workspace",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "name",
+            name="uq_expense_category_workspace_name",
+        ),
+    )
+
+
+class Budget(db.Model):
+    __tablename__ = "budgets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        primary_key=True,
+        default=new_uuid,
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("expense_categories.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    amount_minor: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    currency_code: Mapped[str] = mapped_column(
+        ForeignKey("currencies.code"),
+        nullable=False,
+    )
+
+    period_start: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+    )
+
+    period_end: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "category_id"],
+            ["expense_categories.workspace_id", "expense_categories.id"],
+            name="fk_budget_category_workspace",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "category_id",
+            "period_start",
+            "period_end",
+            name="uq_budget_category_period",
+        ),
+        CheckConstraint(
+            "amount_minor > 0",
+            name="ck_budget_amount_positive",
+        ),
+        CheckConstraint(
+            "period_end >= period_start",
+            name="ck_budget_period_valid",
+        ),
+    )
+
+
+class SavingsGoal(db.Model):
+    __tablename__ = "savings_goals"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        primary_key=True,
+        default=new_uuid,
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    target_amount_minor: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    currency_code: Mapped[str] = mapped_column(
+        ForeignKey("currencies.code"),
+        nullable=False,
+    )
+
+    target_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+    )
+
+    financial_account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("financial_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="active",
+        nullable=False,
+    )
+
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "financial_account_id"],
+            ["financial_accounts.workspace_id", "financial_accounts.id"],
+            name="fk_savings_goal_account_workspace",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "target_amount_minor > 0",
+            name="ck_savings_goal_target_positive",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'paused', 'archived')",
+            name="ck_savings_goal_status",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "name",
+            name="uq_savings_goal_workspace_name",
+        ),
     )

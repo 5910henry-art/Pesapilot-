@@ -11,4 +11,7 @@ from .core import (
     JournalLine,
     AuditLog,
     RefreshToken,
+    ExpenseCategory,
+    Budget,
+    SavingsGoal,
 )

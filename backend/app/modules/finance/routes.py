@@ -1,10 +1,11 @@
 from uuid import UUID
+from zoneinfo import ZoneInfo
 from datetime import datetime, timezone
 
 from flask import current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 from app.extensions import db
 from app.models import (
@@ -16,6 +17,9 @@ from app.models import (
     AuditLog,
     JournalEntry,
     JournalLine,
+    Workspace,
+    UserProfile,
+    ExpenseCategory,
 )
 
 from . import finance_bp
@@ -406,6 +410,120 @@ def create_journal_entry():
             "success": False,
             "message": "You do not have permission to create transactions.",
         }), 403
+
+    # Expense entries must use a valid workspace expense category.
+    lines = data.get("lines")
+
+    if not isinstance(lines, list):
+        return jsonify({
+            "success": False,
+            "message": "Transaction lines must be a list.",
+        }), 400
+
+    line_ids = []
+
+    try:
+        for item in lines:
+            if not isinstance(item, dict):
+                raise ValueError()
+
+            line_ids.append(UUID(str(item.get("ledger_account_id"))))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Every transaction line must have a valid ledger account ID.",
+        }), 400
+
+    expense_accounts = LedgerAccount.query.filter(
+        LedgerAccount.workspace_id == workspace_id,
+        LedgerAccount.account_class == "expense",
+        LedgerAccount.id.in_(set(line_ids)),
+    ).all()
+
+    expense_account_ids = {account.id for account in expense_accounts}
+
+    category_id_value = data.get("category_id")
+    category_ledger = None
+
+    if category_id_value is not None:
+        try:
+            category_id = UUID(str(category_id_value))
+        except (ValueError, TypeError, AttributeError):
+            return jsonify({
+                "success": False,
+                "message": "Invalid expense category ID.",
+            }), 400
+
+        category = ExpenseCategory.query.filter_by(
+            id=category_id,
+            workspace_id=workspace_id,
+            is_active=True,
+        ).first()
+
+        if category is None:
+            return jsonify({
+                "success": False,
+                "message": "Active expense category not found in this workspace.",
+            }), 400
+
+        category_ledger = LedgerAccount.query.filter_by(
+            id=category.ledger_account_id,
+            workspace_id=workspace_id,
+            account_class="expense",
+            normal_balance="debit",
+            is_active=True,
+        ).first()
+
+        if category_ledger is None:
+            return jsonify({
+                "success": False,
+                "message": "The selected expense category has no valid ledger account.",
+            }), 400
+
+        category_lines = [
+            item for item in lines
+            if str(item.get("ledger_account_id")) == str(category_ledger.id)
+        ]
+
+        if len(category_lines) != 1:
+            return jsonify({
+                "success": False,
+                "message": "The transaction must contain exactly one line for the selected expense category.",
+            }), 400
+
+        category_line = category_lines[0]
+        debit = category_line.get("debit_minor")
+        credit = category_line.get("credit_minor")
+
+        if (
+            isinstance(debit, bool)
+            or not isinstance(debit, int)
+            or debit <= 0
+            or isinstance(credit, bool)
+            or credit != 0
+        ):
+            return jsonify({
+                "success": False,
+                "message": "The selected expense category must be debited.",
+            }), 400
+
+        if expense_account_ids - {category_ledger.id}:
+            return jsonify({
+                "success": False,
+                "message": "An expense transaction cannot use another expense ledger alongside its selected category.",
+            }), 400
+
+    elif any(
+        isinstance(item.get("debit_minor"), int)
+        and not isinstance(item.get("debit_minor"), bool)
+        and item["debit_minor"] > 0
+        and UUID(str(item.get("ledger_account_id"))) in expense_account_ids
+        for item in lines
+    ):
+        return jsonify({
+            "success": False,
+            "message": "Select an expense category before recording this expense.",
+        }), 400
 
     date_value = data.get("transaction_date")
 
@@ -874,4 +992,264 @@ def reverse_journal_entry(entry_id):
         return jsonify({
             "success": False,
             "message": "Transaction could not be reversed.",
+        }), 500
+
+@finance_bp.get("/dashboard")
+@jwt_required()
+def dashboard_summary():
+    workspace_id = _parse_workspace_id(
+        request.args.get("workspace_id")
+    )
+
+    if workspace_id is None:
+        return jsonify({
+            "success": False,
+            "message": "A valid workspace ID is required.",
+        }), 400
+
+    try:
+        user_id = UUID(str(get_jwt_identity()))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    membership = get_workspace_membership(workspace_id, user_id)
+
+    if membership is None:
+        return jsonify({
+            "success": False,
+            "message": "Workspace not found or access denied.",
+        }), 404
+
+    try:
+        workspace = Workspace.query.filter_by(
+            id=workspace_id
+        ).first()
+
+        if workspace is None:
+            return jsonify({
+                "success": False,
+                "message": "Workspace not found.",
+            }), 404
+
+        profile = UserProfile.query.filter_by(
+            user_id=user_id
+        ).first()
+
+        timezone_name = (
+            profile.timezone if profile and profile.timezone else "UTC"
+        )
+
+        try:
+            user_timezone = ZoneInfo(timezone_name)
+        except Exception:
+            user_timezone = ZoneInfo("UTC")
+            timezone_name = "UTC"
+
+        now_local = datetime.now(timezone.utc).astimezone(user_timezone)
+
+        month_start_local = datetime(
+            now_local.year,
+            now_local.month,
+            1,
+            tzinfo=user_timezone,
+        )
+
+        if now_local.month == 12:
+            next_month_local = datetime(
+                now_local.year + 1, 1, 1, tzinfo=user_timezone
+            )
+        else:
+            next_month_local = datetime(
+                now_local.year,
+                now_local.month + 1,
+                1,
+                tzinfo=user_timezone,
+            )
+
+        month_start_utc = month_start_local.astimezone(timezone.utc)
+        next_month_utc = next_month_local.astimezone(timezone.utc)
+
+        posted_statuses = ("posted", "reversed")
+
+        # Current balances for every ledger account.
+        balance_rows = (
+            db.session.query(
+                LedgerAccount.id,
+                LedgerAccount.account_class,
+                LedgerAccount.normal_balance,
+                func.coalesce(func.sum(
+                    case(
+                        (
+                            JournalEntry.id.is_not(None),
+                            JournalLine.functional_debit_minor,
+                        ),
+                        else_=0,
+                    )
+                ), 0).label("debits"),
+                func.coalesce(func.sum(
+                    case(
+                        (
+                            JournalEntry.id.is_not(None),
+                            JournalLine.functional_credit_minor,
+                        ),
+                        else_=0,
+                    )
+                ), 0).label("credits"),
+            )
+            .outerjoin(
+                JournalLine,
+                JournalLine.ledger_account_id == LedgerAccount.id,
+            )
+            .outerjoin(
+                JournalEntry,
+                (JournalEntry.id == JournalLine.journal_entry_id)
+                & (JournalEntry.workspace_id == workspace_id)
+                & (JournalEntry.status.in_(posted_statuses)),
+            )
+            .filter(LedgerAccount.workspace_id == workspace_id)
+            .group_by(
+                LedgerAccount.id,
+                LedgerAccount.account_class,
+                LedgerAccount.normal_balance,
+            )
+            .all()
+        )
+
+        functional_balances = {}
+        total_assets = 0
+
+        for row in balance_rows:
+            debits = int(row.debits)
+            credits = int(row.credits)
+
+            balance = (
+                debits - credits
+                if row.normal_balance == "debit"
+                else credits - debits
+            )
+
+            functional_balances[row.id] = balance
+
+            if row.account_class == "asset":
+                total_assets += balance
+
+        # Savings total comes only from financial accounts
+        # explicitly classified as savings.
+        savings_rows = (
+            db.session.query(LedgerAccount.id)
+            .join(
+                FinancialAccount,
+                FinancialAccount.id == LedgerAccount.financial_account_id,
+            )
+            .filter(
+                FinancialAccount.workspace_id == workspace_id,
+                FinancialAccount.account_type == "savings",
+                FinancialAccount.is_active.is_(True),
+            )
+            .all()
+        )
+
+        total_savings = sum(
+            functional_balances.get(row.id, 0)
+            for row in savings_rows
+        )
+
+        # Monthly income and expense are calculated from functional
+        # currency journal lines. Reversal entries naturally offset
+        # their original transactions.
+        monthly = (
+            db.session.query(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                LedgerAccount.account_class == "income",
+                                JournalLine.functional_credit_minor
+                                - JournalLine.functional_debit_minor,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("income"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                LedgerAccount.account_class == "expense",
+                                JournalLine.functional_debit_minor
+                                - JournalLine.functional_credit_minor,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("expenses"),
+            )
+            .join(
+                JournalEntry,
+                JournalEntry.id == JournalLine.journal_entry_id,
+            )
+            .join(
+                LedgerAccount,
+                LedgerAccount.id == JournalLine.ledger_account_id,
+            )
+            .filter(
+                JournalEntry.workspace_id == workspace_id,
+                JournalEntry.status.in_(posted_statuses),
+                JournalEntry.transaction_date >= month_start_utc,
+                JournalEntry.transaction_date < next_month_utc,
+            )
+            .one()
+        )
+
+        recent_entries = (
+            JournalEntry.query
+            .filter_by(workspace_id=workspace_id)
+            .filter(JournalEntry.status.in_(posted_statuses))
+            .order_by(
+                JournalEntry.transaction_date.desc(),
+                JournalEntry.created_at.desc(),
+            )
+            .limit(8)
+            .all()
+        )
+
+        currency = Currency.query.filter_by(
+            code=workspace.functional_currency
+        ).first()
+
+        return jsonify({
+            "success": True,
+            "workspace_id": str(workspace_id),
+            "currency": workspace.functional_currency,
+            "minor_unit": currency.minor_unit if currency else 2,
+            "timezone": timezone_name,
+            "period": {
+                "start": month_start_local.date().isoformat(),
+                "end": next_month_local.date().isoformat(),
+            },
+            "summary": {
+                "total_assets_minor": total_assets,
+                "monthly_income_minor": int(monthly.income),
+                "monthly_expenses_minor": int(monthly.expenses),
+                "total_savings_minor": total_savings,
+            },
+            "recent_transactions": [
+                _journal_entry_response(entry)
+                for entry in recent_entries
+            ],
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Dashboard summary calculation failed"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Dashboard summary could not be calculated.",
         }), 500

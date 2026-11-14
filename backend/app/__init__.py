@@ -9,30 +9,38 @@ from .config import get_config
 from .extensions import db, migrate, jwt, cors
 from .modules.auth import auth_bp
 from .modules.finance import finance_bp
+from .modules.budgets import budgets_bp
+from .modules.savings import savings_bp
 
 
-def create_app():
+def create_app(test_config=None):
     app = Flask(__name__)
     app.config.from_object(get_config())
+
+    if test_config:
+        app.config.update(test_config)
 
     from . import models
 
     db.init_app(app)
 
     with app.app_context():
-        @event.listens_for(db.engine, "begin")
-        def set_pesapilot_schema(connection):
-            connection.exec_driver_sql(
-                "SET LOCAL search_path TO pesapilot"
-            )
-            connection.exec_driver_sql(
-                 "SET LOCAL TIME ZONE 'UTC'"
-            )
+        if db.engine.dialect.name == "postgresql":
+            @event.listens_for(db.engine, "begin")
+            def set_pesapilot_schema(connection):
+                connection.exec_driver_sql(
+                    "SET LOCAL search_path TO pesapilot"
+                )
+                connection.exec_driver_sql(
+                    "SET LOCAL TIME ZONE 'UTC'"
+                )
     migrate.init_app(app, db)
     jwt.init_app(app)
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(finance_bp)
+    app.register_blueprint(budgets_bp)
+    app.register_blueprint(savings_bp)
 
     cors.init_app(
         app,

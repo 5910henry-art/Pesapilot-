@@ -291,6 +291,33 @@ def create_draft_entry(
     return entry
 
 
+def _lock_entry_ledger_accounts(workspace_id, lines):
+    """Lock affected ledger accounts in a consistent order before balance changes."""
+    ledger_ids = {line.ledger_account_id for line in lines}
+
+    accounts = db.session.execute(
+        select(LedgerAccount)
+        .where(
+            LedgerAccount.id.in_(ledger_ids),
+            LedgerAccount.workspace_id == workspace_id,
+        )
+        .order_by(LedgerAccount.id.asc())
+        .with_for_update()
+    ).scalars().all()
+
+    if len(accounts) != len(ledger_ids):
+        raise AccountingError(
+            "One or more journal ledger accounts are unavailable."
+        )
+
+    if any(not account.is_active for account in accounts):
+        raise AccountingError(
+            "Journal entries cannot affect inactive ledger accounts."
+        )
+
+    return accounts
+
+
 def post_entry(*, entry_id: UUID, workspace_id: UUID, posted_by: UUID):
     """Validate and post a draft entry. Caller must commit."""
 
@@ -317,6 +344,8 @@ def post_entry(*, entry_id: UUID, workspace_id: UUID, posted_by: UUID):
         raise AccountingError(
             "At least two journal lines are required before posting."
         )
+
+    _lock_entry_ledger_accounts(workspace_id, lines)
 
     total_debits = sum(
         line.functional_debit_minor for line in lines
@@ -419,6 +448,8 @@ def reverse_entry(
         raise AccountingError(
             "Original transaction has insufficient journal lines."
         )
+
+    _lock_entry_ledger_accounts(workspace_id, original_lines)
 
     if description is None:
         reversal_description = (
