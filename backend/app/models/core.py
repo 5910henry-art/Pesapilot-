@@ -478,6 +478,10 @@ class JournalEntry(db.Model):
             "reference",
             name="uq_journal_reference",
         ),
+        UniqueConstraint(
+            "reversal_of_id",
+            name="uq_journal_reversal_of",
+        ),
         CheckConstraint(
             "status IN ('draft', 'posted', 'reversed')",
             name="ck_journal_status",
