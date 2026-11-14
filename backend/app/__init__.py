@@ -1,11 +1,13 @@
-from flask import Flask, jsonify
-from sqlalchemy import text
 from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+from flask import Flask, jsonify
+from sqlalchemy import event, text
 
 from .config import get_config
 from .extensions import db, migrate, jwt, cors
-
-load_dotenv(override=True)
+from .modules.auth import auth_bp
 
 
 def create_app():
@@ -15,11 +17,28 @@ def create_app():
     from . import models
 
     db.init_app(app)
+
+    with app.app_context():
+        @event.listens_for(db.engine, "begin")
+        def set_pesapilot_schema(connection):
+            connection.exec_driver_sql(
+                "SET LOCAL search_path TO pesapilot"
+            )
+            connection.exec_driver_sql(
+                 "SET LOCAL TIME ZONE 'UTC'"
+            )
     migrate.init_app(app, db)
     jwt.init_app(app)
+
+    app.register_blueprint(auth_bp)
+
     cors.init_app(
         app,
-        resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}}
+        resources={
+            r"/api/*": {
+                "origins": app.config["CORS_ORIGINS"]
+            }
+        },
     )
 
     @app.get("/api/v1/health")
@@ -27,7 +46,7 @@ def create_app():
         return jsonify({
             "success": True,
             "application": "PesaPilot",
-            "status": "running"
+            "status": "running",
         }), 200
 
     @app.get("/api/v1/health/db")
@@ -36,14 +55,14 @@ def create_app():
             db.session.execute(text("SELECT 1"))
             return jsonify({
                 "success": True,
-                "database": "connected"
+                "database": "connected",
             }), 200
         except Exception:
             db.session.rollback()
             app.logger.exception("Database health check failed")
             return jsonify({
                 "success": False,
-                "database": "unavailable"
+                "database": "unavailable",
             }), 503
 
     return app

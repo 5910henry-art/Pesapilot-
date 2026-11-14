@@ -21,11 +21,7 @@ class Config:
             "postgresql://", "postgresql+psycopg://", 1
         )
 
-    SQLALCHEMY_ENGINE_OPTIONS = {
-        "connect_args": {
-            "options": "-csearch_path=pesapilot"
-        }
-    }
+    SQLALCHEMY_ENGINE_OPTIONS = {}
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
