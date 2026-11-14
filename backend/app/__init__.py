@@ -8,6 +8,7 @@ from sqlalchemy import event, text
 from .config import get_config
 from .extensions import db, migrate, jwt, cors
 from .modules.auth import auth_bp
+from .modules.finance import finance_bp
 
 
 def create_app():
@@ -31,6 +32,7 @@ def create_app():
     jwt.init_app(app)
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(finance_bp)
 
     cors.init_app(
         app,

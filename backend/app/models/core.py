@@ -399,6 +399,10 @@ class LedgerAccount(db.Model):
             "code",
             name="uq_ledger_account_code",
         ),
+        UniqueConstraint(
+            "financial_account_id",
+            name="uq_ledger_financial_account",
+        ),
         CheckConstraint(
             "account_class IN "
             "('asset', 'liability', 'equity', 'income', 'expense')",
