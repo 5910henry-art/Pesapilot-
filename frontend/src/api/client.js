@@ -28,6 +28,10 @@ export function getRefreshToken() {
 export function saveTokens(accessToken, refreshToken) {
   saveStored("pesapilot_access_token", accessToken);
   saveStored("pesapilot_refresh_token", refreshToken);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("pesapilot:tokens-updated"));
+  }
 }
 
 export function clearTokens() {
@@ -190,6 +194,53 @@ export const financeApi = {
     );
   },
 
+  updateAccount(accountId, payload) {
+    return apiRequest(`/finance/accounts/${encodeURIComponent(accountId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteAccount(accountId, workspaceId) {
+    return apiRequest(
+      `/finance/accounts/${encodeURIComponent(accountId)}?workspace_id=${encodeURIComponent(workspaceId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  listSavingsGoals(workspaceId) {
+    return apiRequest(
+      `/savings?workspace_id=${encodeURIComponent(workspaceId)}`
+    );
+  },
+
+  createSavingsGoal(payload) {
+    return apiRequest("/savings", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  contributeToSavings(goalId, payload) {
+    return apiRequest(
+      `/savings/${encodeURIComponent(goalId)}/contributions`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  withdrawFromSavings(goalId, payload) {
+    return apiRequest(
+      `/savings/${encodeURIComponent(goalId)}/withdrawals`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
   listExpenseCategories(workspaceId) {
     return apiRequest(
       `/budgets/categories?workspace_id=${encodeURIComponent(workspaceId)}`
@@ -216,6 +267,32 @@ export const financeApi = {
     });
   },
 
+  listBills(workspaceId) {
+    return apiRequest(
+      `/bills?workspace_id=${encodeURIComponent(workspaceId)}`
+    );
+  },
+
+  getBill(billId, workspaceId) {
+    return apiRequest(
+      `/bills/${encodeURIComponent(billId)}?workspace_id=${encodeURIComponent(workspaceId)}`
+    );
+  },
+
+  createBill(payload) {
+    return apiRequest("/bills", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  recordBillPayment(billId, payload) {
+    return apiRequest(`/bills/${encodeURIComponent(billId)}/payments`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
   getBalances(workspaceId) {
     return apiRequest(
       `/finance/accounts/balances?workspace_id=${encodeURIComponent(workspaceId)}`
@@ -227,6 +304,17 @@ export const financeApi = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+
+  listAccountTransactions(accountId, workspaceId, limit = 50) {
+    const params = new URLSearchParams({
+      workspace_id: workspaceId,
+      limit: String(limit),
+    });
+
+    return apiRequest(
+      `/finance/accounts/${encodeURIComponent(accountId)}/transactions?${params.toString()}`
+    );
   },
 
   listEntries(workspaceId, options = {}) {
@@ -254,6 +342,13 @@ export const financeApi = {
     );
   },
 
+  clearDraftEntry(entryId, workspaceId) {
+    return apiRequest(
+      `/finance/entries/${encodeURIComponent(entryId)}?workspace_id=${encodeURIComponent(workspaceId)}`,
+      { method: "DELETE" }
+    );
+  },
+
   reverseEntry(entryId, workspaceId) {
     return apiRequest(
       `/finance/entries/${encodeURIComponent(entryId)}/reverse`,
@@ -266,5 +361,111 @@ export const financeApi = {
         }),
       }
     );
+  },
+};
+
+export const loansApi = {
+  listLoans(workspaceId) {
+    return apiRequest(
+      `/loans?workspace_id=${encodeURIComponent(workspaceId)}`
+    );
+  },
+
+  getLoan(loanId, workspaceId) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}?workspace_id=${encodeURIComponent(workspaceId)}`
+    );
+  },
+
+  createLoan(payload) {
+    return apiRequest("/loans", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateLoan(loanId, payload) {
+    return apiRequest(`/loans/${encodeURIComponent(loanId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  activateLoan(loanId, workspaceId) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/activate`,
+      {
+        method: "POST",
+        body: JSON.stringify({ workspace_id: workspaceId }),
+      }
+    );
+  },
+
+  disburseLoan(loanId, payload) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/disburse`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  recordPayment(loanId, payload) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/payments`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  confirmPayment(loanId, paymentId, payload) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/payments/${encodeURIComponent(paymentId)}/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+  updatePayment(loanId, paymentId, payload) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/payments/${encodeURIComponent(paymentId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  deletePayment(loanId, paymentId, payload) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/payments/${encodeURIComponent(paymentId)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+};
+
+export const aiApi = {
+  getOverview(workspaceId) {
+    return apiRequest(
+      `/ai-manager/overview?workspace_id=${encodeURIComponent(workspaceId)}`
+    );
+  },
+
+  ask(workspaceId, question) {
+    return apiRequest("/ai-manager/ask", {
+      method: "POST",
+      body: JSON.stringify({
+        workspace_id: workspaceId,
+        question,
+        external_ai_consent: true,
+      }),
+    });
   },
 };

@@ -11,6 +11,9 @@ from .modules.auth import auth_bp
 from .modules.finance import finance_bp
 from .modules.budgets import budgets_bp
 from .modules.savings import savings_bp
+from .modules.loans import loans_bp
+from .modules.bills import bills_bp
+from .modules.ai_manager import ai_manager_bp
 
 
 def create_app(test_config=None):
@@ -41,6 +44,9 @@ def create_app(test_config=None):
     app.register_blueprint(finance_bp)
     app.register_blueprint(budgets_bp)
     app.register_blueprint(savings_bp)
+    app.register_blueprint(loans_bp)
+    app.register_blueprint(bills_bp)
+    app.register_blueprint(ai_manager_bp)
 
     cors.init_app(
         app,

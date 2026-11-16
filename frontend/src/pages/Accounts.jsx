@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Wallet, Plus, RefreshCw, Building2, Smartphone,
   PiggyBank, TrendingUp, CreditCard, Banknote,
-  X, CheckCircle2, AlertCircle
+  X, CheckCircle2, AlertCircle, Pencil, Archive, RotateCcw, Trash2, Check, ChevronDown
 } from "lucide-react";
 import { useAuth } from "../context/useAuth";
+import { useAccounts } from "../context/AccountsContext";
 import { financeApi } from "../api/client";
+import TransactionEntryForm from "../components/TransactionEntryForm";
+import { Skeleton, SkeletonStatCard } from "../components/Skeleton";
 
 const CURRENCIES = [
   "KES", "USD", "EUR", "GBP", "UGX", "TZS", "RWF",
@@ -21,12 +24,12 @@ const MINOR_UNITS = {
 };
 
 const ACCOUNT_TYPES = [
-  { value: "cash", label: "Cash", icon: Banknote },
-  { value: "bank", label: "Bank account", icon: Building2 },
-  { value: "mobile_money", label: "Mobile money", icon: Smartphone },
-  { value: "savings", label: "Savings", icon: PiggyBank },
-  { value: "investment", label: "Investment", icon: TrendingUp },
-  { value: "credit", label: "Credit / liability", icon: CreditCard },
+  { value: "cash", label: "Cash", icon: Banknote, description: "Physical money you hold and use directly.", examples: "Examples: pocket money, cash wallet, money kept at home." },
+  { value: "bank", label: "Bank account", icon: Building2, description: "Money held in a bank account.", examples: "Examples: Equity Bank, KCB, Co-operative Bank, Absa." },
+  { value: "mobile_money", label: "Mobile money", icon: Smartphone, description: "Money held in a mobile money wallet.", examples: "Examples: M-PESA, Airtel Money." },
+  { value: "savings", label: "Savings", icon: PiggyBank, description: "Money deliberately set aside for future needs or goals.", examples: "Examples: emergency fund, school fees, house savings." },
+  { value: "investment", label: "Investment", icon: TrendingUp, description: "Assets or funds held to generate returns or grow wealth.", examples: "Examples: money market funds, shares, treasury bills, bonds." },
+  { value: "credit", label: "Credit / liability", icon: CreditCard, description: "A credit facility or outstanding amount that you owe.", examples: "Examples: credit card balance, bank overdraft." },
 ];
 
 function formatMoney(minor, currency) {
@@ -56,14 +59,27 @@ export default function Accounts() {
   const workspaceId = activeWorkspace?.id;
   const workspaceCurrency = activeWorkspace?.currency || "KES";
 
-  const [accounts, setAccounts] = useState([]);
-  const [balances, setBalances] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    accounts,
+    balances,
+    loading,
+    error: accountsError,
+    refreshAccounts,
+  } = useAccounts();
+
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingAccountId, setEditingAccountId] = useState(null);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    account_type: "bank",
+    currency: "KES",
+  });
+  const [actionSaving, setActionSaving] = useState("");
+  const [expandedActionsId, setExpandedActionsId] = useState(null);
 
   const [form, setForm] = useState({
     name: "",
@@ -72,38 +88,22 @@ export default function Accounts() {
   });
 
   const loadAccounts = useCallback(async (quiet = false) => {
-    if (!workspaceId) {
-      setAccounts([]);
-      setBalances([]);
-      setLoading(false);
-      return;
-    }
-
     if (quiet) setRefreshing(true);
-    else setLoading(true);
 
     setError("");
 
     try {
-      const [accountData, balanceData] = await Promise.all([
-        financeApi.listAccounts(workspaceId),
-        financeApi.getBalances(workspaceId),
-      ]);
-
-      setAccounts(accountData.accounts || []);
-      setBalances(balanceData.accounts || []);
+      await refreshAccounts();
     } catch (err) {
       setError(err.message || "Could not load your accounts.");
     } finally {
-      setLoading(false);
       setRefreshing(false);
     }
-  }, [workspaceId]);
+  }, [refreshAccounts]);
 
   useEffect(() => {
-    loadAccounts();
-  }, [loadAccounts]);
-
+    if (accountsError) setError(accountsError);
+  }, [accountsError]);
 
   const balanceByLedger = useMemo(() => {
     return new Map(
@@ -154,6 +154,101 @@ export default function Accounts() {
       setError(err.message || "Account creation failed.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveEdit(account) {
+    const name = editForm.name.trim();
+
+    if (!name || !workspaceId) {
+      setError("Enter a valid account name.");
+      return;
+    }
+
+    setActionSaving(account.id);
+    setError("");
+    setSuccess("");
+
+    try {
+      const payload = account.has_records
+        ? { workspace_id: workspaceId, name }
+        : {
+            workspace_id: workspaceId,
+            name,
+            account_type: editForm.account_type,
+            currency: editForm.currency,
+          };
+
+      await financeApi.updateAccount(account.id, payload);
+      setEditingAccountId(null);
+      setSuccess(
+        account.has_records
+          ? "Account renamed successfully."
+          : "Account details updated successfully."
+      );
+      await loadAccounts(true);
+    } catch (err) {
+      setError(err.message || "Could not update this account.");
+    } finally {
+      setActionSaving("");
+    }
+  }
+
+  async function handleToggleActive(account) {
+    if (!workspaceId) return;
+
+    const action = account.is_active ? "close" : "reopen";
+    const confirmed = window.confirm(
+      account.is_active
+        ? `Close "${account.name}"? Its balance and transaction history will be preserved.`
+        : `Reopen "${account.name}"?`
+    );
+
+    if (!confirmed) return;
+
+    setActionSaving(account.id);
+    setError("");
+    setSuccess("");
+
+    try {
+      await financeApi.updateAccount(account.id, {
+        workspace_id: workspaceId,
+        is_active: !account.is_active,
+      });
+      setSuccess(
+        action === "close"
+          ? "Account closed. Its history and balance are preserved."
+          : "Account reopened successfully."
+      );
+      await loadAccounts(true);
+    } catch (err) {
+      setError(err.message || `Could not ${action} this account.`);
+    } finally {
+      setActionSaving("");
+    }
+  }
+
+  async function handleDelete(account) {
+    if (!workspaceId) return;
+
+    const confirmed = window.confirm(
+      `Permanently delete "${account.name}"? This is only allowed if the account has no financial records. This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setActionSaving(account.id);
+    setError("");
+    setSuccess("");
+
+    try {
+      await financeApi.deleteAccount(account.id, workspaceId);
+      setSuccess("Unused account permanently deleted.");
+      await loadAccounts(true);
+    } catch (err) {
+      setError(err.message || "Could not delete this account. Close it instead if it has financial history.");
+    } finally {
+      setActionSaving("");
     }
   }
 
@@ -213,7 +308,7 @@ export default function Accounts() {
           </div>
           <div>
             <span>Total accounts</span>
-            <strong>{loading ? "—" : totalAccounts}</strong>
+            <strong>{loading ? <Skeleton width="48px" height={22} /> : totalAccounts}</strong>
           </div>
         </article>
 
@@ -223,10 +318,18 @@ export default function Accounts() {
           </div>
           <div>
             <span>Active accounts</span>
-            <strong>{loading ? "—" : activeAccounts}</strong>
+            <strong>{loading ? <Skeleton width="48px" height={22} /> : activeAccounts}</strong>
           </div>
         </article>
       </section>
+
+      <TransactionEntryForm
+        allowedTypes={["income", "transfer", "opening"]}
+        initialType="income"
+        title="Record account activity"
+        description="Record income, transfer money between accounts, or enter an opening balance."
+        onRecorded={() => loadAccounts(true)}
+      />
 
       {showForm && (
         <section className="panel account-form-panel">
@@ -272,6 +375,17 @@ export default function Accounts() {
                   </option>
                 ))}
               </select>
+              {(() => {
+                const selectedType = ACCOUNT_TYPES.find(
+                  (item) => item.value === form.account_type
+                );
+                return selectedType ? (
+                  <div className="account-type-guidance">
+                    <strong>{selectedType.description}</strong>
+                    <span>{selectedType.examples}</span>
+                  </div>
+                ) : null;
+              })()}
             </label>
 
             <label>
@@ -292,6 +406,13 @@ export default function Accounts() {
                 ))}
               </select>
             </label>
+
+            <div className="account-type-lock-warning">
+              <strong>Choose carefully:</strong> Select the type that reflects
+              the account's actual purpose. PesaPilot may prevent changing an
+              account's type after transactions have been recorded, to protect
+              your accounting history.
+            </div>
 
             <div className="account-form-actions">
               <button
@@ -324,9 +445,30 @@ export default function Accounts() {
         </div>
 
         {loading ? (
-          <div className="accounts-empty">
-            <RefreshCw size={24} className="spinning" />
-            <strong>Loading your accounts...</strong>
+          <div className="accounts-grid accounts-skeleton-grid" aria-hidden="true">
+            {Array.from({ length: 3 }, (_, index) => (
+              <article className="account-card account-skeleton-card" key={index}>
+                <div className="account-card-top">
+                  <Skeleton width={43} height={43} radius={11} />
+                  <Skeleton width={62} height={22} radius={20} />
+                </div>
+                <div className="account-card-name">
+                  <Skeleton width="65%" height={15} />
+                  <Skeleton width="38%" height={11} />
+                </div>
+                <div className="account-card-balance">
+                  <Skeleton width="35%" height={11} />
+                  <Skeleton width="72%" height={25} />
+                </div>
+                <div className="account-card-footer">
+                  <Skeleton width={38} height={10} />
+                </div>
+                <div className="account-card-actions">
+                  <Skeleton width="100%" height={36} />
+                  <Skeleton width="100%" height={36} />
+                </div>
+              </article>
+            ))}
           </div>
         ) : accounts.length === 0 ? (
           <div className="accounts-empty">
@@ -355,10 +497,14 @@ export default function Accounts() {
                 (item) => item.value === account.account_type
               )?.label || account.account_type;
 
-              return (
-                <article className="account-card" key={account.id}>
+
+  return (
+                <article
+                  className={`account-card ${!account.is_active ? "is-closed" : ""}`}
+                  key={account.id}
+                >
                   <div className="account-card-top">
-                    <div className={`account-type-icon ${account.account_type}`}>
+                    <div className={`account-type-icon account-private-detail ${account.account_type}`}>
                       <AccountIcon type={account.account_type} />
                     </div>
                     <span className={`account-status ${account.is_active ? "is-active" : "is-inactive"}`}>
@@ -367,22 +513,165 @@ export default function Accounts() {
                   </div>
 
                   <div className="account-card-name">
-                    <h3>{account.name}</h3>
-                    <span>{typeLabel}</span>
+                    {editingAccountId === account.id ? (
+                      <form
+                        className="account-edit-form"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          handleSaveEdit(account);
+                        }}
+                      >
+                        <label>
+                          Account name
+                          <input
+                            type="text"
+                            value={editForm.name}
+                            maxLength={150}
+                            onChange={(event) => setEditForm(current => ({
+                              ...current, name: event.target.value
+                            }))}
+                            required
+                          />
+                        </label>
+                        {!account.has_records && (
+                          <>
+                            <label>
+                              Account type
+                              <select
+                                value={editForm.account_type}
+                                onChange={(event) => setEditForm(current => ({
+                                  ...current, account_type: event.target.value
+                                }))}
+                              >
+                                {ACCOUNT_TYPES.map(item => (
+                                  <option key={item.value} value={item.value}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              Currency
+                              <select
+                                value={editForm.currency}
+                                onChange={(event) => setEditForm(current => ({
+                                  ...current, currency: event.target.value
+                                }))}
+                              >
+                                {CURRENCIES.map(currency => (
+                                  <option key={currency} value={currency}>
+                                    {currency}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </>
+                        )}
+                        <div className="account-edit-actions">
+                          <button
+                            className="secondary-button"
+                            type="submit"
+                            disabled={actionSaving === account.id}
+                          >
+                            <Check size={15} />
+                            Save changes
+                          </button>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={() => setEditingAccountId(null)}
+                            disabled={actionSaving === account.id}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <>
+                        <h3>{account.name}</h3>
+                        <span className="account-private-detail">{typeLabel}</span>
+                      </>
+                    )}
                   </div>
 
-                  <div className="account-card-balance">
+                  <div className="account-card-balance account-private-detail">
                     <span>Current balance</span>
                     <strong>
                       {formatMoney(ledger?.balance_minor ?? 0, account.currency)}
                     </strong>
                   </div>
 
-                  <div className="account-card-footer">
+                  <div className="account-card-footer account-private-detail">
                     <span>{account.currency}</span>
-                    <span>
-                      {ledger ? "Ledger connected" : "No ledger balance yet"}
-                    </span>
+                    {/* Ledger status intentionally hidden from the account card. */}
+                  </div>
+
+                  <div className="account-card-actions">
+                    <button
+                      className="account-actions-toggle"
+                      type="button"
+                      aria-label={expandedActionsId === account.id ? "Hide account actions" : "Show account actions"}
+                      aria-expanded={expandedActionsId === account.id}
+                      onClick={() => setExpandedActionsId(
+                        current => current === account.id ? null : account.id
+                      )}
+                      disabled={Boolean(actionSaving) || editingAccountId === account.id}
+                    >
+                      <span>Actions</span>
+                      <ChevronDown
+                        size={16}
+                        className={expandedActionsId === account.id ? "is-expanded" : ""}
+                      />
+                    </button>
+
+                    {expandedActionsId === account.id && editingAccountId !== account.id && (
+                      <div className="account-actions-menu">
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => {
+                            setEditingAccountId(account.id);
+                            setExpandedActionsId(null);
+                            setEditForm({
+                              name: account.name || "",
+                              account_type: account.account_type || "bank",
+                              currency: account.currency || workspaceCurrency,
+                            });
+                            setError("");
+                            setSuccess("");
+                          }}
+                          disabled={Boolean(actionSaving)}
+                        >
+                          <Pencil size={15} />
+                          {account.has_records ? "Rename" : "Edit"}
+                        </button>
+
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => handleToggleActive(account)}
+                          disabled={Boolean(actionSaving)}
+                        >
+                          {account.is_active ? (
+                            <><Archive size={15} /> Close</>
+                          ) : (
+                            <><RotateCcw size={15} /> Reopen</>
+                          )}
+                        </button>
+
+                        {!account.has_records && (
+                          <button
+                            className="secondary-button account-delete-button"
+                            type="button"
+                            onClick={() => handleDelete(account)}
+                            disabled={Boolean(actionSaving)}
+                          >
+                            <Trash2 size={15} />
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </article>
               );
@@ -390,6 +679,9 @@ export default function Accounts() {
           </div>
         )}
       </section>
+
+
+
     </div>
   );
 }

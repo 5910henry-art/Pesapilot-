@@ -37,6 +37,7 @@ DEFAULT_LEDGER_ACCOUNTS = [
     ("1100", "Savings", "asset", "debit"),
     ("1200", "Accounts Receivable", "asset", "debit"),
     ("2000", "Loans and Credit Payable", "liability", "credit"),
+    ("2100", "Accounts Payable", "liability", "credit"),
     ("3000", "Owner's Equity", "equity", "credit"),
     ("4000", "Income", "income", "credit"),
     ("5000", "Expenses", "expense", "debit"),

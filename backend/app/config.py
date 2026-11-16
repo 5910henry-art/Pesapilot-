@@ -5,6 +5,8 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY")
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
+    IDENTITY_ENCRYPTION_KEY = os.getenv("IDENTITY_ENCRYPTION_KEY")
+
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
 
     if not SQLALCHEMY_DATABASE_URI:
@@ -31,6 +33,16 @@ class Config:
     CORS_ORIGINS = os.getenv(
         "CORS_ORIGINS", "http://localhost:5173"
     ).split(",")
+
+    # External AI is opt-in and disabled by default.
+    AI_EXTERNAL_ENABLED = (
+        os.getenv("AI_EXTERNAL_ENABLED", "false").lower() == "true"
+    )
+    AI_PROVIDER = os.getenv("AI_PROVIDER", "groq").lower()
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+    GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+    AI_REQUEST_TIMEOUT = 30
 
 class DevelopmentConfig(Config):
     DEBUG = True

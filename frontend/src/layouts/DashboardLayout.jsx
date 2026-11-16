@@ -1,24 +1,26 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard, Wallet, ArrowLeftRight, ChartNoAxesCombined,
+  LayoutDashboard, Wallet, ArrowLeftRight, ChartNoAxesCombined, Sparkles,
   PiggyBank, HandCoins, Receipt, Settings, Menu, X, Bell,
-  CircleUserRound, ChevronDown, LogOut
+  CircleUserRound, ChevronDown, LogOut, PanelLeftClose, PanelLeftOpen, ReceiptText
 } from "lucide-react";
 import { useAuth } from "../context/useAuth";
+import SessionExpiryGuard from "../components/SessionExpiryGuard";
 
 const navigation = [
   { label: "Overview", icon: LayoutDashboard, path: "/" },
+  { label: "AI Manager", icon: Sparkles, path: "/ai-manager" },
   { label: "Accounts", icon: Wallet, path: "/accounts" },
   { label: "Transactions", icon: ArrowLeftRight, path: "/transactions" },
   { label: "Budgets", icon: ChartNoAxesCombined, path: "/budgets" },
   { label: "Savings", icon: PiggyBank, path: "/savings" },
   { label: "Loans", icon: HandCoins, path: "/loans" },
-  { label: "Bills", icon: Receipt, path: "/bills" },
 ];
 
 export default function DashboardLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const { user, profile, activeWorkspace, logout } = useAuth();
   const navigate = useNavigate();
@@ -41,7 +43,8 @@ export default function DashboardLayout() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+      <SessionExpiryGuard />
       {menuOpen && (
         <button
           className="mobile-overlay"
@@ -50,7 +53,7 @@ export default function DashboardLayout() {
         />
       )}
 
-      <aside className={`sidebar ${menuOpen ? "sidebar-open" : ""}`}>
+      <aside className={`sidebar ${menuOpen ? "sidebar-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
         <div className="brand">
           <div className="brand-icon">P</div>
           <div>
@@ -63,6 +66,17 @@ export default function DashboardLayout() {
             aria-label="Close navigation"
           >
             <X size={20} />
+          </button>
+          <button
+            type="button"
+            className="sidebar-collapse-button"
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed
+              ? <PanelLeftOpen size={19} />
+              : <PanelLeftClose size={19} />}
           </button>
         </div>
 
@@ -95,11 +109,40 @@ export default function DashboardLayout() {
                 `nav-link ${isActive ? "active" : ""}`
               }
               onClick={() => setMenuOpen(false)}
+              title={label}
             >
               <Icon size={19} strokeWidth={1.8} />
               <span>{label}</span>
             </NavLink>
           ))}
+
+          <div className="nav-label bills-expenses-label">
+            BILLS &amp; EXPENSES
+          </div>
+
+          <NavLink
+            to="/bills"
+            className={({ isActive }) =>
+              `nav-link ${isActive ? "active" : ""}`
+            }
+            onClick={() => setMenuOpen(false)}
+            title="Bills"
+          >
+            <Receipt size={19} strokeWidth={1.8} />
+            <span>Bills</span>
+          </NavLink>
+
+          <NavLink
+            to="/expenses"
+            className={({ isActive }) =>
+              `nav-link ${isActive ? "active" : ""}`
+            }
+            onClick={() => setMenuOpen(false)}
+            title="Expenses"
+          >
+            <ReceiptText size={19} strokeWidth={1.8} />
+            <span>Expenses</span>
+          </NavLink>
         </nav>
 
         <div className="sidebar-bottom">
@@ -107,6 +150,7 @@ export default function DashboardLayout() {
             to="/settings"
             className="nav-link"
             onClick={() => setMenuOpen(false)}
+            title="Settings"
           >
             <Settings size={19} />
             <span>Settings</span>

@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 
 from flask import current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
-from sqlalchemy import func
+from sqlalchemy import func, case
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
@@ -20,6 +20,7 @@ from app.models import (
     JournalLine,
     LedgerAccount,
     SavingsGoal,
+    SavingsGoalMovement,
     Workspace,
     WorkspaceMember,
 )
@@ -53,6 +54,37 @@ def _membership(workspace_id, user_id):
     ).first()
 
 
+def _goal_allocation_balance(workspace_id, goal_id):
+    balance = (
+        db.session.query(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            SavingsGoalMovement.operation == "contribution",
+                            SavingsGoalMovement.amount_minor,
+                        ),
+                        else_=-SavingsGoalMovement.amount_minor,
+                    )
+                ),
+                0,
+            )
+        )
+        .join(
+            JournalEntry,
+            JournalEntry.id == SavingsGoalMovement.journal_entry_id,
+        )
+        .filter(
+            SavingsGoalMovement.workspace_id == workspace_id,
+            SavingsGoalMovement.goal_id == goal_id,
+            JournalEntry.workspace_id == workspace_id,
+            JournalEntry.status == "posted",
+        )
+        .scalar()
+    )
+    return max(0, int(balance or 0))
+
+
 def _goal_response(goal):
     account = FinancialAccount.query.filter_by(
         id=goal.financial_account_id,
@@ -73,28 +105,9 @@ def _goal_response(goal):
     if ledger is None:
         raise ValueError("Savings ledger account was not found.")
 
-    balance = (
-        db.session.query(
-            func.coalesce(
-                func.sum(
-                    JournalLine.debit_minor - JournalLine.credit_minor
-                ),
-                0,
-            )
-        )
-        .join(
-            JournalEntry,
-            JournalEntry.id == JournalLine.journal_entry_id,
-        )
-        .filter(
-            JournalEntry.workspace_id == goal.workspace_id,
-            JournalEntry.status.in_(("posted", "reversed")),
-            JournalLine.ledger_account_id == ledger.id,
-        )
-        .scalar()
+    saved_minor = _goal_allocation_balance(
+        goal.workspace_id, goal.id
     )
-
-    saved_minor = int(balance or 0)
     remaining_minor = max(goal.target_amount_minor - saved_minor, 0)
     percentage = round(
         saved_minor / goal.target_amount_minor * 100,
@@ -117,6 +130,7 @@ def _goal_response(goal):
         ),
         "status": goal.status,
         "financial_account_id": str(account.id),
+        "financial_account_name": account.name,
         "ledger_account_id": str(ledger.id),
         "created_at": goal.created_at.isoformat(),
     }
@@ -295,33 +309,77 @@ def create_savings_goal():
             "message": "The selected currency is unavailable.",
         }), 400
 
-    account_id = uuid4()
-
     try:
-        account = FinancialAccount(
-            id=account_id,
-            workspace_id=workspace_id,
-            name=f"Savings - {name.strip()}"[:150],
-            account_type="savings",
-            currency_code=currency_code,
-            is_active=True,
-        )
-        db.session.add(account)
-        db.session.flush()
+        supplied_account_id = data.get("financial_account_id")
 
-        ledger = LedgerAccount(
-            workspace_id=workspace_id,
-            financial_account_id=account.id,
-            code=f"FA-{account.id.hex[:20].upper()}",
-            name=account.name,
-            account_class="asset",
-            normal_balance="debit",
-            currency_code=currency_code,
-            is_system=False,
-            is_active=True,
-        )
-        db.session.add(ledger)
-        db.session.flush()
+        if supplied_account_id is None:
+            account = FinancialAccount(
+                workspace_id=workspace_id,
+                name=f"Savings - {name.strip()}"[:150],
+                account_type="savings",
+                currency_code=currency_code,
+                is_active=True,
+            )
+            db.session.add(account)
+            db.session.flush()
+
+            ledger = LedgerAccount(
+                workspace_id=workspace_id,
+                financial_account_id=account.id,
+                code=f"FA-{account.id.hex[:20].upper()}",
+                name=account.name,
+                account_class="asset",
+                normal_balance="debit",
+                currency_code=currency_code,
+                is_system=False,
+                is_active=True,
+            )
+            db.session.add(ledger)
+            db.session.flush()
+        else:
+            try:
+                selected_account_id = UUID(str(supplied_account_id))
+            except (ValueError, TypeError, AttributeError):
+                return jsonify({
+                    "success": False,
+                    "message": "The selected Savings account ID is invalid.",
+                }), 400
+
+            account = (
+                FinancialAccount.query
+                .filter_by(
+                    id=selected_account_id,
+                    workspace_id=workspace_id,
+                    account_type="savings",
+                    currency_code=currency_code,
+                    is_active=True,
+                )
+                .first()
+            )
+
+            if account is None:
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "Choose an active Savings account in this workspace "
+                        "and currency."
+                    ),
+                }), 400
+
+            ledger = LedgerAccount.query.filter_by(
+                financial_account_id=account.id,
+                workspace_id=workspace_id,
+                account_class="asset",
+                normal_balance="debit",
+                currency_code=currency_code,
+                is_active=True,
+            ).first()
+
+            if ledger is None:
+                return jsonify({
+                    "success": False,
+                    "message": "The selected Savings account has no active asset ledger.",
+                }), 400
 
         goal = SavingsGoal(
             workspace_id=workspace_id,
@@ -335,7 +393,6 @@ def create_savings_goal():
             created_by=user_id,
         )
         db.session.add(goal)
-
         db.session.add(AuditLog(
             workspace_id=workspace_id,
             user_id=user_id,
@@ -585,11 +642,15 @@ def _transfer_savings(goal_id, operation):
                 "available_amount_minor": source_balance,
             }), 400
 
-        if operation == "withdrawal" and savings_balance < amount:
+        goal_balance = _goal_allocation_balance(
+            workspace_id, goal.id
+        )
+
+        if operation == "withdrawal" and goal_balance < amount:
             return jsonify({
                 "success": False,
                 "message": "The savings goal has insufficient funds.",
-                "available_amount_minor": savings_balance,
+                "available_amount_minor": goal_balance,
             }), 400
 
         reference = f"SAV-{uuid4().hex.upper()}"
@@ -643,6 +704,13 @@ def _transfer_savings(goal_id, operation):
             posted_by=user_id,
         )
 
+        db.session.add(SavingsGoalMovement(
+            workspace_id=workspace_id,
+            goal_id=goal.id,
+            journal_entry_id=entry.id,
+            amount_minor=amount,
+            operation=operation,
+        ))
         db.session.add(AuditLog(
             workspace_id=workspace_id,
             user_id=user_id,

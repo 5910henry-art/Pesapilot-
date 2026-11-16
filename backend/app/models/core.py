@@ -496,6 +496,11 @@ class JournalEntry(db.Model):
             name="uq_journal_reference",
         ),
         UniqueConstraint(
+            "workspace_id",
+            "id",
+            name="uq_journal_workspace_id",
+        ),
+        UniqueConstraint(
             "reversal_of_id",
             name="uq_journal_reversal_of",
         ),
@@ -867,7 +872,6 @@ class SavingsGoal(db.Model):
     financial_account_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("financial_accounts.id", ondelete="RESTRICT"),
         nullable=False,
-        unique=True,
     )
 
     status: Mapped[str] = mapped_column(
@@ -906,5 +910,56 @@ class SavingsGoal(db.Model):
             "workspace_id",
             "name",
             name="uq_savings_goal_workspace_name",
+        ),
+    )
+
+
+class SavingsGoalMovement(db.Model):
+    """Tracks the amount allocated to an individual savings goal."""
+
+    __tablename__ = "savings_goal_movements"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        primary_key=True,
+        default=new_uuid,
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("savings_goals.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    journal_entry_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("journal_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
+    )
+    amount_minor: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+    operation: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "amount_minor > 0",
+            name="ck_savings_goal_movement_amount_positive",
+        ),
+        CheckConstraint(
+            "operation IN ('contribution', 'withdrawal')",
+            name="ck_savings_goal_movement_operation",
         ),
     )

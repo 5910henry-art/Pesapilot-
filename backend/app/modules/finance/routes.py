@@ -17,12 +17,15 @@ from app.models import (
     AuditLog,
     JournalEntry,
     JournalLine,
+    SavingsGoal,
+    LoanPayment,
     Workspace,
     UserProfile,
     ExpenseCategory,
 )
 
 from . import finance_bp
+from app.models.loan_disbursements import LoanDisbursement
 from app.services.accounting import (
     AccountingError,
     create_draft_entry,
@@ -280,15 +283,69 @@ def list_financial_accounts():
             .all()
         )
 
+        account_ids = [account.id for account, _ in results]
+        ledger_ids = [
+            ledger.id for _, ledger in results if ledger is not None
+        ]
+
+        accounts_with_journal_lines = set()
+        if ledger_ids:
+            accounts_with_journal_lines = {
+                row[0]
+                for row in db.session.query(
+                    JournalLine.ledger_account_id
+                ).filter(
+                    JournalLine.ledger_account_id.in_(ledger_ids)
+                ).distinct().all()
+            }
+
+        accounts_with_savings_goals = {
+            row[0]
+            for row in db.session.query(
+                SavingsGoal.financial_account_id
+            ).filter(
+                SavingsGoal.workspace_id == workspace_id,
+                SavingsGoal.financial_account_id.in_(account_ids),
+            ).distinct().all()
+        } if account_ids else set()
+
+        accounts_with_loan_disbursements = {
+            row[0]
+            for row in db.session.query(
+                LoanDisbursement.financial_account_id
+            ).filter(
+                LoanDisbursement.workspace_id == workspace_id,
+                LoanDisbursement.financial_account_id.in_(account_ids),
+            ).distinct().all()
+        } if account_ids else set()
+
+        accounts_with_loan_payments = {
+            row[0]
+            for row in db.session.query(
+                LoanPayment.financial_account_id
+            ).filter(
+                LoanPayment.workspace_id == workspace_id,
+                LoanPayment.financial_account_id.in_(account_ids),
+            ).distinct().all()
+        } if account_ids else set()
+
         accounts = []
 
         for account, ledger in results:
+            has_records = (
+                (ledger is not None and ledger.id in accounts_with_journal_lines)
+                or account.id in accounts_with_savings_goals
+                or account.id in accounts_with_loan_disbursements
+                or account.id in accounts_with_loan_payments
+            )
+
             accounts.append({
                 "id": str(account.id),
                 "name": account.name,
                 "account_type": account.account_type,
                 "currency": account.currency_code,
                 "is_active": account.is_active,
+                "has_records": has_records,
                 "created_at": account.created_at.isoformat(),
                 "ledger_account": (
                     {
@@ -315,6 +372,368 @@ def list_financial_accounts():
         return jsonify({
             "success": False,
             "message": "Financial accounts could not be loaded.",
+        }), 500
+
+
+
+
+@finance_bp.patch("/accounts/<account_id>")
+@jwt_required()
+def update_financial_account(account_id):
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    try:
+        account_uuid = UUID(account_id)
+        workspace_id = UUID(str(data.get("workspace_id", "")))
+        user_id = UUID(str(get_jwt_identity()))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid account, workspace or authentication ID.",
+        }), 400
+
+    editable_fields = {"name", "account_type", "currency", "is_active"}
+    if not editable_fields.intersection(data):
+        return jsonify({
+            "success": False,
+            "message": "Provide at least one account field to update.",
+        }), 400
+
+    name = None
+    if "name" in data:
+        name = data["name"]
+        if not isinstance(name, str):
+            return jsonify({
+                "success": False,
+                "message": "Account name must be a string.",
+            }), 400
+        name = name.strip()
+        if not name or len(name) > 150:
+            return jsonify({
+                "success": False,
+                "message": "Account name is required and must not exceed 150 characters.",
+            }), 400
+
+    account_type = None
+    if "account_type" in data:
+        account_type = data["account_type"]
+        if not isinstance(account_type, str):
+            return jsonify({
+                "success": False,
+                "message": "A valid account type is required.",
+            }), 400
+        account_type = account_type.strip().lower()
+        if account_type not in ACCOUNT_TYPES:
+            return jsonify({
+                "success": False,
+                "message": "Unsupported account type.",
+                "allowed_types": list(ACCOUNT_TYPES),
+            }), 400
+
+    currency_code = None
+    if "currency" in data:
+        currency_code = data["currency"]
+        if not isinstance(currency_code, str):
+            return jsonify({
+                "success": False,
+                "message": "Currency must be a three-letter currency code.",
+            }), 400
+        currency_code = currency_code.strip().upper()
+        if len(currency_code) != 3 or not currency_code.isalpha():
+            return jsonify({
+                "success": False,
+                "message": "Currency must be a valid three-letter code.",
+            }), 400
+
+    if "is_active" in data and not isinstance(data["is_active"], bool):
+        return jsonify({
+            "success": False,
+            "message": "is_active must be true or false.",
+        }), 400
+
+    membership = get_workspace_membership(workspace_id, user_id)
+    if membership is None:
+        return jsonify({
+            "success": False,
+            "message": "Workspace not found or access denied.",
+        }), 404
+
+    if membership.role == "viewer":
+        return jsonify({
+            "success": False,
+            "message": "You do not have permission to update accounts.",
+        }), 403
+
+    try:
+        account = FinancialAccount.query.filter_by(
+            id=account_uuid,
+            workspace_id=workspace_id,
+        ).with_for_update().first()
+
+        if account is None:
+            return jsonify({
+                "success": False,
+                "message": "Account not found.",
+            }), 404
+
+        ledger = LedgerAccount.query.filter_by(
+            financial_account_id=account.id,
+            workspace_id=workspace_id,
+        ).with_for_update().first()
+
+        type_changed = (
+            account_type is not None
+            and account_type != account.account_type
+        )
+        currency_changed = (
+            currency_code is not None
+            and currency_code != account.currency_code
+        )
+
+        has_history = bool(
+            ledger and JournalLine.query.filter_by(
+                ledger_account_id=ledger.id
+            ).first()
+        )
+
+        if has_history and (type_changed or currency_changed):
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Account type and currency cannot be changed after "
+                    "transactions have been recorded. Create a new account instead."
+                ),
+            }), 409
+
+        currency = None
+        if currency_code is not None:
+            currency = db.session.get(Currency, currency_code)
+            if currency is None or not currency.is_active:
+                return jsonify({
+                    "success": False,
+                    "message": "The selected currency is unavailable.",
+                }), 400
+
+        changes = {}
+
+        if name is not None and name != account.name:
+            changes["old_name"] = account.name
+            changes["new_name"] = name
+            account.name = name
+            if ledger:
+                ledger.name = name
+
+        if type_changed:
+            account_class, normal_balance = ACCOUNT_TYPES[account_type]
+            changes["old_account_type"] = account.account_type
+            changes["new_account_type"] = account_type
+            account.account_type = account_type
+            if ledger:
+                ledger.account_class = account_class
+                ledger.normal_balance = normal_balance
+
+        if currency_changed:
+            changes["old_currency"] = account.currency_code
+            changes["new_currency"] = currency_code
+            account.currency_code = currency_code
+            if ledger:
+                ledger.currency_code = currency_code
+
+        if "is_active" in data:
+            active = data["is_active"]
+            if active != account.is_active:
+                changes["old_is_active"] = account.is_active
+                changes["new_is_active"] = active
+                account.is_active = active
+                if ledger:
+                    ledger.is_active = active
+
+        if not changes:
+            return jsonify({
+                "success": True,
+                "message": "No account changes were needed.",
+                "account": {
+                    "id": str(account.id),
+                    "name": account.name,
+                    "account_type": account.account_type,
+                    "currency": account.currency_code,
+                    "is_active": account.is_active,
+                },
+            }), 200
+
+        if "new_is_active" in changes:
+            action = (
+                "financial_account_reopened"
+                if changes["new_is_active"]
+                else "financial_account_closed"
+            )
+        else:
+            action = "financial_account_updated"
+
+        audit = AuditLog(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            action=action,
+            resource_type="financial_account",
+            resource_id=str(account.id),
+            details=changes,
+            ip_address=request.remote_addr,
+        )
+        db.session.add(audit)
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Account updated successfully.",
+            "account": {
+                "id": str(account.id),
+                "name": account.name,
+                "account_type": account.account_type,
+                "currency": account.currency_code,
+                "is_active": account.is_active,
+            },
+        }), 200
+
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": "The account update conflicts with existing data.",
+        }), 409
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Financial account update failed")
+        return jsonify({
+            "success": False,
+            "message": "The account could not be updated.",
+        }), 500
+
+
+@finance_bp.delete("/accounts/<account_id>")
+@jwt_required()
+def delete_financial_account(account_id):
+    try:
+        account_uuid = UUID(account_id)
+        workspace_id = UUID(request.args.get("workspace_id", ""))
+        user_id = UUID(str(get_jwt_identity()))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid account, workspace or authentication ID.",
+        }), 400
+
+    membership = get_workspace_membership(workspace_id, user_id)
+    if membership is None:
+        return jsonify({
+            "success": False,
+            "message": "Workspace not found or access denied.",
+        }), 404
+
+    if membership.role == "viewer":
+        return jsonify({
+            "success": False,
+            "message": "You do not have permission to delete accounts.",
+        }), 403
+
+    try:
+        account = FinancialAccount.query.filter_by(
+            id=account_uuid,
+            workspace_id=workspace_id,
+        ).with_for_update().first()
+
+        if account is None:
+            return jsonify({
+                "success": False,
+                "message": "Account not found.",
+            }), 404
+
+        ledger = LedgerAccount.query.filter_by(
+            financial_account_id=account.id,
+            workspace_id=workspace_id,
+        ).with_for_update().first()
+
+        references = []
+
+        if ledger and JournalLine.query.filter_by(
+            ledger_account_id=ledger.id
+        ).first():
+            references.append("transaction history")
+
+        if SavingsGoal.query.filter_by(
+            financial_account_id=account.id,
+            workspace_id=workspace_id,
+        ).first():
+            references.append("savings goals")
+
+        if LoanDisbursement.query.filter_by(
+            financial_account_id=account.id,
+            workspace_id=workspace_id,
+        ).first():
+            references.append("loan disbursements")
+
+        if LoanPayment.query.filter_by(
+            financial_account_id=account.id,
+            workspace_id=workspace_id,
+        ).first():
+            references.append("loan payments")
+
+        if references:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "This account has linked financial records and cannot "
+                    "be permanently deleted. Close it instead."
+                ),
+                "references": references,
+            }), 409
+
+        audit = AuditLog(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            action="financial_account_deleted",
+            resource_type="financial_account",
+            resource_id=str(account.id),
+            details={
+                "name": account.name,
+                "account_type": account.account_type,
+                "currency": account.currency_code,
+            },
+            ip_address=request.remote_addr,
+        )
+        db.session.add(audit)
+
+        if ledger:
+            db.session.delete(ledger)
+
+        db.session.delete(account)
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Unused account permanently deleted.",
+        }), 200
+
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": (
+                "The account is still referenced by financial records. "
+                "Close it instead."
+            ),
+        }), 409
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Financial account deletion failed")
+        return jsonify({
+            "success": False,
+            "message": "The account could not be deleted.",
         }), 500
 
 
@@ -590,6 +1009,94 @@ def create_journal_entry():
         }), 500
 
 
+@finance_bp.get("/accounts/<account_id>/transactions")
+@jwt_required()
+def list_account_transactions(account_id):
+    workspace_id = _parse_workspace_id(request.args.get("workspace_id"))
+
+    if workspace_id is None:
+        return jsonify({"success": False, "message": "A valid workspace ID is required."}), 400
+
+    try:
+        parsed_account_id = UUID(account_id)
+        user_id = UUID(str(get_jwt_identity()))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"success": False, "message": "Invalid account or authentication ID."}), 400
+
+    if get_workspace_membership(workspace_id, user_id) is None:
+        return jsonify({"success": False, "message": "Workspace not found or access denied."}), 404
+
+    try:
+        limit = int(request.args.get("limit", "50"))
+        if limit < 1 or limit > 100:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "message": "Limit must be between 1 and 100."}), 400
+
+    try:
+        account = FinancialAccount.query.filter_by(
+            id=parsed_account_id,
+            workspace_id=workspace_id,
+        ).first()
+
+        if account is None:
+            return jsonify({"success": False, "message": "Account not found."}), 404
+
+        ledger = LedgerAccount.query.filter_by(
+            financial_account_id=account.id,
+            workspace_id=workspace_id,
+        ).first()
+
+        if ledger is None:
+            return jsonify({"success": True, "count": 0, "transactions": []}), 200
+
+        rows = (
+            db.session.query(JournalEntry, JournalLine)
+            .join(JournalLine, JournalLine.journal_entry_id == JournalEntry.id)
+            .filter(
+                JournalEntry.workspace_id == workspace_id,
+                JournalEntry.status == "posted",
+                JournalLine.ledger_account_id == ledger.id,
+            )
+            .order_by(
+                JournalEntry.transaction_date.desc(),
+                JournalEntry.created_at.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+
+        transactions = [
+            {
+                "id": str(entry.id),
+                "reference": entry.reference,
+                "description": entry.description,
+                "status": entry.status,
+                "transaction_date": entry.transaction_date.isoformat(),
+                "created_at": entry.created_at.isoformat(),
+                "currency": line.currency_code,
+                "debit_minor": line.debit_minor,
+                "credit_minor": line.credit_minor,
+                "memo": line.memo,
+            }
+            for entry, line in rows
+        ]
+
+        return jsonify({
+            "success": True,
+            "count": len(transactions),
+            "transactions": transactions,
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Account transaction listing failed")
+        return jsonify({
+            "success": False,
+            "message": "Account transactions could not be loaded.",
+        }), 500
+
+
 @finance_bp.get("/entries")
 @jwt_required()
 def list_journal_entries():
@@ -661,7 +1168,7 @@ def list_journal_entries():
             "success": True,
             "count": len(entries),
             "entries": [
-                _journal_entry_response(entry)
+                _journal_entry_response(entry, include_lines=True)
                 for entry in entries
             ],
         }), 200
@@ -673,6 +1180,47 @@ def list_journal_entries():
             "success": False,
             "message": "Transactions could not be loaded.",
         }), 500
+
+
+@finance_bp.delete("/entries/<entry_id>")
+@jwt_required()
+def clear_draft_entry(entry_id):
+    try:
+        parsed_entry_id = UUID(entry_id)
+        user_id = UUID(str(get_jwt_identity()))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"success": False, "message": "Invalid transaction or authentication ID."}), 400
+
+    workspace_id = _parse_workspace_id(request.args.get("workspace_id"))
+    if workspace_id is None:
+        return jsonify({"success": False, "message": "A valid workspace_id is required."}), 400
+
+    membership = get_workspace_membership(workspace_id, user_id)
+    if membership is None:
+        return jsonify({"success": False, "message": "Workspace not found or access denied."}), 404
+    if membership.role == "viewer":
+        return jsonify({"success": False, "message": "You do not have permission to clear transactions."}), 403
+
+    entry = JournalEntry.query.filter_by(
+        id=parsed_entry_id, workspace_id=workspace_id
+    ).with_for_update().first()
+
+    if entry is None:
+        return jsonify({"success": False, "message": "Transaction not found."}), 404
+    if entry.status != "draft":
+        return jsonify({"success": False, "message": "Only draft transactions can be cleared."}), 400
+
+    try:
+        JournalLine.query.filter_by(journal_entry_id=entry.id).delete(
+            synchronize_session=False
+        )
+        db.session.delete(entry)
+        db.session.commit()
+        return jsonify({"success": True, "message": "Draft transaction cleared."}), 200
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Draft transaction clearing failed")
+        return jsonify({"success": False, "message": "Draft transaction could not be cleared."}), 500
 
 
 @finance_bp.post("/entries/<entry_id>/post")
@@ -1218,6 +1766,62 @@ def dashboard_summary():
             .all()
         )
 
+        # Calculate dashboard amounts from actual financial-account movements.
+        recent_amounts = {}
+        if recent_entries:
+            entry_ids = [entry.id for entry in recent_entries]
+
+            recent_lines = (
+                db.session.query(JournalLine, LedgerAccount)
+                .join(
+                    LedgerAccount,
+                    LedgerAccount.id == JournalLine.ledger_account_id,
+                )
+                .filter(
+                    JournalLine.journal_entry_id.in_(entry_ids),
+                    LedgerAccount.financial_account_id.isnot(None),
+                )
+                .all()
+            )
+
+            account_movements = {}
+            for line, ledger in recent_lines:
+                key = (line.journal_entry_id, ledger.financial_account_id)
+                movement = (
+                    int(line.functional_debit_minor or 0)
+                    - int(line.functional_credit_minor or 0)
+                )
+                account_movements[key] = (
+                    account_movements.get(key, 0) + movement
+                )
+
+            movements_by_entry = {}
+            for (entry_id, account_id), movement in account_movements.items():
+                if movement:
+                    movements_by_entry.setdefault(entry_id, []).append(movement)
+
+            for entry in recent_entries:
+                movements = movements_by_entry.get(entry.id, [])
+                incoming = sum(max(value, 0) for value in movements)
+                outgoing = sum(max(-value, 0) for value in movements)
+
+                if len(movements) >= 2 and incoming and outgoing:
+                    direction = "transfer"
+                    amount = min(incoming, outgoing)
+                else:
+                    net = incoming - outgoing
+                    direction = (
+                        "inflow" if net > 0
+                        else "outflow" if net < 0
+                        else "unknown"
+                    )
+                    amount = abs(net)
+
+                recent_amounts[entry.id] = {
+                    "amount_minor": amount if direction != "unknown" else None,
+                    "direction": direction,
+                }
+
         currency = Currency.query.filter_by(
             code=workspace.functional_currency
         ).first()
@@ -1239,7 +1843,13 @@ def dashboard_summary():
                 "total_savings_minor": total_savings,
             },
             "recent_transactions": [
-                _journal_entry_response(entry)
+                {
+                    **_journal_entry_response(entry),
+                    **recent_amounts.get(
+                        entry.id,
+                        {"amount_minor": None, "direction": "unknown"},
+                    ),
+                }
                 for entry in recent_entries
             ],
         }), 200

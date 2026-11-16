@@ -11,6 +11,7 @@ import {
 
 import { useAuth } from "../context/useAuth";
 import { financeApi } from "../api/client";
+import { Skeleton } from "../components/Skeleton";
 
 const MINOR_UNITS = {
   BIF: 0, CLP: 0, DJF: 0, GNF: 0, JPY: 0, KMF: 0,
@@ -74,6 +75,24 @@ function currentMonthPeriod() {
   };
 }
 
+const SUGGESTED_CATEGORIES = [
+  "Food & Groceries",
+  "Rent & Housing",
+  "Transport",
+  "Utilities",
+  "Communication",
+  "Healthcare",
+  "Education",
+  "Clothing",
+  "Family & Dependants",
+  "Entertainment",
+  "Dining Out",
+  "Savings",
+  "Debt Repayment",
+  "Personal Care",
+  "Miscellaneous",
+];
+
 export default function Budgets() {
   const { activeWorkspace } = useAuth();
   const workspaceId = activeWorkspace?.id;
@@ -97,6 +116,25 @@ export default function Budgets() {
   const [categoryId, setCategoryId] = useState("");
   const [amount, setAmount] = useState("");
   const [period, setPeriod] = useState(currentMonthPeriod);
+  const [periodFilter, setPeriodFilter] = useState("all");
+  const [filterMonth, setFilterMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
+
+  const filteredBudgets = useMemo(() => {
+    if (periodFilter === "all") return budgets;
+
+    const [year, month] = filterMonth.split("-").map(Number);
+    if (!year || !month) return budgets;
+
+    const start = `${filterMonth}-01`;
+    const end = localDate(new Date(year, month, 0));
+
+    return budgets.filter((budget) =>
+      budget.period_start <= end && budget.period_end >= start
+    );
+  }, [budgets, periodFilter, filterMonth]);
 
   const loadData = useCallback(async (background = false) => {
     if (!workspaceId) {
@@ -141,12 +179,12 @@ export default function Budgets() {
     loadData();
   }, [loadData]);
 
-  const totals = useMemo(() => budgets.reduce((result, budget) => {
+  const totals = useMemo(() => filteredBudgets.reduce((result, budget) => {
     result.allocated += Number(budget.amount_minor || 0);
     result.spent += Number(budget.actual_minor || 0);
     result.remaining += Number(budget.remaining_minor || 0);
     return result;
-  }, { allocated: 0, spent: 0, remaining: 0 }), [budgets]);
+  }, { allocated: 0, spent: 0, remaining: 0 }), [filteredBudgets]);
 
   async function handleCreateCategory(event) {
     event.preventDefault();
@@ -235,34 +273,50 @@ export default function Budgets() {
 
   return (
     <section className="budgets-page">
-      <div className="accounts-heading">
-        <div>
-          <h1>Budgets</h1>
-          <p>Plan your spending and keep track of where your money goes.</p>
+      <div className="budgets-hero">
+        <div className="budgets-hero-copy">
+          <div className="budgets-hero-kicker">
+            <Wallet size={14} />
+            SPENDING PLAN
+          </div>
+          <h1>Give every shilling a purpose.</h1>
+          <p>
+            Set clear spending limits, follow your progress and stay in control
+            of your money throughout the month.
+          </p>
+          <div className="budgets-hero-meta">
+            <span><Tags size={15} /> Category-based planning</span>
+            <span><CheckCircle2 size={15} /> Track spending progress</span>
+          </div>
         </div>
 
-        <div className="accounts-actions">
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => loadData(true)}
-            disabled={refreshing}
-          >
-            <RefreshCw size={16} className={refreshing ? "spin" : ""} />
-            Refresh
-          </button>
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() => {
-              setError("");
-              setShowBudgetForm((value) => !value);
-              setShowCategoryForm(false);
-            }}
-          >
-            <Plus size={17} />
-            New budget
-          </button>
+        <div className="budgets-hero-side">
+          <div className="budgets-hero-art" aria-hidden="true">
+            <Wallet size={39} strokeWidth={1.5} />
+          </div>
+          <div className="budgets-hero-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => loadData(true)}
+              disabled={refreshing}
+            >
+              <RefreshCw size={16} className={refreshing ? "spin" : ""} />
+              Refresh
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => {
+                setError("");
+                setShowBudgetForm((value) => !value);
+                setShowCategoryForm(false);
+              }}
+            >
+              <Plus size={17} />
+              New budget
+            </button>
+          </div>
         </div>
       </div>
 
@@ -283,15 +337,15 @@ export default function Budgets() {
       <div className="accounts-summary budget-summary">
         <div className="accounts-summary-card">
           <span><Wallet size={17} /> Total allocated</span>
-          <strong>{formatMoney(totals.allocated, currency)}</strong>
+          <strong>{loading ? <Skeleton width="115px" height={23} /> : formatMoney(totals.allocated, currency)}</strong>
         </div>
         <div className="accounts-summary-card">
           <span><Tags size={17} /> Total spent</span>
-          <strong>{formatMoney(totals.spent, currency)}</strong>
+          <strong>{loading ? <Skeleton width="115px" height={23} /> : formatMoney(totals.spent, currency)}</strong>
         </div>
         <div className="accounts-summary-card">
           <span><CheckCircle2 size={17} /> Remaining</span>
-          <strong>{formatMoney(totals.remaining, currency)}</strong>
+          <strong>{loading ? <Skeleton width="115px" height={23} /> : formatMoney(totals.remaining, currency)}</strong>
         </div>
       </div>
 
@@ -305,6 +359,33 @@ export default function Budgets() {
           </div>
 
           <form className="account-form" onSubmit={handleCreateCategory}>
+            <div className="budget-category-suggestions">
+              <span className="budget-suggestions-label">
+                Suggested categories
+              </span>
+              <div className="budget-suggestion-list">
+                {SUGGESTED_CATEGORIES.map((name) => {
+                  const exists = categories.some(
+                    (category) =>
+                      category.name.trim().toLowerCase() === name.toLowerCase()
+                  );
+
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      className={`budget-suggestion-chip${exists ? " added" : ""}`}
+                      disabled={exists || saving}
+                      onClick={() => setCategoryName(name)}
+                    >
+                      {name}
+                      {exists && <span>Added</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <label>
               Category name
               <input
@@ -439,8 +520,60 @@ export default function Budgets() {
           </button>
         </div>
 
+        <div className="budget-filter-row">
+          <label>
+            Period
+            <select
+              value={periodFilter}
+              onChange={(event) => setPeriodFilter(event.target.value)}
+            >
+              <option value="all">All periods</option>
+              <option value="month">Selected month</option>
+            </select>
+          </label>
+          {periodFilter === "month" && (
+            <label>
+              Choose month
+              <input
+                type="month"
+                value={filterMonth}
+                onChange={(event) => setFilterMonth(event.target.value)}
+              />
+            </label>
+          )}
+          <span>{filteredBudgets.length} budget{filteredBudgets.length === 1 ? "" : "s"}</span>
+        </div>
+
         {loading ? (
-          <div className="budget-empty-state">Loading your budgets...</div>
+          <div className="budget-grid budget-skeleton-grid" aria-hidden="true">
+            {Array.from({ length: 2 }, (_, index) => (
+              <article className="budget-card budget-skeleton-card" key={index}>
+                <div className="budget-card-heading">
+                  <div className="budget-skeleton-heading">
+                    <Skeleton width="58%" height={16} />
+                    <Skeleton width="78%" height={11} />
+                  </div>
+                  <Skeleton width={72} height={22} radius={20} />
+                </div>
+                <div className="budget-card-amount">
+                  <Skeleton width="42%" height={22} />
+                  <Skeleton width="32%" height={13} />
+                </div>
+                <Skeleton width="100%" height={9} radius={20} />
+                <div className="budget-card-footer">
+                  <Skeleton width="25%" height={12} />
+                  <Skeleton width="38%" height={14} />
+                </div>
+                <div className="budget-daily-guidance budget-skeleton-guidance">
+                  <div>
+                    <Skeleton width={150} height={11} />
+                    <Skeleton width={95} height={16} />
+                  </div>
+                  <Skeleton width={75} height={10} />
+                </div>
+              </article>
+            ))}
+          </div>
         ) : budgets.length === 0 ? (
           <div className="budget-empty-state">
             <CalendarDays size={34} />
@@ -455,15 +588,40 @@ export default function Budgets() {
               Create category
             </button>
           </div>
+        ) : filteredBudgets.length === 0 ? (
+          <div className="budget-empty-state">
+            <CalendarDays size={34} />
+            <h3>No budgets for this period</h3>
+            <p>Try another month or switch to all periods.</p>
+          </div>
         ) : (
           <div className="budget-grid">
-            {budgets.map((budget) => {
+            {filteredBudgets.map((budget) => {
               const percentage = Math.max(
                 0,
                 Number(budget.usage_percentage || 0)
               );
               const over = budget.is_over_budget;
+              const nearLimit = !over && percentage >= 80;
               const progress = Math.min(percentage, 100);
+              const statusClass = over ? "over" : nearLimit ? "near" : "";
+
+              const today = localDate(new Date());
+              const startsTodayOrEarlier = budget.period_start <= today;
+              const endsTodayOrLater = budget.period_end >= today;
+              const activeNow = startsTodayOrEarlier && endsTodayOrLater;
+              const remainingDays = activeNow
+                ? Math.max(
+                    1,
+                    Math.ceil(
+                      (new Date(`${budget.period_end}T00:00:00`) -
+                        new Date(`${today}T00:00:00`)) / 86400000
+                    ) + 1
+                  )
+                : 0;
+              const dailyAllowance = activeNow && Number(budget.remaining_minor) > 0
+                ? Number(budget.remaining_minor) / remainingDays
+                : 0;
 
               return (
                 <article className="budget-card" key={budget.id}>
@@ -475,8 +633,8 @@ export default function Budgets() {
                         {budget.period_start} – {budget.period_end}
                       </span>
                     </div>
-                    <span className={`budget-status ${over ? "over" : ""}`}>
-                      {over ? "Over budget" : "On track"}
+                    <span className={`budget-status ${statusClass}`}>
+                      {over ? "Over budget" : nearLimit ? "Near limit" : "On track"}
                     </span>
                   </div>
 
@@ -494,7 +652,7 @@ export default function Budgets() {
                     aria-label={`${budget.category?.name || "Budget"} spending`}
                   >
                     <div
-                      className={`budget-progress-fill ${over ? "over" : ""}`}
+                      className={`budget-progress-fill ${statusClass}`}
                       style={{ width: `${progress}%` }}
                     />
                   </div>
@@ -506,6 +664,20 @@ export default function Budgets() {
                       {" "}{over ? "over" : "left"}
                     </strong>
                   </div>
+
+                  {activeNow && (
+                    <div className="budget-daily-guidance">
+                      <div>
+                        <span>Suggested daily spending limit</span>
+                        <strong>
+                          {formatMoney(Math.floor(dailyAllowance), budget.currency_code)}
+                        </strong>
+                      </div>
+                      <small>
+                        {remainingDays} day{remainingDays === 1 ? "" : "s"} remaining
+                      </small>
+                    </div>
+                  )}
                 </article>
               );
             })}
