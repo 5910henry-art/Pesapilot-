@@ -4,12 +4,14 @@ from unittest.mock import Mock, patch
 from uuid import UUID, uuid4
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from sqlalchemy import event
 
 from app import create_app
 from app.extensions import db
 from app.models.loan_repayments import LoanPaymentAllocation
 from app.models import (
     Currency,
+    AuditLog,
     User,
     Workspace,
     WorkspaceMember,
@@ -26,9 +28,45 @@ from app.models import (
     LoanDisbursement,
     Bill,
     BillPayment,
+    PlatformAdmin,
+    PlatformAccountingSettings,
+    PlatformFinancialAccount,
+    PlatformLedgerAccount,
+    PlatformJournalEntry,
+    PlatformJournalLine,
+    PlatformLoanProduct,
+    PlatformLoanApplication,
+    PlatformLoan,
+    PlatformLoanInstallment,
+    PlatformLoanDisbursement,
+    PlatformLoanPayment,
+    PlatformLoanPaymentAllocation,
+    PlatformInvestor,
+    PlatformInvestorContribution,
+    PlatformInvestorWithdrawal,
+    PlatformLoanFundingAllocation,
+    PlatformLoanFundingRelease,
 )
 
 from app.services.accounting import create_draft_entry, post_entry, reverse_entry
+from app.services.platform_lending import (
+    PlatformLendingValidationError,
+    create_platform_loan_from_application,
+    disburse_platform_loan,
+    record_platform_loan_payment,
+    confirm_platform_loan_payment,
+    reverse_platform_loan_payment,
+    record_platform_investor_contribution,
+    record_platform_investor_withdrawal,
+    reverse_platform_investor_contribution,
+    reverse_platform_investor_withdrawal,
+)
+from app.services.platform_accounting import (
+    PlatformAccountingError,
+    create_draft_entry as create_platform_draft_entry,
+    post_entry as post_platform_entry,
+    reverse_entry as reverse_platform_entry,
+)
 from app.services.ai_manager.data_service import build_financial_snapshot
 from app.services.ai_manager.rules_engine import generate_insights
 from app.services.ai_manager.providers.groq import sanitize_financial_context
@@ -54,6 +92,15 @@ class PesaPilotTestCase(unittest.TestCase):
 
         cls.app_context = cls.app.app_context()
         cls.app_context.push()
+
+        if db.engine.dialect.name == "sqlite":
+            event.listen(
+                db.engine,
+                "connect",
+                lambda connection, record: connection.execute(
+                    "PRAGMA foreign_keys=ON"
+                ),
+            )
 
         db.create_all()
 
@@ -280,6 +327,3978 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(ledger.account_class, "expense")
         self.assertEqual(ledger.normal_balance, "debit")
         self.assertEqual(ledger.currency_code, "KES")
+
+
+
+    def create_platform_loan_product(self, **overrides):
+        values = {
+            "name": "Test Personal Loan",
+            "code": f"TEST-PL-{uuid4().hex[:12]}",
+            "description": "Test platform lending product",
+            "currency_code": "KES",
+            "min_principal_minor": 50000,
+            "max_principal_minor": 5000000,
+            "interest_method": "reducing",
+            "interest_rate_percent": Decimal("10"),
+            "repayment_frequency": "monthly",
+            "min_term_count": 1,
+            "max_term_count": 12,
+            "origination_fee_minor": 0,
+            "late_payment_fee_minor": 0,
+            "allow_early_repayment": True,
+            "is_active": True,
+            "created_by": self.user.id,
+        }
+        values.update(overrides)
+        product = PlatformLoanProduct(**values)
+        db.session.add(product)
+        db.session.flush()
+        return product
+
+    def create_approved_platform_application(
+        self,
+        *,
+        requested_principal_minor=100000,
+        approved_principal_minor=None,
+        term_count=6,
+        product=None,
+    ):
+        product = product or self.create_platform_loan_product()
+        approved_amount = (
+            approved_principal_minor
+            if approved_principal_minor is not None
+            else requested_principal_minor
+        )
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=requested_principal_minor,
+            approved_principal_minor=approved_amount,
+            term_count=term_count,
+            purpose="Business stock",
+            status="approved",
+            reviewed_by=self.user.id,
+            reviewed_at=datetime.now(timezone.utc),
+        )
+        db.session.add(application)
+        db.session.flush()
+        return application
+
+
+    def create_platform_accounting_setup(self):
+        if db.session.get(PlatformAccountingSettings, 1) is None:
+            db.session.add(PlatformAccountingSettings(
+                id=1,
+                functional_currency_code="KES",
+                updated_by=self.user.id,
+            ))
+
+        financial_account = PlatformFinancialAccount(
+            name="PesaPilot Test Wallet",
+            account_type="mobile_money",
+            currency_code="KES",
+            is_active=True,
+        )
+        db.session.add(financial_account)
+        db.session.flush()
+
+        self.platform_cash_ledger = PlatformLedgerAccount(
+            financial_account_id=financial_account.id,
+            code=f"PL-CASH-{uuid4().hex[:12]}",
+            name="Platform Test Wallet",
+            account_class="asset",
+            normal_balance="debit",
+            currency_code="KES",
+            is_system=False,
+            is_active=True,
+        )
+        self.platform_equity_ledger = PlatformLedgerAccount(
+            financial_account_id=None,
+            code=f"PL-EQ-{uuid4().hex[:12]}",
+            name="Platform Test Equity",
+            account_class="equity",
+            normal_balance="credit",
+            currency_code="KES",
+            is_system=True,
+            is_active=True,
+        )
+        self.platform_interest_income_ledger = (
+            PlatformLedgerAccount.query.filter_by(
+                code="PL-LOANS-INTEREST-INCOME",
+                currency_code="KES",
+            ).one_or_none()
+        )
+
+        if self.platform_interest_income_ledger is None:
+            self.platform_interest_income_ledger = PlatformLedgerAccount(
+                financial_account_id=None,
+                code="PL-LOANS-INTEREST-INCOME",
+                name="Platform Loans Interest Income",
+                account_class="income",
+                normal_balance="credit",
+                currency_code="KES",
+                is_system=True,
+                is_active=True,
+            )
+
+        self.platform_receivable_ledger = (
+            PlatformLedgerAccount.query.filter_by(
+                code="PL-LOANS-RECEIVABLE",
+                currency_code="KES",
+            ).one_or_none()
+        )
+
+        if self.platform_receivable_ledger is None:
+            self.platform_receivable_ledger = PlatformLedgerAccount(
+                financial_account_id=None,
+                code="PL-LOANS-RECEIVABLE",
+                name="Platform Loans Receivable",
+                account_class="asset",
+                normal_balance="debit",
+                currency_code="KES",
+                is_system=True,
+                is_active=True,
+            )
+        self.platform_investor_capital_ledger = (
+            PlatformLedgerAccount.query.filter_by(
+                code="PL-INVESTOR-CAPITAL-KES",
+                currency_code="KES",
+            ).one_or_none()
+        )
+
+        if self.platform_investor_capital_ledger is None:
+            self.platform_investor_capital_ledger = PlatformLedgerAccount(
+                financial_account_id=None,
+                code="PL-INVESTOR-CAPITAL-KES",
+                name="External Investor Capital",
+                account_class="liability",
+                normal_balance="credit",
+                currency_code="KES",
+                is_system=True,
+                is_active=True,
+            )
+
+        db.session.add_all([
+            self.platform_cash_ledger,
+            self.platform_equity_ledger,
+            self.platform_receivable_ledger,
+            self.platform_interest_income_ledger,
+            self.platform_investor_capital_ledger,
+        ])
+        db.session.flush()
+
+        return financial_account
+
+    def create_platform_investor_with_capital(
+        self, financial_account, amount_minor=150000
+    ):
+        investor = PlatformInvestor(
+            name=f"Test Investor {uuid4().hex[:8]}",
+            created_by=self.user.id,
+            is_active=True,
+        )
+        db.session.add(investor)
+        db.session.flush()
+
+        entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-INV-CONTRIB-{uuid4().hex[:12]}",
+            description="Test investor capital contribution",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": self.platform_cash_ledger.id,
+                    "debit_minor": amount_minor,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": self.platform_investor_capital_ledger.id,
+                    "debit_minor": 0,
+                    "credit_minor": amount_minor,
+                },
+            ],
+        )
+        post_platform_entry(entry_id=entry.id, posted_by=self.user.id)
+
+        contribution = PlatformInvestorContribution(
+            investor_id=investor.id,
+            financial_account_id=financial_account.id,
+            journal_entry_id=entry.id,
+            currency_code="KES",
+            amount_minor=amount_minor,
+            contribution_date=datetime.now(timezone.utc),
+            recorded_by=self.user.id,
+            status="posted",
+        )
+        db.session.add(contribution)
+        db.session.flush()
+
+        return investor, contribution
+
+    def test_platform_loan_service_creates_loan_from_approved_application(self):
+        application = self.create_approved_platform_application(
+            requested_principal_minor=100000,
+            approved_principal_minor=75000,
+            term_count=6,
+        )
+
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        self.assertIsNotNone(loan.id)
+        self.assertEqual(loan.application_id, application.id)
+        self.assertEqual(loan.customer_id, application.customer_id)
+        self.assertEqual(loan.product_id, application.product_id)
+        self.assertEqual(loan.approved_principal_minor, 75000)
+        self.assertEqual(loan.currency_code, "KES")
+        self.assertEqual(loan.interest_method, "reducing")
+        self.assertEqual(loan.interest_rate_percent, Decimal("10"))
+        self.assertEqual(loan.repayment_frequency, "monthly")
+        self.assertEqual(loan.term_count, 6)
+        self.assertEqual(loan.principal_minor, 0)
+        self.assertEqual(loan.outstanding_principal_minor, 0)
+        self.assertEqual(loan.status, "created")
+        self.assertEqual(application.status, "approved")
+
+    def test_platform_loan_service_rejects_unapproved_application(self):
+        application = self.create_approved_platform_application()
+        application.status = "pending"
+        db.session.flush()
+
+        with self.assertRaises(PlatformLendingValidationError):
+            create_platform_loan_from_application(
+                application_id=application.id
+            )
+
+    def test_platform_loan_service_prevents_duplicate_creation(self):
+        application = self.create_approved_platform_application()
+
+        first_loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        second_attempt = lambda: create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        self.assertIsNotNone(first_loan.id)
+        with self.assertRaises(PlatformLendingValidationError):
+            second_attempt()
+
+    def test_platform_loan_service_rejects_invalid_approved_principal(self):
+        application = self.create_approved_platform_application()
+        application.approved_principal_minor = None
+        db.session.flush()
+
+        with self.assertRaises(PlatformLendingValidationError):
+            create_platform_loan_from_application(
+                application_id=application.id
+            )
+
+    def test_platform_loan_partial_disbursement_records_funding_tranche(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application()
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        disbursement = disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=40000,
+            funding_source="pesapilot_capital",
+            disbursement_date=datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc),
+            recorded_by=self.user.id,
+            notes="First funding tranche",
+        )
+
+        db.session.flush()
+
+        self.assertIsNotNone(disbursement.id)
+        self.assertEqual(disbursement.amount_minor, 40000)
+        self.assertEqual(disbursement.funding_source, "pesapilot_capital")
+        self.assertEqual(loan.principal_minor, 40000)
+        self.assertEqual(loan.outstanding_principal_minor, 40000)
+        self.assertEqual(loan.status, "funding")
+        self.assertIsNone(loan.start_date)
+        self.assertIsNone(loan.due_date)
+        self.assertEqual(
+            PlatformLoanInstallment.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
+
+        entry = db.session.get(
+            PlatformJournalEntry,
+            disbursement.journal_entry_id,
+        )
+        lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=entry.id
+        ).all()
+
+        self.assertEqual(entry.status, "posted")
+        self.assertEqual(sum(line.debit_minor for line in lines), 40000)
+        self.assertEqual(sum(line.credit_minor for line in lines), 40000)
+
+    def test_mixed_funding_releases_and_restores_each_source_proportionally(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+            term_count=6,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        investor, _contribution = self.create_platform_investor_with_capital(
+            account, amount_minor=100000
+        )
+
+        disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=60000,
+            funding_source="pesapilot_capital",
+            disbursement_date=datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc),
+            recorded_by=self.user.id,
+        )
+        db.session.flush()
+        self.assertEqual(loan.status, "funding")
+
+        disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=40000,
+            funding_source="external_investor",
+            investor_allocations=[{
+                "investor_id": str(investor.id),
+                "amount_minor": 40000,
+            }],
+            disbursement_date=datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc),
+            recorded_by=self.user.id,
+        )
+        db.session.flush()
+
+        self.assertEqual(loan.status, "active")
+        self.assertEqual(loan.principal_minor, 100000)
+        self.assertEqual(loan.outstanding_principal_minor, 100000)
+
+        allocations = PlatformLoanFundingAllocation.query.filter_by(
+            loan_id=loan.id
+        ).all()
+        self.assertEqual(len(allocations), 2)
+
+        pesapilot = next(
+            item for item in allocations
+            if item.funding_source == "pesapilot_capital"
+        )
+        external = next(
+            item for item in allocations
+            if item.funding_source == "external_investor"
+        )
+        self.assertEqual(pesapilot.outstanding_minor, 60000)
+        self.assertEqual(external.outstanding_minor, 40000)
+        self.assertIsNone(pesapilot.investor_id)
+        self.assertEqual(external.investor_id, investor.id)
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id, installment_number=1
+        ).one()
+        principal_payment = 10000
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=installment.interest_minor + principal_payment,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="MIXED-FUNDING-REPAYMENT-001",
+        )
+        confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+        db.session.flush()
+
+        releases = PlatformLoanFundingRelease.query.filter_by(
+            payment_id=payment.id
+        ).all()
+        released_by_source = {}
+        for release in releases:
+            allocation = db.session.get(
+                PlatformLoanFundingAllocation,
+                release.funding_allocation_id,
+            )
+            released_by_source[allocation.funding_source] = release.amount_minor
+
+        self.assertEqual(released_by_source, {
+            "pesapilot_capital": 6000,
+            "external_investor": 4000,
+        })
+        self.assertEqual(pesapilot.outstanding_minor, 54000)
+        self.assertEqual(external.outstanding_minor, 36000)
+
+        reverse_platform_loan_payment(
+            payment_id=payment.id,
+            reversed_by=self.user.id,
+            reference="MIXED-FUNDING-REVERSAL-001",
+            transaction_date=datetime(2026, 11, 18, 9, 0, tzinfo=timezone.utc),
+        )
+        db.session.flush()
+
+        self.assertEqual(pesapilot.outstanding_minor, 60000)
+        self.assertEqual(external.outstanding_minor, 40000)
+        self.assertTrue(all(item.is_reversed for item in releases))
+
+    def test_platform_loan_full_disbursement_activates_loan_and_builds_schedule(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+            term_count=6,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        investor, contribution = self.create_platform_investor_with_capital(
+            account,
+            amount_minor=150000,
+        )
+
+        disbursement = disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=100000,
+            funding_source="external_investor",
+            investor_allocations=[{
+                "investor_id": str(investor.id),
+                "amount_minor": 100000,
+            }],
+            disbursement_date=datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc),
+            recorded_by=self.user.id,
+            notes="Investor-funded loan",
+        )
+
+        db.session.flush()
+
+        installments = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(PlatformLoanInstallment.installment_number).all()
+
+        self.assertIsNotNone(disbursement.id)
+        self.assertEqual(disbursement.funding_source, "external_investor")
+        self.assertEqual(loan.principal_minor, 100000)
+        self.assertEqual(loan.outstanding_principal_minor, 100000)
+        self.assertEqual(loan.status, "active")
+        self.assertEqual(loan.start_date, date(2026, 11, 16))
+        self.assertEqual(loan.due_date, date(2027, 5, 16))
+        self.assertEqual(len(installments), 6)
+        self.assertEqual(
+            sum(item.principal_minor for item in installments),
+            100000,
+        )
+        self.assertEqual(
+            sum(item.amount_minor for item in installments),
+            sum(item.principal_minor + item.interest_minor for item in installments),
+        )
+
+        entry = db.session.get(
+            PlatformJournalEntry,
+            disbursement.journal_entry_id,
+        )
+        lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=entry.id
+        ).all()
+
+        self.assertEqual(entry.status, "posted")
+        self.assertEqual(sum(line.debit_minor for line in lines), 100000)
+        self.assertEqual(sum(line.credit_minor for line in lines), 100000)
+
+    def test_platform_loan_partial_disbursement_records_funding_tranche(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application()
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        disbursement = disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=40000,
+            funding_source="pesapilot_capital",
+            disbursement_date=datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc),
+            recorded_by=self.user.id,
+            notes="First funding tranche",
+        )
+
+        db.session.flush()
+
+        self.assertIsNotNone(disbursement.id)
+        self.assertEqual(disbursement.amount_minor, 40000)
+        self.assertEqual(disbursement.funding_source, "pesapilot_capital")
+        self.assertEqual(loan.principal_minor, 40000)
+        self.assertEqual(loan.outstanding_principal_minor, 40000)
+        self.assertEqual(loan.status, "funding")
+        self.assertIsNone(loan.start_date)
+        self.assertIsNone(loan.due_date)
+        self.assertEqual(
+            PlatformLoanInstallment.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
+
+        entry = db.session.get(
+            PlatformJournalEntry,
+            disbursement.journal_entry_id,
+        )
+        lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=entry.id
+        ).all()
+
+        self.assertEqual(entry.status, "posted")
+        self.assertEqual(sum(line.debit_minor for line in lines), 40000)
+        self.assertEqual(sum(line.credit_minor for line in lines), 40000)
+
+    def test_platform_loan_full_disbursement_activates_loan_and_builds_schedule(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+            term_count=6,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        investor, contribution = self.create_platform_investor_with_capital(
+            account,
+            amount_minor=150000,
+        )
+
+        disbursement = disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=100000,
+            funding_source="external_investor",
+            investor_allocations=[{
+                "investor_id": str(investor.id),
+                "amount_minor": 100000,
+            }],
+            disbursement_date=datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc),
+            recorded_by=self.user.id,
+            notes="Investor-funded loan",
+        )
+
+        db.session.flush()
+
+        installments = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(PlatformLoanInstallment.installment_number).all()
+
+        self.assertIsNotNone(disbursement.id)
+        self.assertEqual(disbursement.funding_source, "external_investor")
+        self.assertEqual(loan.principal_minor, 100000)
+        self.assertEqual(loan.outstanding_principal_minor, 100000)
+        self.assertEqual(loan.status, "active")
+        self.assertEqual(loan.start_date, date(2026, 11, 16))
+        self.assertEqual(loan.due_date, date(2027, 5, 16))
+        self.assertEqual(len(installments), 6)
+        self.assertEqual(
+            sum(item.principal_minor for item in installments),
+            100000,
+        )
+        self.assertEqual(
+            sum(item.amount_minor for item in installments),
+            sum(item.principal_minor + item.interest_minor for item in installments),
+        )
+
+        entry = db.session.get(
+            PlatformJournalEntry,
+            disbursement.journal_entry_id,
+        )
+        lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=entry.id
+        ).all()
+
+        self.assertEqual(entry.status, "posted")
+        self.assertEqual(sum(line.debit_minor for line in lines), 100000)
+        self.assertEqual(sum(line.credit_minor for line in lines), 100000)
+
+    def test_platform_loan_disbursement_rejects_amount_above_approval(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        with self.assertRaises(PlatformLendingValidationError):
+            disburse_platform_loan(
+                loan_id=loan.id,
+                financial_account_id=account.id,
+                amount_minor=100001,
+                funding_source="pesapilot_capital",
+                disbursement_date=datetime.now(timezone.utc),
+                recorded_by=self.user.id,
+            )
+
+        self.assertEqual(loan.principal_minor, 0)
+        self.assertEqual(loan.status, "created")
+        self.assertEqual(
+            PlatformLoanDisbursement.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
+
+    def test_platform_loan_disbursement_rejects_invalid_funding_source(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application()
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        with self.assertRaises(PlatformLendingValidationError):
+            disburse_platform_loan(
+                loan_id=loan.id,
+                financial_account_id=account.id,
+                amount_minor=100000,
+                funding_source="unknown_source",
+                disbursement_date=datetime.now(timezone.utc),
+                recorded_by=self.user.id,
+            )
+
+        self.assertEqual(loan.principal_minor, 0)
+        self.assertEqual(loan.status, "created")
+
+    def test_one_time_platform_loan_requires_owner_selected_due_date(self):
+        account = self.create_platform_accounting_setup()
+        product = self.create_platform_loan_product(
+            interest_method="flat",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="one_time",
+            min_term_count=1,
+            max_term_count=1,
+        )
+        application = self.create_approved_platform_application(
+            term_count=1,
+            product=product,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        funding_date = datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc)
+
+        with self.assertRaises(PlatformLendingValidationError):
+            disburse_platform_loan(
+                loan_id=loan.id,
+                financial_account_id=account.id,
+                amount_minor=100000,
+                funding_source="pesapilot_capital",
+                disbursement_date=funding_date,
+                recorded_by=self.user.id,
+            )
+
+        self.assertEqual(loan.principal_minor, 0)
+        self.assertEqual(loan.status, "created")
+
+        selected_due_date = date(2027, 2, 16)
+        disbursement = disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=100000,
+            funding_source="pesapilot_capital",
+            disbursement_date=funding_date,
+            recorded_by=self.user.id,
+            one_time_due_date=selected_due_date,
+        )
+
+        installments = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).all()
+
+        self.assertIsNotNone(disbursement.id)
+        self.assertEqual(loan.status, "active")
+        self.assertEqual(loan.start_date, date(2026, 11, 16))
+        self.assertEqual(loan.due_date, selected_due_date)
+        self.assertEqual(len(installments), 1)
+        self.assertEqual(installments[0].due_date, selected_due_date)
+        self.assertEqual(installments[0].principal_minor, 100000)
+
+    def create_funded_platform_loan_for_repayment(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+            term_count=6,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=100000,
+            funding_source="pesapilot_capital",
+            disbursement_date=datetime(
+                2026, 11, 16, 9, 0, tzinfo=timezone.utc
+            ),
+            recorded_by=self.user.id,
+        )
+        db.session.flush()
+        return loan, account
+
+    def test_platform_loan_records_partial_repayment_as_pending(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+        installments = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(PlatformLoanInstallment.installment_number).all()
+        original_outstanding = loan.outstanding_principal_minor
+        original_paid = [item.paid_minor for item in installments]
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="PARTIAL-001",
+            notes="Partial customer repayment",
+        )
+
+        self.assertIsNotNone(payment.id)
+        self.assertEqual(payment.amount_minor, 1000)
+        self.assertEqual(payment.currency_code, "KES")
+        self.assertEqual(payment.payment_method, "mobile_money")
+        self.assertEqual(payment.status, "pending")
+        self.assertEqual(payment.reference, "PARTIAL-001")
+        self.assertIsNone(payment.financial_account_id)
+        self.assertIsNone(payment.journal_entry_id)
+        self.assertEqual(loan.outstanding_principal_minor, original_outstanding)
+        self.assertEqual(
+            [item.paid_minor for item in installments],
+            original_paid,
+        )
+        self.assertEqual(
+            PlatformLoanPaymentAllocation.query.filter_by(
+                loan_id=loan.id
+            ).count(),
+            0,
+        )
+
+    def test_platform_loan_repayment_rejects_invalid_amount(self):
+        for invalid_amount in (0, -1, 1.5, True):
+            with self.subTest(amount=invalid_amount):
+                with self.assertRaises(PlatformLendingValidationError):
+                    record_platform_loan_payment(
+                        loan_id=uuid4(),
+                        amount_minor=invalid_amount,
+                        payment_date=date(2026, 11, 17),
+                        payment_method="cash",
+                        recorded_by=self.user.id,
+                    )
+
+    def test_platform_loan_repayment_rejects_amount_above_schedule_balance(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+        outstanding_schedule = sum(
+            item.amount_minor - item.paid_minor
+            for item in PlatformLoanInstallment.query.filter_by(
+                loan_id=loan.id
+            ).all()
+        )
+
+        with self.assertRaises(PlatformLendingValidationError):
+            record_platform_loan_payment(
+                loan_id=loan.id,
+                amount_minor=outstanding_schedule + 1,
+                payment_date=date(2026, 11, 17),
+                payment_method="cash",
+                recorded_by=self.user.id,
+            )
+
+        self.assertEqual(
+            PlatformLoanPayment.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
+        self.assertEqual(loan.outstanding_principal_minor, 100000)
+
+    def test_platform_loan_repayment_rejects_duplicate_reference(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+        payment_args = {
+            "loan_id": loan.id,
+            "amount_minor": 1000,
+            "payment_date": date(2026, 11, 17),
+            "payment_method": "mobile_money",
+            "recorded_by": self.user.id,
+            "reference": "DUPLICATE-001",
+        }
+
+        first_payment = record_platform_loan_payment(**payment_args)
+        self.assertEqual(first_payment.status, "pending")
+
+        with self.assertRaises(PlatformLendingValidationError):
+            record_platform_loan_payment(**payment_args)
+
+
+    def test_platform_loan_repayment_confirmation_posts_balanced_entry(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+
+        first_installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id,
+            installment_number=1,
+        ).one()
+
+        self.assertGreater(first_installment.interest_minor, 0)
+        self.assertGreater(first_installment.principal_minor, 100)
+
+        interest_due = first_installment.interest_minor
+        payment_amount = interest_due + 100
+        original_outstanding = loan.outstanding_principal_minor
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=payment_amount,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="CONFIRM-001",
+        )
+
+        confirmed = confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+
+        db.session.flush()
+
+        self.assertEqual(confirmed.status, "confirmed")
+        self.assertEqual(confirmed.amount_minor, payment_amount)
+        self.assertEqual(confirmed.interest_minor, interest_due)
+        self.assertEqual(confirmed.principal_minor, 100)
+        self.assertEqual(confirmed.financial_account_id, account.id)
+        self.assertIsNotNone(confirmed.journal_entry_id)
+        self.assertIsNotNone(confirmed.confirmed_at)
+
+        self.assertEqual(
+            loan.outstanding_principal_minor,
+            original_outstanding - 100,
+        )
+
+        self.assertEqual(
+            first_installment.paid_minor,
+            payment_amount,
+        )
+        self.assertEqual(first_installment.status, "partially_paid")
+
+        allocations = PlatformLoanPaymentAllocation.query.filter_by(
+            payment_id=payment.id
+        ).all()
+
+        self.assertEqual(len(allocations), 1)
+        self.assertEqual(allocations[0].interest_minor, interest_due)
+        self.assertEqual(allocations[0].principal_minor, 100)
+
+        journal_lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=payment.journal_entry_id
+        ).all()
+
+        self.assertEqual(len(journal_lines), 3)
+        self.assertEqual(
+            sum(line.debit_minor for line in journal_lines),
+            payment_amount,
+        )
+        self.assertEqual(
+            sum(line.credit_minor for line in journal_lines),
+            payment_amount,
+        )
+
+        cash_line = next(
+            line for line in journal_lines
+            if line.ledger_account_id == self.platform_cash_ledger.id
+        )
+        receivable_line = next(
+            line for line in journal_lines
+            if line.ledger_account_id == self.platform_receivable_ledger.id
+        )
+        interest_line = next(
+            line for line in journal_lines
+            if line.ledger_account_id
+            == self.platform_interest_income_ledger.id
+        )
+
+        self.assertEqual(cash_line.debit_minor, payment_amount)
+        self.assertEqual(receivable_line.credit_minor, 100)
+        self.assertEqual(interest_line.credit_minor, interest_due)
+
+        with self.assertRaises(PlatformLendingValidationError):
+            confirm_platform_loan_payment(
+                payment_id=payment.id,
+                financial_account_id=account.id,
+                confirmed_by=self.user.id,
+            )
+
+    def test_platform_loan_repayment_confirmation_rejects_mismatched_account(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date(2026, 11, 17),
+            payment_method="cash",
+            recorded_by=self.user.id,
+            reference="MISMATCH-001",
+        )
+
+        with self.assertRaises(PlatformLendingValidationError):
+            confirm_platform_loan_payment(
+                payment_id=payment.id,
+                financial_account_id=account.id,
+                confirmed_by=self.user.id,
+            )
+
+        self.assertEqual(payment.status, "pending")
+        self.assertIsNone(payment.journal_entry_id)
+        self.assertIsNone(payment.financial_account_id)
+        self.assertEqual(
+            PlatformLoanPaymentAllocation.query.filter_by(
+                payment_id=payment.id
+            ).count(),
+            0,
+        )
+
+
+    def test_platform_loan_repayment_reversal_restores_balances(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id,
+            installment_number=1,
+        ).one()
+
+        payment_amount = installment.interest_minor + 100
+        original_outstanding = loan.outstanding_principal_minor
+        original_paid = installment.paid_minor
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=payment_amount,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="REVERSAL-001",
+        )
+
+        confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+        db.session.flush()
+
+        original_journal_id = payment.journal_entry_id
+        self.assertEqual(payment.status, "confirmed")
+        self.assertEqual(installment.paid_minor, payment_amount)
+        self.assertEqual(
+            loan.outstanding_principal_minor,
+            original_outstanding - 100,
+        )
+
+        reversal_date = datetime(
+            2026, 11, 18, 10, 0, tzinfo=timezone.utc
+        )
+        reversal = reverse_platform_loan_payment(
+            payment_id=payment.id,
+            reversed_by=self.user.id,
+            reference="REVERSAL-JOURNAL-001",
+            transaction_date=reversal_date,
+        )
+        db.session.flush()
+
+        self.assertEqual(payment.status, "reversed")
+        self.assertIsNotNone(payment.reversed_at)
+        self.assertEqual(installment.paid_minor, original_paid)
+        self.assertEqual(
+            loan.outstanding_principal_minor,
+            original_outstanding,
+        )
+
+        original_journal = db.session.get(
+            PlatformJournalEntry,
+            original_journal_id,
+        )
+        self.assertEqual(original_journal.status, "reversed")
+        self.assertEqual(reversal.status, "posted")
+        self.assertEqual(reversal.reversal_of_id, original_journal_id)
+
+        original_lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=original_journal_id
+        ).all()
+        reversal_lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=reversal.id
+        ).all()
+
+        self.assertEqual(len(original_lines), len(reversal_lines))
+        self.assertEqual(
+            sum(line.debit_minor for line in reversal_lines),
+            payment_amount,
+        )
+        self.assertEqual(
+            sum(line.credit_minor for line in reversal_lines),
+            payment_amount,
+        )
+
+        self.assertEqual(
+            PlatformLoanPaymentAllocation.query.filter_by(
+                payment_id=payment.id
+            ).count(),
+            1,
+        )
+
+    def test_investor_funding_is_released_proportionally_and_restored_on_reversal(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+            term_count=6,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        investor_a, _contribution_a = (
+            self.create_platform_investor_with_capital(
+                account, amount_minor=60000
+            )
+        )
+        investor_b, _contribution_b = (
+            self.create_platform_investor_with_capital(
+                account, amount_minor=40000
+            )
+        )
+
+        disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=100000,
+            funding_source="external_investor",
+            investor_allocations=[
+                {
+                    "investor_id": investor_a.id,
+                    "amount_minor": 60000,
+                },
+                {
+                    "investor_id": investor_b.id,
+                    "amount_minor": 40000,
+                },
+            ],
+            disbursement_date=datetime(
+                2026, 11, 16, 9, 0, tzinfo=timezone.utc
+            ),
+            recorded_by=self.user.id,
+        )
+        db.session.flush()
+
+        allocations = PlatformLoanFundingAllocation.query.filter_by(
+            loan_id=loan.id
+        ).all()
+        self.assertEqual(len(allocations), 2)
+
+        original_outstanding = {
+            item.investor_id: item.outstanding_minor
+            for item in allocations
+        }
+        self.assertEqual(original_outstanding[investor_a.id], 60000)
+        self.assertEqual(original_outstanding[investor_b.id], 40000)
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id,
+            installment_number=1,
+        ).one()
+        principal_payment = 10000
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=installment.interest_minor + principal_payment,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="INVESTOR-RELEASE-001",
+        )
+        confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+        db.session.flush()
+
+        releases = PlatformLoanFundingRelease.query.filter_by(
+            payment_id=payment.id
+        ).all()
+        released_by_investor = {}
+        for release in releases:
+            allocation = db.session.get(
+                PlatformLoanFundingAllocation,
+                release.funding_allocation_id,
+            )
+            released_by_investor[allocation.investor_id] = (
+                release.amount_minor
+            )
+
+        self.assertEqual(
+            released_by_investor,
+            {
+                investor_a.id: 6000,
+                investor_b.id: 4000,
+            },
+        )
+
+        remaining_by_investor = {
+            item.investor_id: item.outstanding_minor
+            for item in allocations
+        }
+        self.assertEqual(remaining_by_investor[investor_a.id], 54000)
+        self.assertEqual(remaining_by_investor[investor_b.id], 36000)
+
+        reverse_platform_loan_payment(
+            payment_id=payment.id,
+            reversed_by=self.user.id,
+            reference="INVESTOR-RELEASE-REV-001",
+            transaction_date=datetime(
+                2026, 11, 18, 9, 0, tzinfo=timezone.utc
+            ),
+        )
+        db.session.flush()
+
+        restored_by_investor = {
+            item.investor_id: item.outstanding_minor
+            for item in allocations
+        }
+        self.assertEqual(restored_by_investor, original_outstanding)
+        self.assertTrue(all(release.is_reversed for release in releases))
+        self.assertTrue(
+            all(release.reversed_at is not None for release in releases)
+        )
+
+    def test_investor_funding_reversal_rejects_missing_release_history(self):
+        account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+            term_count=6,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        investor, _contribution = self.create_platform_investor_with_capital(
+            account, amount_minor=100000
+        )
+
+        disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=100000,
+            funding_source="external_investor",
+            investor_allocations=[
+                {
+                    "investor_id": investor.id,
+                    "amount_minor": 100000,
+                }
+            ],
+            disbursement_date=datetime(
+                2026, 11, 16, 9, 0, tzinfo=timezone.utc
+            ),
+            recorded_by=self.user.id,
+        )
+        db.session.flush()
+
+        allocation = PlatformLoanFundingAllocation.query.filter_by(
+            loan_id=loan.id
+        ).one()
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id,
+            installment_number=1,
+        ).one()
+
+        principal_payment = 10000
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=installment.interest_minor + principal_payment,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="MISSING-RELEASE-001",
+        )
+        confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+        db.session.flush()
+
+        self.assertGreater(
+            PlatformLoanFundingRelease.query.filter_by(
+                payment_id=payment.id
+            ).count(),
+            0,
+        )
+        db.session.query(PlatformLoanFundingRelease).filter_by(
+            payment_id=payment.id
+        ).delete(synchronize_session=False)
+        db.session.flush()
+
+        outstanding_before = allocation.outstanding_minor
+        principal_before = loan.outstanding_principal_minor
+        paid_before = installment.paid_minor
+        journal = db.session.get(
+            PlatformJournalEntry,
+            payment.journal_entry_id,
+        )
+
+        with self.assertRaisesRegex(
+            PlatformLendingValidationError,
+            "no active release records",
+        ):
+            reverse_platform_loan_payment(
+                payment_id=payment.id,
+                reversed_by=self.user.id,
+                reference="MISSING-RELEASE-REV-001",
+            )
+
+        self.assertEqual(payment.status, "confirmed")
+        self.assertEqual(allocation.outstanding_minor, outstanding_before)
+        self.assertEqual(loan.outstanding_principal_minor, principal_before)
+        self.assertEqual(installment.paid_minor, paid_before)
+        self.assertEqual(journal.status, "posted")
+
+    def test_platform_loan_repayment_cannot_reverse_before_later_payment(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+
+        first = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="ORDER-001",
+        )
+        confirm_platform_loan_payment(
+            payment_id=first.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+
+        second = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="ORDER-002",
+        )
+        confirm_platform_loan_payment(
+            payment_id=second.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+        db.session.flush()
+
+        with self.assertRaisesRegex(
+            PlatformLendingValidationError,
+            "later confirmed repayment exists",
+        ):
+            reverse_platform_loan_payment(
+                payment_id=first.id,
+                reversed_by=self.user.id,
+                reference="ORDER-REV-001",
+            )
+
+        self.assertEqual(first.status, "confirmed")
+        self.assertEqual(second.status, "confirmed")
+
+    def test_platform_loan_repayment_cannot_be_reversed_twice(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="DOUBLE-REV-001",
+        )
+        confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+
+        reversal = reverse_platform_loan_payment(
+            payment_id=payment.id,
+            reversed_by=self.user.id,
+            reference="DOUBLE-REV-JOURNAL-001",
+        )
+        db.session.flush()
+
+        original_journal_id = payment.journal_entry_id
+        reversal_id = reversal.id
+
+        with self.assertRaisesRegex(
+            PlatformLendingValidationError,
+            "Only confirmed platform loan payments can be reversed",
+        ):
+            reverse_platform_loan_payment(
+                payment_id=payment.id,
+                reversed_by=self.user.id,
+                reference="DOUBLE-REV-JOURNAL-002",
+            )
+
+        self.assertEqual(payment.status, "reversed")
+        self.assertEqual(payment.journal_entry_id, original_journal_id)
+        self.assertEqual(
+            db.session.get(PlatformJournalEntry, original_journal_id).status,
+            "reversed",
+        )
+        self.assertIsNotNone(db.session.get(PlatformJournalEntry, reversal_id))
+
+    def test_platform_loan_record_can_be_created_from_approved_application(self):
+        application = self.create_approved_platform_application()
+
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=application.approved_principal_minor,
+            principal_minor=0,
+            outstanding_principal_minor=0,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=application.term_count,
+            status="created",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        self.assertIsNotNone(loan.id)
+        self.assertEqual(loan.approved_principal_minor, 100000)
+        self.assertEqual(loan.principal_minor, 0)
+        self.assertEqual(loan.outstanding_principal_minor, 0)
+        self.assertEqual(loan.status, "created")
+
+    def test_platform_application_cannot_have_two_loan_records(self):
+        application = self.create_approved_platform_application()
+
+        values = {
+            "application_id": application.id,
+            "customer_id": application.customer_id,
+            "product_id": application.product_id,
+            "approved_principal_minor": application.approved_principal_minor,
+            "principal_minor": 0,
+            "outstanding_principal_minor": 0,
+            "currency_code": "KES",
+            "interest_method": "reducing",
+            "interest_rate_percent": Decimal("10"),
+            "repayment_frequency": "monthly",
+            "term_count": application.term_count,
+            "status": "created",
+        }
+        db.session.add(PlatformLoan(**values))
+        db.session.flush()
+
+        db.session.add(PlatformLoan(**values))
+        with self.assertRaises(Exception):
+            db.session.flush()
+        db.session.rollback()
+
+    def test_platform_loan_cannot_exceed_approved_principal(self):
+        application = self.create_approved_platform_application()
+
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=100000,
+            principal_minor=100001,
+            outstanding_principal_minor=100001,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=application.term_count,
+            status="funding",
+        )
+        db.session.add(loan)
+
+        with self.assertRaises(Exception):
+            db.session.flush()
+        db.session.rollback()
+
+    def test_platform_loan_outstanding_cannot_exceed_disbursed_principal(self):
+        application = self.create_approved_platform_application()
+
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=100000,
+            principal_minor=50000,
+            outstanding_principal_minor=50001,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=application.term_count,
+            status="funding",
+        )
+        db.session.add(loan)
+
+        with self.assertRaises(Exception):
+            db.session.flush()
+        db.session.rollback()
+
+    def test_platform_loan_installment_can_be_created(self):
+        application = self.create_approved_platform_application()
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=100000,
+            principal_minor=100000,
+            outstanding_principal_minor=100000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=6,
+            status="active",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        installment = PlatformLoanInstallment(
+            loan_id=loan.id,
+            installment_number=1,
+            due_date=date(2027, 1, 15),
+            amount_minor=18000,
+            principal_minor=15000,
+            interest_minor=3000,
+        )
+        db.session.add(installment)
+        db.session.flush()
+
+        self.assertIsNotNone(installment.id)
+        self.assertEqual(installment.amount_minor, 18000)
+        self.assertEqual(
+            installment.amount_minor,
+            installment.principal_minor + installment.interest_minor,
+        )
+        self.assertEqual(installment.paid_minor, 0)
+        self.assertEqual(installment.status, "scheduled")
+
+    def test_platform_loan_cannot_have_duplicate_installment_numbers(self):
+        application = self.create_approved_platform_application()
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=100000,
+            principal_minor=100000,
+            outstanding_principal_minor=100000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=6,
+            status="active",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        values = {
+            "loan_id": loan.id,
+            "installment_number": 1,
+            "due_date": date(2027, 1, 15),
+            "amount_minor": 18000,
+            "principal_minor": 15000,
+            "interest_minor": 3000,
+        }
+        db.session.add(PlatformLoanInstallment(**values))
+        db.session.flush()
+
+        db.session.add(PlatformLoanInstallment(**values))
+        with self.assertRaises(Exception):
+            db.session.flush()
+        db.session.rollback()
+
+    def test_platform_installment_paid_amount_cannot_exceed_amount(self):
+        application = self.create_approved_platform_application()
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=100000,
+            principal_minor=100000,
+            outstanding_principal_minor=100000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=6,
+            status="active",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        installment = PlatformLoanInstallment(
+            loan_id=loan.id,
+            installment_number=1,
+            due_date=date(2027, 1, 15),
+            amount_minor=18000,
+            principal_minor=15000,
+            interest_minor=3000,
+            paid_minor=18001,
+        )
+        db.session.add(installment)
+
+        with self.assertRaises(Exception):
+            db.session.flush()
+        db.session.rollback()
+
+    def test_platform_loan_disbursement_can_be_recorded(self):
+        application = self.create_approved_platform_application()
+        financial_account = self.create_platform_accounting_setup()
+
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=100000,
+            principal_minor=50000,
+            outstanding_principal_minor=50000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=6,
+            status="funding",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-DISB-{uuid4().hex[:12]}",
+            description="Platform loan disbursement test",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": str(self.platform_cash_ledger.id),
+                    "debit_minor": 50000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": str(self.platform_equity_ledger.id),
+                    "debit_minor": 0,
+                    "credit_minor": 50000,
+                },
+            ],
+        )
+        db.session.flush()
+
+        disbursement = PlatformLoanDisbursement(
+            loan_id=loan.id,
+            financial_account_id=financial_account.id,
+            journal_entry_id=entry.id,
+            currency_code="KES",
+            amount_minor=50000,
+            funding_source="pesapilot_capital",
+            disbursement_date=datetime.now(timezone.utc),
+            recorded_by=self.user.id,
+        )
+        db.session.add(disbursement)
+        db.session.flush()
+
+        self.assertIsNotNone(disbursement.id)
+        self.assertEqual(disbursement.amount_minor, 50000)
+        self.assertEqual(disbursement.funding_source, "pesapilot_capital")
+
+    def test_platform_disbursement_rejects_unsupported_funding_source(self):
+        application = self.create_approved_platform_application()
+        financial_account = self.create_platform_accounting_setup()
+
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=100000,
+            principal_minor=50000,
+            outstanding_principal_minor=50000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=6,
+            status="funding",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-DISB-{uuid4().hex[:12]}",
+            description="Invalid funding source test",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": str(self.platform_cash_ledger.id),
+                    "debit_minor": 50000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": str(self.platform_equity_ledger.id),
+                    "debit_minor": 0,
+                    "credit_minor": 50000,
+                },
+            ],
+        )
+        db.session.flush()
+
+        db.session.add(PlatformLoanDisbursement(
+            loan_id=loan.id,
+            financial_account_id=financial_account.id,
+            journal_entry_id=entry.id,
+            currency_code="KES",
+            amount_minor=50000,
+            funding_source="unknown_source",
+            disbursement_date=datetime.now(timezone.utc),
+            recorded_by=self.user.id,
+        ))
+
+        with self.assertRaises(Exception):
+            db.session.flush()
+        db.session.rollback()
+
+    def test_platform_disbursement_rejects_currency_mismatch(self):
+        application = self.create_approved_platform_application()
+        self.create_platform_accounting_setup()
+
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=application.customer_id,
+            product_id=application.product_id,
+            approved_principal_minor=100000,
+            principal_minor=50000,
+            outstanding_principal_minor=50000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=6,
+            status="funding",
+        )
+        db.session.add(loan)
+
+        db.session.add(Currency(
+            code="USD",
+            name="US Dollar",
+            minor_unit=2,
+            is_active=True,
+        ))
+        db.session.flush()
+
+        usd_account = PlatformFinancialAccount(
+            name="USD Test Account",
+            account_type="bank",
+            currency_code="USD",
+            is_active=True,
+        )
+        db.session.add(usd_account)
+        db.session.flush()
+
+        entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-DISB-{uuid4().hex[:12]}",
+            description="Currency mismatch test",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": str(self.platform_cash_ledger.id),
+                    "debit_minor": 50000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": str(self.platform_equity_ledger.id),
+                    "debit_minor": 0,
+                    "credit_minor": 50000,
+                },
+            ],
+        )
+        db.session.flush()
+
+        db.session.add(PlatformLoanDisbursement(
+            loan_id=loan.id,
+            financial_account_id=usd_account.id,
+            journal_entry_id=entry.id,
+            currency_code="USD",
+            amount_minor=50000,
+            funding_source="external_investor",
+            disbursement_date=datetime.now(timezone.utc),
+            recorded_by=self.user.id,
+        ))
+
+        with self.assertRaises(Exception):
+            db.session.flush()
+        db.session.rollback()
+
+    def test_platform_accounting_creates_independent_draft_entry(self):
+        self.create_platform_accounting_setup()
+
+        entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-TEST-{uuid4().hex[:12]}",
+            description="Platform test opening entry",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": str(self.platform_cash_ledger.id),
+                    "debit_minor": 100000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": str(self.platform_equity_ledger.id),
+                    "debit_minor": 0,
+                    "credit_minor": 100000,
+                },
+            ],
+        )
+        db.session.flush()
+
+        self.assertEqual(entry.status, "draft")
+        self.assertEqual(entry.functional_currency_code, "KES")
+        self.assertEqual(len(entry.lines) if hasattr(entry, "lines") else (
+            PlatformJournalLine.query.filter_by(
+                journal_entry_id=entry.id
+            ).count()
+        ), 2)
+
+        audit = AuditLog.query.filter_by(
+            workspace_id=None,
+            action="platform_journal_entry_created",
+            resource_id=str(entry.id),
+        ).one()
+        self.assertIsNone(audit.workspace_id)
+
+        line_accounts = {
+            line.ledger_account_id
+            for line in PlatformJournalLine.query.filter_by(
+                journal_entry_id=entry.id
+            ).all()
+        }
+        self.assertEqual(
+            line_accounts,
+            {
+                self.platform_cash_ledger.id,
+                self.platform_equity_ledger.id,
+            },
+        )
+        self.assertNotIn(self.source_ledger.id, line_accounts)
+
+    def test_platform_accounting_posts_balanced_entry(self):
+        self.create_platform_accounting_setup()
+
+        entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-POST-{uuid4().hex[:12]}",
+            description="Platform posting test",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": str(self.platform_cash_ledger.id),
+                    "debit_minor": 75000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": str(self.platform_equity_ledger.id),
+                    "debit_minor": 0,
+                    "credit_minor": 75000,
+                },
+            ],
+        )
+
+        posted = post_platform_entry(
+            entry_id=entry.id,
+            posted_by=self.user.id,
+        )
+        db.session.flush()
+
+        self.assertEqual(posted.status, "posted")
+        self.assertEqual(posted.posted_by, self.user.id)
+        self.assertIsNotNone(posted.posted_at)
+
+        lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=entry.id
+        ).all()
+        self.assertEqual(
+            sum(line.functional_debit_minor for line in lines),
+            75000,
+        )
+        self.assertEqual(
+            sum(line.functional_credit_minor for line in lines),
+            75000,
+        )
+
+        audit = AuditLog.query.filter_by(
+            workspace_id=None,
+            action="platform_journal_entry_posted",
+            resource_id=str(entry.id),
+        ).one()
+        self.assertIsNone(audit.workspace_id)
+
+    def test_platform_accounting_reverses_posted_entry(self):
+        self.create_platform_accounting_setup()
+
+        original = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-ORIG-{uuid4().hex[:12]}",
+            description="Platform reversal test",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": str(self.platform_cash_ledger.id),
+                    "debit_minor": 42000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": str(self.platform_equity_ledger.id),
+                    "debit_minor": 0,
+                    "credit_minor": 42000,
+                },
+            ],
+        )
+        post_platform_entry(
+            entry_id=original.id,
+            posted_by=self.user.id,
+        )
+
+        reversal = reverse_platform_entry(
+            entry_id=original.id,
+            reversed_by=self.user.id,
+            reference=f"PL-REV-{uuid4().hex[:12]}",
+        )
+        db.session.flush()
+
+        self.assertEqual(original.status, "reversed")
+        self.assertEqual(reversal.status, "posted")
+        self.assertEqual(reversal.reversal_of_id, original.id)
+        self.assertEqual(reversal.created_by, self.user.id)
+        self.assertEqual(reversal.posted_by, self.user.id)
+
+        original_lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=original.id
+        ).all()
+        reversal_lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=reversal.id
+        ).all()
+
+        self.assertEqual(len(original_lines), len(reversal_lines))
+        for original_line in original_lines:
+            reversed_line = next(
+                line for line in reversal_lines
+                if line.ledger_account_id == original_line.ledger_account_id
+            )
+            self.assertEqual(
+                reversed_line.debit_minor,
+                original_line.credit_minor,
+            )
+            self.assertEqual(
+                reversed_line.credit_minor,
+                original_line.debit_minor,
+            )
+            self.assertEqual(
+                reversed_line.functional_debit_minor,
+                original_line.functional_credit_minor,
+            )
+            self.assertEqual(
+                reversed_line.functional_credit_minor,
+                original_line.functional_debit_minor,
+            )
+
+        original_audit = AuditLog.query.filter_by(
+            workspace_id=None,
+            action="platform_journal_entry_reversed",
+            resource_id=str(original.id),
+        ).one()
+        reversal_audit = AuditLog.query.filter_by(
+            workspace_id=None,
+            action="platform_journal_reversal_created",
+            resource_id=str(reversal.id),
+        ).one()
+        self.assertIsNone(original_audit.workspace_id)
+        self.assertIsNone(reversal_audit.workspace_id)
+
+    def test_platform_accounting_rejects_unbalanced_entry(self):
+        self.create_platform_accounting_setup()
+
+        entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-UNBAL-{uuid4().hex[:12]}",
+            description="Platform unbalanced posting test",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": str(self.platform_cash_ledger.id),
+                    "debit_minor": 50000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": str(self.platform_equity_ledger.id),
+                    "debit_minor": 0,
+                    "credit_minor": 50000,
+                },
+            ],
+        )
+
+        line = PlatformJournalLine.query.filter_by(
+            journal_entry_id=entry.id,
+            ledger_account_id=self.platform_equity_ledger.id,
+        ).one()
+        line.functional_credit_minor = 49000
+        db.session.flush()
+
+        with self.assertRaises(PlatformAccountingError):
+            post_platform_entry(
+                entry_id=entry.id,
+                posted_by=self.user.id,
+            )
+
+        self.assertEqual(entry.status, "draft")
+        self.assertIsNone(entry.posted_at)
+
+    def test_platform_accounting_rejects_workspace_ledger_accounts(self):
+        self.create_platform_accounting_setup()
+
+        with self.assertRaises(PlatformAccountingError):
+            create_platform_draft_entry(
+                created_by=self.user.id,
+                reference=f"PL-SCOPE-{uuid4().hex[:12]}",
+                description="Reject workspace ledger test",
+                transaction_date=datetime.now(timezone.utc),
+                lines=[
+                    {
+                        "ledger_account_id": str(self.source_ledger.id),
+                        "debit_minor": 30000,
+                        "credit_minor": 0,
+                    },
+                    {
+                        "ledger_account_id": str(self.platform_equity_ledger.id),
+                        "debit_minor": 0,
+                        "credit_minor": 30000,
+                    },
+                ],
+            )
+
+    def test_platform_accounting_cannot_reverse_draft_entry(self):
+        self.create_platform_accounting_setup()
+
+        entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"PL-DRAFT-{uuid4().hex[:12]}",
+            description="Platform draft reversal rejection test",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": str(self.platform_cash_ledger.id),
+                    "debit_minor": 18000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": str(self.platform_equity_ledger.id),
+                    "debit_minor": 0,
+                    "credit_minor": 18000,
+                },
+            ],
+        )
+
+        with self.assertRaises(PlatformAccountingError):
+            reverse_platform_entry(
+                entry_id=entry.id,
+                reversed_by=self.user.id,
+                reference=f"PL-REV-DRAFT-{uuid4().hex[:8]}",
+            )
+
+        self.assertEqual(entry.status, "draft")
+        self.assertIsNone(entry.posted_at)
+
+    def test_workspace_owner_cannot_access_platform_owner_endpoint(self):
+        response = self.client.get(
+            "/api/v1/platform/owner/access",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(response.json["success"])
+
+    def test_platform_owner_can_access_owner_endpoint(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/access",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(response.json["role"], "owner")
+
+    def test_platform_owner_endpoint_requires_authentication(self):
+        response = self.client.get(
+            "/api/v1/platform/owner/access",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+
+    def test_platform_owner_can_register_list_and_view_investor(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        created = self.client.post(
+            "/api/v1/platform/owner/investors",
+            headers=self.headers,
+            json={
+                "name": "Investor API Test",
+                "email": "investor@example.invalid",
+                "phone": "0712345678",
+                "notes": "Initial investor record",
+            },
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        investor_id = created.json["investor"]["id"]
+
+        listing = self.client.get(
+            "/api/v1/platform/owner/investors?search=Investor%20API",
+            headers=self.headers,
+        )
+        self.assertEqual(listing.status_code, 200, listing.json)
+        self.assertEqual(listing.json["pagination"]["total"], 1)
+        self.assertEqual(listing.json["investors"][0]["id"], investor_id)
+
+        detail = self.client.get(
+            f"/api/v1/platform/owner/investors/{investor_id}",
+            headers=self.headers,
+        )
+        self.assertEqual(detail.status_code, 200, detail.json)
+        self.assertEqual(detail.json["investor"]["name"], "Investor API Test")
+        self.assertEqual(detail.json["capital"], [])
+        self.assertEqual(detail.json["contributions"], [])
+        self.assertEqual(detail.json["withdrawals"], [])
+
+    def test_investor_available_capital_tracks_allocation_repayment_and_reversal(self):
+        account = self.create_platform_accounting_setup()
+        investor, _contribution = self.create_platform_investor_with_capital(
+            account,
+            amount_minor=150000,
+        )
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.flush()
+
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+            term_count=6,
+        )
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=account.id,
+            amount_minor=100000,
+            funding_source="external_investor",
+            investor_allocations=[{
+                "investor_id": str(investor.id),
+                "amount_minor": 100000,
+            }],
+            disbursement_date=datetime(
+                2026, 11, 16, 9, 0, tzinfo=timezone.utc
+            ),
+            recorded_by=self.user.id,
+        )
+        db.session.commit()
+
+        detail_url = (
+            f"/api/v1/platform/owner/investors/{investor.id}"
+        )
+
+        def available_capital():
+            response = self.client.get(
+                detail_url,
+                headers=self.headers,
+            )
+            self.assertEqual(response.status_code, 200, response.json)
+            capital = next(
+                item for item in response.json["capital"]
+                if item["currency_code"] == "KES"
+            )
+            return capital["available_minor"]
+
+        # KES 150,000 contributed; KES 100,000 allocated to the loan.
+        self.assertEqual(available_capital(), 50000)
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id,
+            installment_number=1,
+        ).one()
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=installment.interest_minor + 10000,
+            payment_date=date(2026, 11, 17),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference="INV-AVAILABILITY-REPAY-001",
+        )
+        confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+        db.session.commit()
+
+        # Principal repayment releases KES 10,000 to investor availability.
+        self.assertEqual(available_capital(), 60000)
+
+        reverse_platform_loan_payment(
+            payment_id=payment.id,
+            reversed_by=self.user.id,
+            reference="INV-AVAILABILITY-REV-001",
+            transaction_date=datetime(
+                2026, 11, 18, 9, 0, tzinfo=timezone.utc
+            ),
+        )
+        db.session.commit()
+
+        # Reversal locks the previously released KES 10,000 again.
+        self.assertEqual(available_capital(), 50000)
+
+        excessive_withdrawal = self.client.post(
+            f"/api/v1/platform/owner/investors/{investor.id}/withdrawals",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(account.id),
+                "amount_minor": 60000,
+                "currency_code": "KES",
+                "withdrawal_date": "2026-11-18T10:00:00+03:00",
+                "reference": "INV-AVAILABILITY-EXCESS-001",
+            },
+        )
+        self.assertEqual(
+            excessive_withdrawal.status_code,
+            409,
+            excessive_withdrawal.json,
+        )
+
+        valid_withdrawal = self.client.post(
+            f"/api/v1/platform/owner/investors/{investor.id}/withdrawals",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(account.id),
+                "amount_minor": 50000,
+                "currency_code": "KES",
+                "withdrawal_date": "2026-11-18T10:05:00+03:00",
+                "reference": "INV-AVAILABILITY-VALID-001",
+            },
+        )
+        self.assertEqual(
+            valid_withdrawal.status_code,
+            201,
+            valid_withdrawal.json,
+        )
+        self.assertEqual(available_capital(), 0)
+
+    def test_investor_contribution_reversal_restores_balanced_accounting(self):
+        account = self.create_platform_accounting_setup()
+        investor, contribution = self.create_platform_investor_with_capital(
+            account,
+            amount_minor=100000,
+        )
+
+        reversed_record = reverse_platform_investor_contribution(
+            contribution_id=contribution.id,
+            reversed_by=self.user.id,
+            reference="TEST-CONTRIB-REVERSAL",
+        )
+
+        db.session.flush()
+        reversal = PlatformJournalEntry.query.filter_by(
+            reversal_of_id=contribution.journal_entry_id
+        ).one()
+
+        self.assertEqual(reversed_record.status, "reversed")
+        self.assertEqual(reversal.status, "posted")
+        self.assertEqual(
+            db.session.get(
+                PlatformJournalEntry,
+                contribution.journal_entry_id,
+            ).status,
+            "reversed",
+        )
+
+        lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=reversal.id
+        ).all()
+        self.assertEqual(sum(line.debit_minor for line in lines), 100000)
+        self.assertEqual(sum(line.credit_minor for line in lines), 100000)
+
+        with self.assertRaises(PlatformLendingValidationError):
+            reverse_platform_investor_contribution(
+                contribution_id=contribution.id,
+                reversed_by=self.user.id,
+                reference="TEST-CONTRIB-REVERSAL-AGAIN",
+            )
+
+    def test_investor_contribution_reversal_rejects_withdrawn_capital(self):
+        account = self.create_platform_accounting_setup()
+        investor, contribution = self.create_platform_investor_with_capital(
+            account,
+            amount_minor=100000,
+        )
+
+        withdrawal_entry = create_platform_draft_entry(
+            created_by=self.user.id,
+            reference=f"TEST-WITHDRAW-{uuid4().hex[:12]}",
+            description="Test investor withdrawal",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": self.platform_investor_capital_ledger.id,
+                    "debit_minor": 40000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": self.platform_cash_ledger.id,
+                    "debit_minor": 0,
+                    "credit_minor": 40000,
+                },
+            ],
+        )
+        post_platform_entry(
+            entry_id=withdrawal_entry.id,
+            posted_by=self.user.id,
+        )
+        db.session.add(PlatformInvestorWithdrawal(
+            investor_id=investor.id,
+            financial_account_id=account.id,
+            journal_entry_id=withdrawal_entry.id,
+            currency_code="KES",
+            amount_minor=40000,
+            withdrawal_date=datetime.now(timezone.utc),
+            recorded_by=self.user.id,
+            status="posted",
+        ))
+        db.session.flush()
+
+        with self.assertRaises(PlatformLendingValidationError):
+            reverse_platform_investor_contribution(
+                contribution_id=contribution.id,
+                reversed_by=self.user.id,
+                reference="TEST-CONTRIB-REJECT",
+            )
+
+        self.assertEqual(contribution.status, "posted")
+
+    def test_investor_withdrawal_reversal_restores_available_capital(self):
+        account = self.create_platform_accounting_setup()
+        investor, contribution = self.create_platform_investor_with_capital(
+            account,
+            amount_minor=100000,
+        )
+
+        withdrawal = record_platform_investor_withdrawal(
+            investor_id=investor.id,
+            financial_account_id=account.id,
+            amount_minor=40000,
+            currency_code="KES",
+            withdrawal_date=datetime.now(timezone.utc),
+            recorded_by=self.user.id,
+            reference="TEST-WITHDRAWAL",
+        )
+        db.session.flush()
+
+        reversed_record = reverse_platform_investor_withdrawal(
+            withdrawal_id=withdrawal.id,
+            reversed_by=self.user.id,
+            reference="TEST-WITHDRAWAL-REVERSAL",
+        )
+        db.session.flush()
+
+        reversal = PlatformJournalEntry.query.filter_by(
+            reversal_of_id=withdrawal.journal_entry_id
+        ).one()
+
+        self.assertEqual(reversed_record.status, "reversed")
+        self.assertEqual(reversal.status, "posted")
+        self.assertEqual(
+            db.session.get(
+                PlatformJournalEntry,
+                withdrawal.journal_entry_id,
+            ).status,
+            "reversed",
+        )
+
+        with self.assertRaises(PlatformLendingValidationError):
+            reverse_platform_investor_withdrawal(
+                withdrawal_id=withdrawal.id,
+                reversed_by=self.user.id,
+                reference="TEST-WITHDRAWAL-REVERSAL-AGAIN",
+            )
+
+    def test_platform_owner_can_record_investor_contribution_and_withdrawal(self):
+        account = self.create_platform_accounting_setup()
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        created = self.client.post(
+            "/api/v1/platform/owner/investors",
+            headers=self.headers,
+            json={"name": "Capital Flow Investor"},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        investor_id = created.json["investor"]["id"]
+
+        contribution = self.client.post(
+            f"/api/v1/platform/owner/investors/{investor_id}/contributions",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(account.id),
+                "amount_minor": 100000,
+                "currency_code": "KES",
+                "contribution_date": "2026-11-17T08:00:00+03:00",
+                "reference": "INV-CONTRIB-001",
+            },
+        )
+        self.assertEqual(contribution.status_code, 201, contribution.json)
+        self.assertEqual(
+            contribution.json["contribution"]["amount_minor"],
+            100000,
+        )
+
+        contribution_entry = db.session.get(
+            PlatformJournalEntry,
+            UUID(contribution.json["contribution"]["journal_entry_id"]),
+        )
+        contribution_lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=contribution_entry.id
+        ).all()
+        self.assertEqual(contribution_entry.status, "posted")
+        self.assertEqual(sum(x.debit_minor for x in contribution_lines), 100000)
+        self.assertEqual(sum(x.credit_minor for x in contribution_lines), 100000)
+
+        withdrawal = self.client.post(
+            f"/api/v1/platform/owner/investors/{investor_id}/withdrawals",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(account.id),
+                "amount_minor": 40000,
+                "currency_code": "KES",
+                "withdrawal_date": "2026-11-17T08:10:00+03:00",
+                "reference": "INV-WITHDRAW-001",
+            },
+        )
+        self.assertEqual(withdrawal.status_code, 201, withdrawal.json)
+        self.assertEqual(
+            withdrawal.json["withdrawal"]["amount_minor"],
+            40000,
+        )
+
+        detail = self.client.get(
+            f"/api/v1/platform/owner/investors/{investor_id}",
+            headers=self.headers,
+        )
+        self.assertEqual(detail.status_code, 200, detail.json)
+        self.assertEqual(len(detail.json["contributions"]), 1)
+        self.assertEqual(len(detail.json["withdrawals"]), 1)
+        self.assertEqual(detail.json["capital"][0]["contributed_minor"], 100000)
+        self.assertEqual(detail.json["capital"][0]["withdrawn_minor"], 40000)
+        self.assertEqual(detail.json["capital"][0]["available_minor"], 60000)
+
+    def test_platform_owner_can_reverse_investor_contribution_and_withdrawal(self):
+        account = self.create_platform_accounting_setup()
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        created = self.client.post(
+            "/api/v1/platform/owner/investors",
+            headers=self.headers,
+            json={"name": "Reversal API Investor"},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        investor_id = created.json["investor"]["id"]
+
+        contribution = self.client.post(
+            f"/api/v1/platform/owner/investors/{investor_id}/contributions",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(account.id),
+                "amount_minor": 100000,
+                "currency_code": "KES",
+                "contribution_date": "2026-11-17T08:00:00+03:00",
+                "reference": "API-CONTRIB-REV",
+            },
+        )
+        self.assertEqual(contribution.status_code, 201, contribution.json)
+        contribution_id = contribution.json["contribution"]["id"]
+        contribution_journal_id = contribution.json["contribution"]["journal_entry_id"]
+
+        withdrawal = self.client.post(
+            f"/api/v1/platform/owner/investors/{investor_id}/withdrawals",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(account.id),
+                "amount_minor": 40000,
+                "currency_code": "KES",
+                "withdrawal_date": "2026-11-17T08:10:00+03:00",
+                "reference": "API-WITHDRAW-REV",
+            },
+        )
+        self.assertEqual(withdrawal.status_code, 201, withdrawal.json)
+        withdrawal_id = withdrawal.json["withdrawal"]["id"]
+        withdrawal_journal_id = withdrawal.json["withdrawal"]["journal_entry_id"]
+
+        withdrawal_reversal = self.client.post(
+            f"/api/v1/platform/owner/investors/withdrawals/{withdrawal_id}/reverse",
+            headers=self.headers,
+            json={"reference": "API-WITHDRAW-REVERSAL"},
+        )
+        self.assertEqual(withdrawal_reversal.status_code, 200, withdrawal_reversal.json)
+        self.assertEqual(withdrawal_reversal.json["withdrawal"]["status"], "reversed")
+
+        contribution_reversal = self.client.post(
+            f"/api/v1/platform/owner/investors/contributions/{contribution_id}/reverse",
+            headers=self.headers,
+            json={
+                "reference": "API-CONTRIB-REVERSAL",
+                "transaction_date": "2026-11-17T09:00:00+03:00",
+            },
+        )
+        self.assertEqual(contribution_reversal.status_code, 200, contribution_reversal.json)
+        self.assertEqual(contribution_reversal.json["contribution"]["status"], "reversed")
+
+        self.assertEqual(
+            db.session.get(PlatformJournalEntry, UUID(withdrawal_journal_id)).status,
+            "reversed",
+        )
+        self.assertEqual(
+            db.session.get(PlatformJournalEntry, UUID(contribution_journal_id)).status,
+            "reversed",
+        )
+
+        detail = self.client.get(
+            f"/api/v1/platform/owner/investors/{investor_id}",
+            headers=self.headers,
+        )
+        self.assertEqual(detail.status_code, 200, detail.json)
+        self.assertEqual(detail.json["capital"][0]["available_minor"], 0)
+
+    def test_investor_contribution_converts_accounting_error_and_rolls_back(self):
+        account = self.create_platform_accounting_setup()
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        created = self.client.post(
+            "/api/v1/platform/owner/investors",
+            headers=self.headers,
+            json={"name": "Accounting Error Investor"},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        investor_id = created.json["investor"]["id"]
+
+        journal_count = PlatformJournalEntry.query.count()
+
+        with patch(
+            "app.services.platform_lending.create_draft_entry",
+            side_effect=PlatformAccountingError("Simulated accounting failure"),
+        ):
+            response = self.client.post(
+                f"/api/v1/platform/owner/investors/{investor_id}/contributions",
+                headers=self.headers,
+                json={
+                    "financial_account_id": str(account.id),
+                    "amount_minor": 50000,
+                    "currency_code": "KES",
+                    "contribution_date": "2026-11-17T08:20:00+03:00",
+                },
+            )
+
+        self.assertEqual(response.status_code, 409, response.json)
+        self.assertFalse(response.json["success"])
+        self.assertIn("Simulated accounting failure", response.json["message"])
+        self.assertEqual(
+            PlatformInvestorContribution.query.filter_by(
+                investor_id=UUID(investor_id)
+            ).count(),
+            0,
+        )
+        self.assertEqual(PlatformJournalEntry.query.count(), journal_count)
+
+    def test_platform_investor_withdrawal_rejects_insufficient_available_capital(self):
+        account = self.create_platform_accounting_setup()
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        created = self.client.post(
+            "/api/v1/platform/owner/investors",
+            headers=self.headers,
+            json={"name": "Insufficient Capital Investor"},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        investor_id = created.json["investor"]["id"]
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/investors/{investor_id}/withdrawals",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(account.id),
+                "amount_minor": 1,
+                "currency_code": "KES",
+                "withdrawal_date": "2026-11-17T08:15:00+03:00",
+            },
+        )
+        self.assertEqual(response.status_code, 409, response.json)
+        self.assertFalse(response.json["success"])
+        self.assertEqual(
+            PlatformInvestorWithdrawal.query.filter_by(
+                investor_id=UUID(investor_id)
+            ).count(),
+            0,
+        )
+
+    def test_customer_cannot_access_platform_investor_management(self):
+        listing = self.client.get(
+            "/api/v1/platform/owner/investors",
+            headers=self.headers,
+        )
+        self.assertEqual(listing.status_code, 403)
+
+        creation = self.client.post(
+            "/api/v1/platform/owner/investors",
+            headers=self.headers,
+            json={"name": "Unauthorized Investor"},
+        )
+        self.assertEqual(creation.status_code, 403)
+
+
+    def test_customer_cannot_access_platform_owner_applications(self):
+        product = self.create_platform_loan_product()
+
+        submitted = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json={
+                "product_id": str(product.id),
+                "requested_principal_minor": 100000,
+                "term_count": 6,
+                "purpose": "Business stock",
+            },
+        )
+        self.assertEqual(submitted.status_code, 201, submitted.json)
+
+        response = self.client.get(
+            "/api/v1/platform/owner/applications",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
+
+    def test_platform_owner_can_retrieve_platform_loan_details(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            f"/api/v1/platform/owner/loans/{loan.id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+
+        detail = response.json["loan"]
+        self.assertEqual(detail["id"], str(loan.id))
+        self.assertEqual(detail["customer_email"], self.user.email)
+        self.assertEqual(detail["product_name"], loan.product.name if hasattr(loan, "product") else detail["product_name"])
+        self.assertEqual(detail["approved_principal_minor"], 100000)
+        self.assertEqual(detail["disbursed_principal_minor"], 100000)
+        self.assertEqual(detail["outstanding_principal_minor"], 100000)
+
+        self.assertEqual(len(response.json["installments"]), 6)
+        self.assertEqual(len(response.json["disbursements"]), 1)
+        self.assertEqual(response.json["payments"], [])
+
+        summary = response.json["summary"]
+        self.assertEqual(summary["total_disbursed_minor"], 100000)
+        self.assertEqual(summary["outstanding_principal_minor"], 100000)
+        self.assertEqual(summary["confirmed_repayments_minor"], 0)
+        self.assertEqual(summary["pending_repayments_minor"], 0)
+
+    def test_platform_owner_loan_details_reject_invalid_or_missing_ids(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        invalid = self.client.get(
+            "/api/v1/platform/owner/loans/not-a-uuid",
+            headers=self.headers,
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+        missing = self.client.get(
+            "/api/v1/platform/owner/loans/00000000-0000-0000-0000-000000000000",
+            headers=self.headers,
+        )
+        self.assertEqual(missing.status_code, 404)
+
+    def test_customer_cannot_access_platform_owner_loan_details(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        response = self.client.get(
+            f"/api/v1/platform/owner/loans/{loan.id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
+
+
+    def test_platform_owner_can_list_and_filter_loans(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/loans?status=active&page=1&per_page=10",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertGreaterEqual(response.json["pagination"]["total"], 1)
+        self.assertEqual(
+            response.json["pagination"]["total"],
+            len(response.json["loans"]),
+        )
+        self.assertEqual(response.json["pagination"]["page"], 1)
+
+        item = next(
+            entry for entry in response.json["loans"]
+            if entry["id"] == str(loan.id)
+        )
+        self.assertEqual(item["customer_id"], str(self.user.id))
+        self.assertEqual(item["customer_email"], self.user.email)
+        self.assertEqual(item["approved_principal_minor"], 100000)
+        self.assertEqual(item["disbursed_principal_minor"], 100000)
+        self.assertEqual(item["outstanding_principal_minor"], 100000)
+        self.assertEqual(item["currency_code"], "KES")
+        self.assertEqual(item["status"], "active")
+
+    def test_customer_cannot_access_platform_owner_loans(self):
+        response = self.client.get(
+            "/api/v1/platform/owner/loans",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
+
+    def test_platform_owner_loan_listing_rejects_invalid_filters(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        invalid_status = self.client.get(
+            "/api/v1/platform/owner/loans?status=unknown",
+            headers=self.headers,
+        )
+        self.assertEqual(invalid_status.status_code, 400)
+
+        invalid_page = self.client.get(
+            "/api/v1/platform/owner/loans?page=0",
+            headers=self.headers,
+        )
+        self.assertEqual(invalid_page.status_code, 400)
+
+
+    def test_platform_owner_can_view_portfolio_report(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        first_installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(
+            PlatformLoanInstallment.installment_number
+        ).first()
+        first_installment.due_date = date.today() - timedelta(days=1)
+
+        record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"REPORT-{uuid4().hex[:12]}",
+        )
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/reports/portfolio",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+
+        report = next(
+            item for item in response.json["currencies"]
+            if item["currency_code"] == "KES"
+        )
+
+        self.assertGreaterEqual(report["loan_count"], 1)
+        self.assertGreaterEqual(
+            report["approved_principal_minor"], 100000
+        )
+        self.assertGreaterEqual(
+            report["disbursed_principal_minor"], 100000
+        )
+        self.assertGreaterEqual(
+            report["outstanding_principal_minor"], 100000
+        )
+        self.assertGreaterEqual(
+            report["pending_repayments_minor"], 1000
+        )
+        self.assertGreaterEqual(
+            report["overdue_installment_count"], 1
+        )
+        self.assertGreaterEqual(
+            report["overdue_loan_count"], 1
+        )
+        self.assertGreaterEqual(
+            report["funding_sources"]["pesapilot_capital"], 100000
+        )
+
+    def test_customer_cannot_access_platform_portfolio_report(self):
+        response = self.client.get(
+            "/api/v1/platform/owner/reports/portfolio",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
+
+
+    def test_platform_owner_can_view_collections_queue(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        first_installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(
+            PlatformLoanInstallment.installment_number
+        ).first()
+        first_installment.due_date = date.today() - timedelta(days=1)
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"COLLECTION-{uuid4().hex[:12]}",
+        )
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/collections",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+
+        pending = next(
+            item for item in response.json["pending_payments"]
+            if item["id"] == str(payment.id)
+        )
+        self.assertEqual(pending["loan_id"], str(loan.id))
+        self.assertEqual(pending["amount_minor"], 1000)
+        self.assertEqual(pending["currency_code"], "KES")
+
+        overdue = next(
+            item for item in response.json["overdue_installments"]
+            if item["id"] == str(first_installment.id)
+        )
+        self.assertEqual(overdue["loan_id"], str(loan.id))
+        self.assertEqual(
+            overdue["remaining_minor"],
+            first_installment.amount_minor - first_installment.paid_minor,
+        )
+
+        invalid_page = self.client.get(
+            "/api/v1/platform/owner/collections?page=0",
+            headers=self.headers,
+        )
+        self.assertEqual(invalid_page.status_code, 400)
+
+    def test_customer_cannot_access_platform_collections_queue(self):
+        response = self.client.get(
+            "/api/v1/platform/owner/collections",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
+
+    def test_customer_can_list_only_their_platform_loans(self):
+        own_loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        another_customer = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(another_customer)
+        db.session.flush()
+
+        other_loan, _other_account = self.create_funded_platform_loan_for_repayment()
+        other_loan.customer_id = another_customer.id
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/loans",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        loan_ids = [item["id"] for item in response.json["loans"]]
+        self.assertIn(str(own_loan.id), loan_ids)
+        self.assertNotIn(str(other_loan.id), loan_ids)
+
+    def test_customer_can_view_platform_loan_detail_and_repayment_history(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        payment_response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/payments",
+            headers=self.headers,
+            json={
+                "amount_minor": 1000,
+                "payment_date": date.today().isoformat(),
+                "payment_method": "mobile_money",
+                "reference": f"DETAIL-{uuid4().hex[:12]}",
+            },
+        )
+        self.assertEqual(payment_response.status_code, 201, payment_response.json)
+
+        response = self.client.get(
+            f"/api/v1/platform/loans/{loan.id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        data = response.json["loan"]
+        self.assertEqual(data["id"], str(loan.id))
+        self.assertTrue(response.json["installments"])
+        self.assertEqual(len(response.json["payments"]), 1)
+        self.assertEqual(response.json["payments"][0]["status"], "pending")
+        self.assertEqual(response.json["payments"][0]["amount_minor"], 1000)
+
+        for forbidden_key in (
+            "journal_entry_id",
+            "financial_account_id",
+            "funding_source",
+            "recorded_by",
+            "confirmed_by",
+        ):
+            self.assertNotIn(forbidden_key, data)
+            self.assertNotIn(forbidden_key, response.json["payments"][0])
+
+    def test_customer_cannot_view_another_customers_platform_loan(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        another_customer = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(another_customer)
+        db.session.flush()
+        loan.customer_id = another_customer.id
+        db.session.commit()
+
+        response = self.client.get(
+            f"/api/v1/platform/loans/{loan.id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 404, response.json)
+        self.assertFalse(response.json["success"])
+
+    def test_customer_can_submit_platform_loan_repayment(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+        original_outstanding = loan.outstanding_principal_minor
+
+        response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/payments",
+            headers=self.headers,
+            json={
+                "amount_minor": 1000,
+                "payment_date": date.today().isoformat(),
+                "payment_method": "mobile_money",
+                "reference": f"CUSTOMER-{uuid4().hex[:12]}",
+                "notes": "Customer repayment report",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+        payment_data = response.json["payment"]
+        self.assertEqual(payment_data["loan_id"], str(loan.id))
+        self.assertEqual(payment_data["amount_minor"], 1000)
+        self.assertEqual(payment_data["status"], "pending")
+        self.assertEqual(payment_data["payment_method"], "mobile_money")
+
+        payment = db.session.get(
+            PlatformLoanPayment,
+            UUID(payment_data["id"]),
+        )
+        db.session.refresh(loan)
+        self.assertEqual(payment.recorded_by, self.user.id)
+        self.assertIsNone(payment.financial_account_id)
+        self.assertIsNone(payment.journal_entry_id)
+        self.assertEqual(loan.outstanding_principal_minor, original_outstanding)
+        self.assertEqual(
+            PlatformLoanPaymentAllocation.query.filter_by(
+                payment_id=payment.id
+            ).count(),
+            0,
+        )
+
+    def test_customer_repayment_rejects_invalid_payment_method(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/payments",
+            headers=self.headers,
+            json={
+                "amount_minor": 1000,
+                "payment_date": date.today().isoformat(),
+                "payment_method": ["mobile_money"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertFalse(response.json["success"])
+        self.assertEqual(
+            PlatformLoanPayment.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
+
+    def test_customer_cannot_submit_repayment_for_another_customers_loan(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+        another_customer = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(another_customer)
+        db.session.flush()
+
+        loan.customer_id = another_customer.id
+        db.session.flush()
+
+        response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/payments",
+            headers=self.headers,
+            json={
+                "amount_minor": 1000,
+                "payment_date": date.today().isoformat(),
+                "payment_method": "mobile_money",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404, response.json)
+        self.assertFalse(response.json["success"])
+        self.assertEqual(
+            PlatformLoanPayment.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
+
+
+    def test_platform_owner_can_confirm_platform_loan_repayment(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"OWNER-CONFIRM-{uuid4().hex[:12]}",
+        )
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/collections/payments/{payment.id}/confirm",
+            headers=self.headers,
+            json={"financial_account_id": str(account.id)},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+
+        payment_data = response.json["payment"]
+        self.assertEqual(payment_data["id"], str(payment.id))
+        self.assertEqual(payment_data["loan_id"], str(loan.id))
+        self.assertEqual(payment_data["status"], "confirmed")
+        self.assertEqual(
+            payment_data["financial_account_id"],
+            str(account.id),
+        )
+        self.assertEqual(payment_data["amount_minor"], 1000)
+        self.assertIsNotNone(payment_data["journal_entry_id"])
+
+        db.session.refresh(payment)
+        self.assertEqual(payment.status, "confirmed")
+        self.assertIsNotNone(payment.journal_entry_id)
+
+        journal = db.session.get(
+            PlatformJournalEntry,
+            payment.journal_entry_id,
+        )
+        self.assertIsNotNone(journal)
+        self.assertEqual(journal.status, "posted")
+
+    def test_customer_cannot_confirm_platform_loan_repayment(self):
+        response = self.client.post(
+            "/api/v1/platform/owner/collections/payments/"
+            f"{uuid4()}/confirm",
+            headers=self.headers,
+            json={"financial_account_id": str(uuid4())},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
+
+    def test_platform_owner_can_reverse_platform_loan_repayment(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id,
+            installment_number=1,
+        ).one()
+
+        payment_amount = installment.interest_minor + 100
+        original_outstanding = loan.outstanding_principal_minor
+        original_paid = installment.paid_minor
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=payment_amount,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"OWNER-REVERSAL-{uuid4().hex[:12]}",
+        )
+
+        confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+        db.session.flush()
+
+        original_journal_id = payment.journal_entry_id
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/collections/payments/{payment.id}/reverse",
+            headers=self.headers,
+            json={"reference": f"OWNER-REV-{uuid4().hex[:12]}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(response.json["payment"]["status"], "reversed")
+        self.assertIsNotNone(
+            response.json["reversal"]["journal_entry_id"]
+        )
+        self.assertEqual(
+            response.json["reversal"]["status"],
+            "posted",
+        )
+
+        db.session.refresh(payment)
+        db.session.refresh(loan)
+        db.session.refresh(installment)
+
+        self.assertEqual(payment.status, "reversed")
+        self.assertEqual(installment.paid_minor, original_paid)
+        self.assertEqual(
+            loan.outstanding_principal_minor,
+            original_outstanding,
+        )
+
+        original_journal = db.session.get(
+            PlatformJournalEntry,
+            original_journal_id,
+        )
+        self.assertEqual(original_journal.status, "reversed")
+
+        reversal_journal = db.session.get(
+            PlatformJournalEntry,
+            UUID(response.json["reversal"]["journal_entry_id"]),
+        )
+        self.assertIsNotNone(reversal_journal)
+        self.assertEqual(reversal_journal.status, "posted")
+        self.assertEqual(
+            reversal_journal.reversal_of_id,
+            original_journal_id,
+        )
+
+    def test_customer_cannot_reverse_platform_loan_repayment(self):
+        response = self.client.post(
+            "/api/v1/platform/owner/collections/payments/"
+            f"{uuid4()}/reverse",
+            headers=self.headers,
+            json={"reference": "CUSTOMER-REVERSAL"},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
+
+    def test_platform_loan_reversal_rejects_missing_reference(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/collections/payments/{uuid4()}/reverse",
+            headers=self.headers,
+            json={},
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+
+    def test_platform_owner_can_list_and_filter_applications(self):
+        product = self.create_platform_loan_product()
+
+        baseline_total = PlatformLoanApplication.query.count()
+        baseline_withdrawn = PlatformLoanApplication.query.filter_by(
+            status="withdrawn"
+        ).count()
+
+        pending = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Pending application",
+            status="pending",
+        )
+        withdrawn = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=150000,
+            term_count=5,
+            purpose="Withdrawn application",
+            status="withdrawn",
+        )
+        db.session.add_all([pending, withdrawn])
+        db.session.flush()
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/applications",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(
+            response.json["pagination"]["total"],
+            baseline_total + 2,
+        )
+        self.assertEqual(response.json["pagination"]["page"], 1)
+        self.assertEqual(response.json["pagination"]["per_page"], 20)
+
+        own_pending = next(
+            item for item in response.json["applications"]
+            if item["id"] == str(pending.id)
+        )
+        self.assertEqual(own_pending["customer_email"], self.user.email)
+        self.assertEqual(own_pending["product_name"], product.name)
+        self.assertEqual(own_pending["currency_code"], "KES")
+
+        filtered = self.client.get(
+            "/api/v1/platform/owner/applications?status=withdrawn",
+            headers=self.headers,
+        )
+
+        self.assertEqual(filtered.status_code, 200, filtered.json)
+        self.assertEqual(
+            filtered.json["pagination"]["total"],
+            baseline_withdrawn + 1,
+        )
+        self.assertTrue(
+            any(
+                item["id"] == str(withdrawn.id)
+                and item["status"] == "withdrawn"
+                for item in filtered.json["applications"]
+            )
+        )
+
+        invalid = self.client.get(
+            "/api/v1/platform/owner/applications?status=unknown",
+            headers=self.headers,
+        )
+        self.assertEqual(invalid.status_code, 400, invalid.json)
+
+    def test_platform_owner_can_create_loan_from_approved_application(self):
+        application = self.create_approved_platform_application(
+            requested_principal_minor=100000,
+            approved_principal_minor=75000,
+        )
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+        initial_loan_count = PlatformLoan.query.count()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/create-loan",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+        loan_data = response.json["loan"]
+        self.assertEqual(loan_data["application_id"], str(application.id))
+        self.assertEqual(loan_data["approved_principal_minor"], 75000)
+        self.assertEqual(loan_data["principal_minor"], 0)
+        self.assertEqual(loan_data["outstanding_principal_minor"], 0)
+        self.assertEqual(loan_data["status"], "created")
+        self.assertEqual(PlatformLoan.query.count(), initial_loan_count + 1)
+
+    def test_platform_owner_cannot_create_duplicate_platform_loan(self):
+        application = self.create_approved_platform_application()
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+        initial_loan_count = PlatformLoan.query.count()
+
+        url = (
+            f"/api/v1/platform/owner/applications/"
+            f"{application.id}/create-loan"
+        )
+        first = self.client.post(url, headers=self.headers)
+        self.assertEqual(first.status_code, 201, first.json)
+
+        second = self.client.post(url, headers=self.headers)
+        self.assertEqual(second.status_code, 409, second.json)
+        self.assertEqual(PlatformLoan.query.count(), initial_loan_count + 1)
+
+    def test_platform_owner_cannot_create_loan_from_pending_application(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Business stock",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+        initial_loan_count = PlatformLoan.query.count()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/create-loan",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 409, response.json)
+        self.assertEqual(PlatformLoan.query.count(), initial_loan_count)
+
+    def test_customer_cannot_create_platform_loan(self):
+        application = self.create_approved_platform_application()
+        initial_loan_count = PlatformLoan.query.count()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/create-loan",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertEqual(PlatformLoan.query.count(), initial_loan_count)
+
+    def test_platform_owner_can_fully_disburse_platform_loan(self):
+        financial_account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application()
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/loans/{loan.id}/disburse",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(financial_account.id),
+                "amount_minor": 100000,
+                "funding_source": "pesapilot_capital",
+                "disbursement_date": "2026-11-16T10:00:00+03:00",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+
+        disbursement_data = response.json["disbursement"]
+        loan_data = response.json["loan"]
+
+        self.assertEqual(disbursement_data["loan_id"], str(loan.id))
+        self.assertEqual(disbursement_data["financial_account_id"],
+                         str(financial_account.id))
+        self.assertEqual(disbursement_data["amount_minor"], 100000)
+        self.assertEqual(disbursement_data["funding_source"],
+                         "pesapilot_capital")
+
+        self.assertEqual(loan_data["principal_minor"], 100000)
+        self.assertEqual(loan_data["outstanding_principal_minor"], 100000)
+        self.assertEqual(loan_data["status"], "active")
+        self.assertIsNotNone(loan_data["start_date"])
+        self.assertIsNotNone(loan_data["due_date"])
+
+        disbursement = PlatformLoanDisbursement.query.filter_by(
+            id=UUID(disbursement_data["id"])
+        ).one()
+        entry = db.session.get(
+            PlatformJournalEntry,
+            UUID(disbursement_data["journal_entry_id"]),
+        )
+
+        self.assertEqual(disbursement.amount_minor, 100000)
+        self.assertEqual(entry.status, "posted")
+
+        lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=entry.id
+        ).all()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(
+            sum(line.debit_minor for line in lines),
+            100000,
+        )
+        self.assertEqual(
+            sum(line.credit_minor for line in lines),
+            100000,
+        )
+        self.assertEqual(
+            PlatformLoanInstallment.query.filter_by(
+                loan_id=loan.id
+            ).count(),
+            6,
+        )
+
+    def test_platform_owner_can_record_partial_platform_loan_disbursement(self):
+        financial_account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application()
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        investor, _ = self.create_platform_investor_with_capital(
+            financial_account,
+            amount_minor=100000,
+        )
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/loans/{loan.id}/disburse",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(financial_account.id),
+                "amount_minor": 40000,
+                "funding_source": "external_investor",
+                "investor_allocations": [
+                    {
+                        "investor_id": str(investor.id),
+                        "amount_minor": 40000,
+                    }
+                ],
+                "disbursement_date": "2026-11-16T10:00:00+03:00",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(
+            response.json["disbursement"]["amount_minor"],
+            40000,
+        )
+        self.assertEqual(
+            response.json["disbursement"]["funding_source"],
+            "external_investor",
+        )
+        self.assertEqual(response.json["loan"]["principal_minor"], 40000)
+        self.assertEqual(
+            response.json["loan"]["outstanding_principal_minor"],
+            40000,
+        )
+        self.assertEqual(response.json["loan"]["status"], "funding")
+        self.assertIsNone(response.json["loan"]["start_date"])
+        self.assertIsNone(response.json["loan"]["due_date"])
+        self.assertEqual(
+            PlatformLoanInstallment.query.filter_by(
+                loan_id=loan.id
+            ).count(),
+            0,
+        )
+
+    def test_customer_cannot_disburse_platform_loan(self):
+        financial_account = self.create_platform_accounting_setup()
+        application = self.create_approved_platform_application()
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/loans/{loan.id}/disburse",
+            headers=self.headers,
+            json={
+                "financial_account_id": str(financial_account.id),
+                "amount_minor": 100000,
+                "funding_source": "pesapilot_capital",
+                "disbursement_date": "2026-11-16T10:00:00+03:00",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertEqual(
+            PlatformLoanDisbursement.query.filter_by(
+                loan_id=loan.id
+            ).count(),
+            0,
+        )
+        self.assertEqual(loan.principal_minor, 0)
+        self.assertEqual(loan.status, "created")
+
+    def test_platform_owner_can_approve_pending_application(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Business stock",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/decision",
+            headers=self.headers,
+            json={
+                "decision": "approved",
+                "decision_notes": "Application meets requirements.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["application"]["status"], "approved")
+        self.assertEqual(
+            response.json["application"]["approved_principal_minor"],
+            100000,
+        )
+        self.assertEqual(
+            response.json["application"]["decision_notes"],
+            "Application meets requirements.",
+        )
+
+        db.session.refresh(application)
+        self.assertEqual(application.reviewed_by, self.user.id)
+        self.assertIsNotNone(application.reviewed_at)
+
+        repeated = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/decision",
+            headers=self.headers,
+            json={"decision": "approved"},
+        )
+        self.assertEqual(repeated.status_code, 409, repeated.json)
+
+    def test_platform_owner_can_partially_approve_application(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Business stock",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/decision",
+            headers=self.headers,
+            json={
+                "decision": "approved",
+                "approved_principal_minor": 75000,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(
+            response.json["application"]["approved_principal_minor"],
+            75000,
+        )
+        db.session.refresh(application)
+        self.assertEqual(application.approved_principal_minor, 75000)
+
+    def test_platform_owner_cannot_approve_more_than_requested(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Business stock",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/decision",
+            headers=self.headers,
+            json={
+                "decision": "approved",
+                "approved_principal_minor": 120000,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        db.session.refresh(application)
+        self.assertEqual(application.status, "pending")
+        self.assertIsNone(application.approved_principal_minor)
+        self.assertIsNone(application.reviewed_at)
+
+    def test_platform_owner_cannot_approve_zero_amount(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Business stock",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/decision",
+            headers=self.headers,
+            json={
+                "decision": "approved",
+                "approved_principal_minor": 0,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        db.session.refresh(application)
+        self.assertEqual(application.status, "pending")
+        self.assertIsNone(application.approved_principal_minor)
+
+    def test_platform_owner_can_reject_pending_application(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Personal expenses",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/decision",
+            headers=self.headers,
+            json={
+                "decision": "rejected",
+                "decision_notes": "Insufficient eligibility.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["application"]["status"], "rejected")
+        self.assertEqual(
+            response.json["application"]["decision_notes"],
+            "Insufficient eligibility.",
+        )
+
+        db.session.refresh(application)
+        self.assertEqual(application.reviewed_by, self.user.id)
+        self.assertIsNotNone(application.reviewed_at)
+
+    def test_rejected_application_cannot_have_approved_principal(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Personal expenses",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/decision",
+            headers=self.headers,
+            json={
+                "decision": "rejected",
+                "approved_principal_minor": 50000,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        db.session.refresh(application)
+        self.assertEqual(application.status, "pending")
+        self.assertIsNone(application.approved_principal_minor)
+
+    def test_customer_cannot_decide_platform_loan_application(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Business stock",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/applications/{application.id}/decision",
+            headers=self.headers,
+            json={"decision": "approved"},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        db.session.refresh(application)
+        self.assertEqual(application.status, "pending")
+        self.assertIsNone(application.reviewed_at)
+
+    def test_customer_can_list_only_active_platform_loan_products(self):
+        active_product = self.create_platform_loan_product()
+        self.create_platform_loan_product(is_active=False)
+
+        response = self.client.get(
+            "/api/v1/platform/products",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(response.json["count"], 1)
+
+        products = response.json["products"]
+        self.assertEqual(len(products), 1)
+        self.assertEqual(products[0]["id"], str(active_product.id))
+        self.assertEqual(products[0]["name"], active_product.name)
+        self.assertEqual(products[0]["currency_code"], "KES")
+        self.assertEqual(products[0]["min_principal_minor"], 50000)
+        self.assertEqual(products[0]["max_principal_minor"], 5000000)
+        self.assertEqual(products[0]["interest_method"], "reducing")
+        self.assertEqual(products[0]["interest_rate_percent"], "10")
+        self.assertNotIn("created_by", products[0])
+        self.assertNotIn("updated_by", products[0])
+        self.assertNotIn("is_active", products[0])
+
+    def test_customer_platform_products_require_authentication(self):
+        response = self.client.get("/api/v1/platform/products")
+
+        self.assertEqual(response.status_code, 401, response.json)
+
+
+    def test_customer_can_submit_platform_loan_application(self):
+        product = self.create_platform_loan_product()
+
+        response = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json={
+                "product_id": str(product.id),
+                "requested_principal_minor": 100000,
+                "term_count": 6,
+                "purpose": "Business stock",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(
+            response.json["application"]["status"],
+            "pending",
+        )
+        self.assertEqual(
+            response.json["application"]["requested_principal_minor"],
+            100000,
+        )
+
+        application = db.session.get(
+            PlatformLoanApplication,
+            UUID(response.json["application"]["id"]),
+        )
+        self.assertIsNotNone(application)
+        self.assertEqual(application.customer_id, self.user.id)
+        self.assertEqual(application.product_id, product.id)
+
+    def test_customer_cannot_submit_second_pending_application(self):
+        product = self.create_platform_loan_product()
+
+        payload = {
+            "product_id": str(product.id),
+            "requested_principal_minor": 100000,
+            "term_count": 6,
+            "purpose": "Business stock",
+        }
+
+        first = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=payload,
+        )
+        self.assertEqual(first.status_code, 201, first.json)
+
+        second = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=payload,
+        )
+
+        self.assertEqual(second.status_code, 400, second.json)
+        self.assertIn("pending", second.json["message"].lower())
+        self.assertEqual(
+            PlatformLoanApplication.query.filter_by(
+                customer_id=self.user.id,
+                status="pending",
+            ).count(),
+            1,
+        )
+
+    def test_customer_can_withdraw_pending_application(self):
+        product = self.create_platform_loan_product()
+
+        submitted = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json={
+                "product_id": str(product.id),
+                "requested_principal_minor": 100000,
+                "term_count": 6,
+                "purpose": "Business stock",
+            },
+        )
+        self.assertEqual(submitted.status_code, 201, submitted.json)
+
+        application_id = submitted.json["application"]["id"]
+
+        response = self.client.delete(
+            f"/api/v1/platform/applications/{application_id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(
+            response.json["application"]["status"],
+            "withdrawn",
+        )
+        self.assertIsNotNone(
+            response.json["application"]["withdrawn_at"]
+        )
+
+        application = PlatformLoanApplication.query.filter_by(
+            id=UUID(application_id),
+            customer_id=self.user.id,
+        ).one()
+        self.assertEqual(application.status, "withdrawn")
+
+    def test_customer_cannot_access_another_customers_application(self):
+        product = self.create_platform_loan_product()
+
+        other_customer = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(other_customer)
+        db.session.flush()
+
+        application = PlatformLoanApplication(
+            customer_id=other_customer.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Private application",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.commit()
+
+        listing = self.client.get(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+        )
+        self.assertEqual(listing.status_code, 200, listing.json)
+        self.assertEqual(listing.json["count"], 0)
+        self.assertEqual(listing.json["applications"], [])
+
+        withdrawal = self.client.delete(
+            f"/api/v1/platform/applications/{application.id}",
+            headers=self.headers,
+        )
+        self.assertEqual(withdrawal.status_code, 404, withdrawal.json)
+
+        db.session.refresh(application)
+        self.assertEqual(application.status, "pending")
 
     def test_list_expense_categories(self):
         self.create_category("Transport")

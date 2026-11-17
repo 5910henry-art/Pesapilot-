@@ -14,6 +14,7 @@ from .modules.savings import savings_bp
 from .modules.loans import loans_bp
 from .modules.bills import bills_bp
 from .modules.ai_manager import ai_manager_bp
+from .modules.platform import platform_bp
 
 
 def create_app(test_config=None):
@@ -47,6 +48,7 @@ def create_app(test_config=None):
     app.register_blueprint(loans_bp)
     app.register_blueprint(bills_bp)
     app.register_blueprint(ai_manager_bp)
+    app.register_blueprint(platform_bp)
 
     cors.init_app(
         app,
