@@ -536,6 +536,12 @@ export const platformOwnerApi = {
     );
   },
 
+  listCustomerAccounts(loanId) {
+    return apiRequest(
+      `/platform/owner/loans/${encodeURIComponent(loanId)}/customer-accounts`
+    );
+  },
+
   listCollections(options = {}) {
     const params = new URLSearchParams();
     for (const key of ["currency_code", "page", "per_page"]) {

@@ -114,10 +114,12 @@ export default function PlatformOwnerLoans() {
   const [notice, setNotice] = useState("");
 
   const [accounts, setAccounts] = useState([]);
+  const [customerAccounts, setCustomerAccounts] = useState([]);
   const [investors, setInvestors] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [fundingSource, setFundingSource] = useState("pesapilot_capital");
   const [accountId, setAccountId] = useState("");
+  const [customerAccountId, setCustomerAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [disbursementDate, setDisbursementDate] = useState(() => {
     const now = new Date();
@@ -179,23 +181,32 @@ export default function PlatformOwnerLoans() {
     setNotice("");
     setFundingSource("pesapilot_capital");
     setAccountId("");
+    setCustomerAccountId("");
     setAmount("");
     setNotes("");
     setOneTimeDueDate("");
     setAllocations([{ investor_id: "", amount: "" }]);
     setAccounts([]);
+    setCustomerAccounts([]);
     setInvestors([]);
     setAccountsLoading(true);
 
     try {
-      const [accountResult, investorResult] = await Promise.all([
-        platformOwnerApi.listFinancialAccounts(loan.currency_code),
-        platformOwnerApi.listInvestors({ is_active: true, page: 1, per_page: 100 }),
-      ]);
+      const [accountResult, customerAccountResult, investorResult] =
+        await Promise.all([
+          platformOwnerApi.listFinancialAccounts(loan.currency_code),
+          platformOwnerApi.listCustomerAccounts(loan.id),
+          platformOwnerApi.listInvestors({
+            is_active: true,
+            page: 1,
+            per_page: 100,
+          }),
+        ]);
       setAccounts(accountResult.accounts || []);
+      setCustomerAccounts(customerAccountResult.accounts || []);
       setInvestors(investorResult.investors || []);
     } catch (err) {
-      setFormError(err.message || "Could not load financial accounts and investors.");
+      setFormError(err.message || "Could not load platform accounts, borrower accounts and investors.");
     } finally {
       setAccountsLoading(false);
     }
@@ -262,6 +273,10 @@ export default function PlatformOwnerLoans() {
     if (!activeLoan) return;
     if (!accountId) {
       setFormError("Select the platform account used to disburse the funds.");
+      return;
+    }
+    if (!customerAccountId) {
+      setFormError("Select the borrower's personal receiving account.");
       return;
     }
     if (!amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
@@ -346,6 +361,7 @@ export default function PlatformOwnerLoans() {
 
     const payload = {
       financial_account_id: accountId,
+      customer_financial_account_id: customerAccountId,
       amount_minor: amountMinor,
       funding_source: fundingSource,
       disbursement_date: new Date(disbursementDate).toISOString(),
@@ -701,6 +717,36 @@ export default function PlatformOwnerLoans() {
             )}
 
             <label>
+              Borrower's personal receiving account
+              <select
+                value={customerAccountId}
+                onChange={(event) => setCustomerAccountId(event.target.value)}
+                disabled={accountsLoading}
+                required
+              >
+                <option value="">
+                  {accountsLoading
+                    ? "Loading borrower accounts…"
+                    : "Select borrower's account"}
+                </option>
+                {customerAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} · {account.account_type.replaceAll("_", " ")}
+                    {" · "}{account.currency_code}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {!accountsLoading && customerAccounts.length === 0 && (
+              <div className="platform-loan-notice platform-loan-notice-error">
+                The borrower has no eligible active personal cash, bank, or
+                mobile-money account in {selectedCurrency}. Create or activate
+                one in the borrower's personal workspace before disbursing.
+              </div>
+            )}
+
+            <label>
               Disbursement amount ({selectedCurrency})
               <input
                 type="number"
@@ -840,7 +886,13 @@ export default function PlatformOwnerLoans() {
               <button
                 type="submit"
                 className="platform-owner-button platform-owner-button-primary"
-                disabled={saving || accountsLoading || accounts.length === 0}
+                disabled={
+                  saving ||
+                  accountsLoading ||
+                  accounts.length === 0 ||
+                  customerAccounts.length === 0 ||
+                  !customerAccountId
+                }
               >
                 {saving ? "Recording…" : "Record disbursement"}
               </button>

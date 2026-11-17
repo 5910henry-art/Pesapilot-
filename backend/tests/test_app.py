@@ -180,9 +180,22 @@ class PesaPilotTestCase(unittest.TestCase):
             is_active=True,
         )
 
+        self.customer_liability_ledger = LedgerAccount(
+            workspace_id=self.workspace.id,
+            financial_account_id=None,
+            code="2000",
+            name="Loans and Credit Payable",
+            account_class="liability",
+            normal_balance="credit",
+            currency_code="KES",
+            is_system=True,
+            is_active=True,
+        )
+
         db.session.add_all([
             self.source_ledger,
             self.equity_ledger,
+            self.customer_liability_ledger,
         ])
         db.session.flush()
 
@@ -605,6 +618,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disbursement = disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=40000,
             funding_source="pesapilot_capital",
             disbursement_date=datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc),
@@ -655,6 +669,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=60000,
             funding_source="pesapilot_capital",
             disbursement_date=datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc),
@@ -666,6 +681,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=40000,
             funding_source="external_investor",
             investor_allocations=[{
@@ -765,6 +781,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disbursement = disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=100000,
             funding_source="external_investor",
             investor_allocations=[{
@@ -821,6 +838,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disbursement = disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=40000,
             funding_source="pesapilot_capital",
             disbursement_date=datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc),
@@ -872,6 +890,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disbursement = disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=100000,
             funding_source="external_investor",
             investor_allocations=[{
@@ -931,6 +950,7 @@ class PesaPilotTestCase(unittest.TestCase):
             disburse_platform_loan(
                 loan_id=loan.id,
                 financial_account_id=account.id,
+                customer_financial_account_id=self.source_account.id,
                 amount_minor=100001,
                 funding_source="pesapilot_capital",
                 disbursement_date=datetime.now(timezone.utc),
@@ -955,6 +975,7 @@ class PesaPilotTestCase(unittest.TestCase):
             disburse_platform_loan(
                 loan_id=loan.id,
                 financial_account_id=account.id,
+                customer_financial_account_id=self.source_account.id,
                 amount_minor=100000,
                 funding_source="unknown_source",
                 disbursement_date=datetime.now(timezone.utc),
@@ -986,6 +1007,7 @@ class PesaPilotTestCase(unittest.TestCase):
             disburse_platform_loan(
                 loan_id=loan.id,
                 financial_account_id=account.id,
+                customer_financial_account_id=self.source_account.id,
                 amount_minor=100000,
                 funding_source="pesapilot_capital",
                 disbursement_date=funding_date,
@@ -999,6 +1021,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disbursement = disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=100000,
             funding_source="pesapilot_capital",
             disbursement_date=funding_date,
@@ -1030,6 +1053,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=100000,
             funding_source="pesapilot_capital",
             disbursement_date=datetime(
@@ -1371,6 +1395,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=100000,
             funding_source="external_investor",
             investor_allocations=[
@@ -1486,6 +1511,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=100000,
             funding_source="external_investor",
             investor_allocations=[
@@ -2638,6 +2664,7 @@ class PesaPilotTestCase(unittest.TestCase):
         disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
+            customer_financial_account_id=self.source_account.id,
             amount_minor=100000,
             funding_source="external_investor",
             investor_allocations=[{
@@ -3959,6 +3986,7 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
             json={
                 "financial_account_id": str(financial_account.id),
+                "customer_financial_account_id": str(self.source_account.id),
                 "amount_minor": 100000,
                 "funding_source": "pesapilot_capital",
                 "disbursement_date": "2026-11-16T10:00:00+03:00",
@@ -4037,6 +4065,7 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
             json={
                 "financial_account_id": str(financial_account.id),
+                "customer_financial_account_id": str(self.source_account.id),
                 "amount_minor": 40000,
                 "funding_source": "external_investor",
                 "investor_allocations": [
@@ -6436,6 +6465,13 @@ class PesaPilotTestCase(unittest.TestCase):
             ("5000", "Expenses", "expense", "debit"),
         ]
 
+        existing_system_codes = {
+            code
+            for (code,) in db.session.query(LedgerAccount.code).filter_by(
+                workspace_id=self.workspace.id
+            ).all()
+        }
+
         system_accounts = [
             LedgerAccount(
                 workspace_id=self.workspace.id,
@@ -6449,6 +6485,7 @@ class PesaPilotTestCase(unittest.TestCase):
                 is_active=True,
             )
             for code, name, account_class, normal_balance in system_specs
+            if code not in existing_system_codes
         ]
         db.session.add_all(system_accounts)
 

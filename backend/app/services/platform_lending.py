@@ -24,6 +24,12 @@ from ..models import (
     PlatformInvestorWithdrawal,
     PlatformLoanFundingAllocation,
     PlatformLoanFundingRelease,
+    Workspace,
+    WorkspaceMember,
+    FinancialAccount,
+    LedgerAccount,
+    ExchangeRate,
+    Currency,
 )
 from .platform_accounting import (
     PlatformAccountingError,
@@ -32,6 +38,11 @@ from .platform_accounting import (
     reverse_entry,
 )
 from .loan_schedules import build_repayment_schedule
+from .accounting import (
+    AccountingError,
+    create_draft_entry as create_customer_draft_entry,
+    post_entry as post_customer_entry,
+)
 
 
 class PlatformLendingError(Exception):
@@ -318,10 +329,134 @@ def _platform_loan_due_date(start_date, frequency, term_count, one_time_due_date
     return date(year, month, day)
 
 
+
+def _get_platform_loan_customer_disbursement_context(
+    *,
+    loan,
+    customer_financial_account_id,
+    disbursement_date,
+):
+    """Validate the borrower's personal receiving account and FX rate."""
+
+    if not isinstance(customer_financial_account_id, UUID):
+        raise PlatformLendingValidationError(
+            "A valid borrower receiving-account ID is required."
+        )
+
+    workspaces = db.session.execute(
+        select(Workspace)
+        .join(
+            WorkspaceMember,
+            WorkspaceMember.workspace_id == Workspace.id,
+        )
+        .where(
+            WorkspaceMember.user_id == loan.customer_id,
+            WorkspaceMember.role == "owner",
+            Workspace.workspace_type == "personal",
+        )
+        .with_for_update()
+    ).scalars().all()
+
+    if len(workspaces) != 1:
+        raise PlatformLendingValidationError(
+            "The borrower must have exactly one owned personal workspace."
+        )
+
+    workspace = workspaces[0]
+
+    customer_account = db.session.execute(
+        select(FinancialAccount)
+        .where(
+            FinancialAccount.id == customer_financial_account_id,
+            FinancialAccount.workspace_id == workspace.id,
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if (
+        customer_account is None
+        or not customer_account.is_active
+        or customer_account.account_type
+        not in {"cash", "bank", "mobile_money"}
+    ):
+        raise PlatformLendingValidationError(
+            "The selected borrower receiving account is unavailable or ineligible."
+        )
+
+    if customer_account.currency_code != loan.currency_code:
+        raise PlatformLendingValidationError(
+            "The borrower's receiving account currency must match the loan currency."
+        )
+
+    cash_ledgers = db.session.execute(
+        select(LedgerAccount)
+        .where(
+            LedgerAccount.workspace_id == workspace.id,
+            LedgerAccount.financial_account_id == customer_account.id,
+            LedgerAccount.account_class == "asset",
+            LedgerAccount.normal_balance == "debit",
+            LedgerAccount.currency_code == loan.currency_code,
+            LedgerAccount.is_active.is_(True),
+        )
+        .with_for_update()
+    ).scalars().all()
+
+    if len(cash_ledgers) != 1:
+        raise PlatformLendingValidationError(
+            "The borrower's receiving account must have exactly one active "
+            "debit-balance asset ledger."
+        )
+
+    liability_ledgers = db.session.execute(
+        select(LedgerAccount)
+        .where(
+            LedgerAccount.workspace_id == workspace.id,
+            LedgerAccount.financial_account_id.is_(None),
+            LedgerAccount.code == "2000",
+            LedgerAccount.account_class == "liability",
+            LedgerAccount.normal_balance == "credit",
+            LedgerAccount.currency_code == loan.currency_code,
+            LedgerAccount.is_system.is_(True),
+            LedgerAccount.is_active.is_(True),
+        )
+        .with_for_update()
+    ).scalars().all()
+
+    if len(liability_ledgers) != 1:
+        raise PlatformLendingValidationError(
+            "The borrower's active 2000 Loans and Credit Payable ledger "
+            "must be configured for the loan currency."
+        )
+
+    if workspace.functional_currency == loan.currency_code:
+        fx_rate = None
+    else:
+        fx_rate = db.session.execute(
+            select(ExchangeRate.rate)
+            .where(
+                ExchangeRate.base_currency == loan.currency_code,
+                ExchangeRate.quote_currency == workspace.functional_currency,
+                ExchangeRate.effective_at <= disbursement_date,
+            )
+            .order_by(ExchangeRate.effective_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        if fx_rate is None:
+            raise PlatformLendingValidationError(
+                "No exchange rate is configured from "
+                f"{loan.currency_code} to {workspace.functional_currency} "
+                "on or before the disbursement date."
+            )
+
+    return workspace, customer_account, cash_ledgers[0], liability_ledgers[0], fx_rate
+
+
 def disburse_platform_loan(
     *,
     loan_id,
     financial_account_id,
+    customer_financial_account_id,
     amount_minor,
     funding_source,
     disbursement_date,
@@ -437,6 +572,18 @@ def disburse_platform_loan(
         raise PlatformLendingValidationError(
             "The financial account currency must match the loan currency."
         )
+
+    (
+        customer_workspace,
+        customer_account,
+        customer_cash_ledger,
+        customer_liability_ledger,
+        customer_fx_rate,
+    ) = _get_platform_loan_customer_disbursement_context(
+        loan=loan,
+        customer_financial_account_id=customer_financial_account_id,
+        disbursement_date=disbursement_date,
+    )
 
     existing_funding_allocations = db.session.execute(
         select(PlatformLoanFundingAllocation)
@@ -621,6 +768,45 @@ def disburse_platform_loan(
     )
     db.session.add(disbursement)
     db.session.flush()
+
+    try:
+        customer_entry = create_customer_draft_entry(
+            workspace_id=customer_workspace.id,
+            created_by=recorded_by,
+            reference=f"PL-DISB-CUSTOMER-{disbursement.id.hex}",
+            description=f"Platform loan disbursement {loan.id}",
+            transaction_date=disbursement_date,
+            lines=[
+                {
+                    "ledger_account_id": customer_cash_ledger.id,
+                    "debit_minor": amount_minor,
+                    "credit_minor": 0,
+                    "exchange_rate": customer_fx_rate,
+                    "memo": "Platform loan proceeds received",
+                },
+                {
+                    "ledger_account_id": customer_liability_ledger.id,
+                    "debit_minor": 0,
+                    "credit_minor": amount_minor,
+                    "exchange_rate": customer_fx_rate,
+                    "memo": "Platform loan payable",
+                },
+            ],
+        )
+
+        post_customer_entry(
+            entry_id=customer_entry.id,
+            workspace_id=customer_workspace.id,
+            posted_by=recorded_by,
+        )
+    except AccountingError as exc:
+        raise PlatformLendingValidationError(
+            f"Borrower accounting could not be posted: {exc}"
+        ) from exc
+
+    disbursement.customer_workspace_id = customer_workspace.id
+    disbursement.customer_financial_account_id = customer_account.id
+    disbursement.customer_journal_entry_id = customer_entry.id
 
     if funding_source == "pesapilot_capital":
         db.session.add(PlatformLoanFundingAllocation(

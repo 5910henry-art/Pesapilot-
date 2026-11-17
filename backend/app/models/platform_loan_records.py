@@ -319,6 +319,23 @@ class PlatformLoanDisbursement(db.Model):
         unique=True,
     )
 
+    # Customer-side accounting references for this disbursement tranche.
+    # Nullable to preserve compatibility with historical disbursements.
+    customer_workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=True,
+    )
+
+    customer_financial_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=True,
+    )
+
+    customer_journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=True,
+    )
+
     currency_code: Mapped[str] = mapped_column(
         ForeignKey("currencies.code"),
         nullable=False,
@@ -359,6 +376,34 @@ class PlatformLoanDisbursement(db.Model):
         UniqueConstraint(
             "id", "loan_id", "currency_code", "funding_source",
             name="uq_platform_disbursement_funding_identity",
+        ),
+        UniqueConstraint(
+            "customer_journal_entry_id",
+            name="uq_platform_disbursement_customer_journal",
+        ),
+        ForeignKeyConstraint(
+            ["customer_workspace_id", "customer_financial_account_id"],
+            ["financial_accounts.workspace_id", "financial_accounts.id"],
+            name="fk_platform_disbursement_customer_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["customer_workspace_id", "customer_journal_entry_id"],
+            ["journal_entries.workspace_id", "journal_entries.id"],
+            name="fk_platform_disbursement_customer_journal",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "("
+            "customer_workspace_id IS NULL "
+            "AND customer_financial_account_id IS NULL "
+            "AND customer_journal_entry_id IS NULL"
+            ") OR ("
+            "customer_workspace_id IS NOT NULL "
+            "AND customer_financial_account_id IS NOT NULL "
+            "AND customer_journal_entry_id IS NOT NULL"
+            ")",
+            name="ck_platform_disbursement_customer_refs_complete",
         ),
         ForeignKeyConstraint(
             ["loan_id", "currency_code"],

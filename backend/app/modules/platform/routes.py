@@ -24,7 +24,9 @@ from app.models import (
     PlatformLoanFundingAllocation,
     PlatformFinancialAccount,
 )
-from app.models.core import Currency, User, utc_now
+from app.models.core import (
+    Currency, User, utc_now, Workspace, WorkspaceMember, FinancialAccount
+)
 from app.services.platform_lending import (
     PlatformLendingValidationError,
     create_platform_loan_from_application,
@@ -1435,6 +1437,18 @@ def get_owner_platform_loan(loan_id):
             "id": str(item.id),
             "financial_account_id": str(item.financial_account_id),
             "journal_entry_id": str(item.journal_entry_id),
+            "customer_workspace_id": (
+                str(item.customer_workspace_id)
+                if item.customer_workspace_id else None
+            ),
+            "customer_financial_account_id": (
+                str(item.customer_financial_account_id)
+                if item.customer_financial_account_id else None
+            ),
+            "customer_journal_entry_id": (
+                str(item.customer_journal_entry_id)
+                if item.customer_journal_entry_id else None
+            ),
             "currency_code": item.currency_code,
             "amount_minor": item.amount_minor,
             "funding_source": item.funding_source,
@@ -1523,6 +1537,90 @@ def get_owner_platform_loan(loan_id):
         }), 500
 
 
+
+
+@platform_bp.get("/owner/loans/<loan_id>/customer-accounts")
+@platform_owner_required()
+def get_owner_platform_loan_customer_accounts(loan_id):
+    """List eligible personal receiving accounts for a platform loan borrower."""
+
+    try:
+        loan_uuid = UUID(loan_id)
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid loan ID.",
+        }), 400
+
+    try:
+        loan = db.session.get(PlatformLoan, loan_uuid)
+
+        if loan is None:
+            return jsonify({
+                "success": False,
+                "message": "Platform loan not found.",
+            }), 404
+
+        workspaces = (
+            Workspace.query
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == Workspace.id,
+            )
+            .filter(
+                WorkspaceMember.user_id == loan.customer_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type == "personal",
+            )
+            .all()
+        )
+
+        if len(workspaces) != 1:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "The borrower must have exactly one owned personal workspace."
+                ),
+            }), 409
+
+        workspace = workspaces[0]
+
+        accounts = (
+            FinancialAccount.query
+            .filter(
+                FinancialAccount.workspace_id == workspace.id,
+                FinancialAccount.is_active.is_(True),
+                FinancialAccount.account_type.in_(
+                    ["cash", "bank", "mobile_money"]
+                ),
+                FinancialAccount.currency_code == loan.currency_code,
+            )
+            .order_by(FinancialAccount.name.asc())
+            .all()
+        )
+
+        return jsonify({
+            "success": True,
+            "currency_code": loan.currency_code,
+            "accounts": [{
+                "id": str(account.id),
+                "name": account.name,
+                "account_type": account.account_type,
+                "currency_code": account.currency_code,
+            } for account in accounts],
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Platform loan borrower accounts could not be loaded"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Borrower receiving accounts could not be loaded.",
+        }), 500
+
+
 @platform_bp.post("/owner/loans/<loan_id>/disburse")
 @platform_owner_required()
 def disburse_owner_platform_loan(loan_id):
@@ -1552,6 +1650,9 @@ def disburse_owner_platform_loan(loan_id):
 
     try:
         account_id = UUID(str(data.get("financial_account_id", "")))
+        customer_account_id = UUID(
+            str(data.get("customer_financial_account_id", ""))
+        )
         amount_minor = data.get("amount_minor")
         funding_source = data.get("funding_source")
 
@@ -1581,6 +1682,7 @@ def disburse_owner_platform_loan(loan_id):
         disbursement = disburse_platform_loan(
             loan_id=loan_uuid,
             financial_account_id=account_id,
+            customer_financial_account_id=customer_account_id,
             amount_minor=amount_minor,
             funding_source=funding_source,
             investor_allocations=data.get("investor_allocations"),
@@ -1608,6 +1710,15 @@ def disburse_owner_platform_loan(loan_id):
                 "loan_id": str(disbursement.loan_id),
                 "financial_account_id": str(disbursement.financial_account_id),
                 "journal_entry_id": str(disbursement.journal_entry_id),
+                "customer_workspace_id": str(
+                    disbursement.customer_workspace_id
+                ),
+                "customer_financial_account_id": str(
+                    disbursement.customer_financial_account_id
+                ),
+                "customer_journal_entry_id": str(
+                    disbursement.customer_journal_entry_id
+                ),
                 "amount_minor": disbursement.amount_minor,
                 "currency_code": disbursement.currency_code,
                 "funding_source": disbursement.funding_source,
