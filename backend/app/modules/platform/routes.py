@@ -3,7 +3,7 @@
 from flask import jsonify
 from datetime import date, datetime
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import or_
 
@@ -23,6 +23,7 @@ from app.models import (
     PlatformInvestorWithdrawal,
     PlatformLoanFundingAllocation,
     PlatformFinancialAccount,
+    PlatformLedgerAccount,
 )
 from app.models.core import (
     Currency, User, utc_now, Workspace, WorkspaceMember, FinancialAccount
@@ -2496,6 +2497,143 @@ def _validate_owner_product_payload(data, existing=None):
     return values
 
 
+@platform_bp.post("/owner/financial-accounts")
+@platform_owner_required()
+def create_owner_platform_financial_account():
+    """Create a platform financial account and its asset ledger atomically."""
+
+    owner_id = _customer_id()
+    if owner_id is None:
+        return jsonify({
+            "success": False,
+            "message": "A valid owner identity is required.",
+        }), 401
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON request body is required.",
+        }), 400
+
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({
+            "success": False,
+            "message": "Account name is required.",
+        }), 400
+
+    name = name.strip()
+    if len(name) > 150:
+        return jsonify({
+            "success": False,
+            "message": "Account name cannot exceed 150 characters.",
+        }), 400
+
+    account_type = data.get("account_type")
+    prefixes = {
+        "cash": "CASH",
+        "bank": "BANK",
+        "mobile_money": "MOBILE",
+    }
+    if account_type not in prefixes:
+        return jsonify({
+            "success": False,
+            "message": "Account type must be cash, bank or mobile_money.",
+        }), 400
+
+    currency_code = data.get("currency_code")
+    if not isinstance(currency_code, str):
+        return jsonify({
+            "success": False,
+            "message": "A valid currency code is required.",
+        }), 400
+    currency_code = currency_code.strip().upper()
+
+    if len(currency_code) != 3:
+        return jsonify({
+            "success": False,
+            "message": "Currency code must contain three letters.",
+        }), 400
+
+    optional_values = {}
+    for field, limit in (
+        ("institution_name", 150),
+        ("display_reference", 100),
+    ):
+        value = data.get(field)
+        if value is not None and not isinstance(value, str):
+            return jsonify({
+                "success": False,
+                "message": f"{field} must be text.",
+            }), 400
+        value = value.strip() if isinstance(value, str) else None
+        if value and len(value) > limit:
+            return jsonify({
+                "success": False,
+                "message": f"{field} cannot exceed {limit} characters.",
+            }), 400
+        optional_values[field] = value or None
+
+    try:
+        currency = db.session.get(Currency, currency_code)
+        if currency is None or not currency.is_active:
+            return jsonify({
+                "success": False,
+                "message": "The selected currency is unavailable.",
+            }), 400
+
+        account = PlatformFinancialAccount(
+            name=name,
+            account_type=account_type,
+            currency_code=currency_code,
+            institution_name=optional_values["institution_name"],
+            display_reference=optional_values["display_reference"],
+            is_active=True,
+        )
+        db.session.add(account)
+        db.session.flush()
+
+        ledger = PlatformLedgerAccount(
+            financial_account_id=account.id,
+            code=f"PL-{prefixes[account_type]}-{uuid4().hex[:12].upper()}",
+            name=name,
+            account_class="asset",
+            normal_balance="debit",
+            currency_code=currency_code,
+            is_system=False,
+            is_active=True,
+        )
+        db.session.add(ledger)
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Platform account created successfully.",
+            "account": {
+                "id": str(account.id),
+                "name": account.name,
+                "account_type": account.account_type,
+                "currency_code": account.currency_code,
+                "institution_name": account.institution_name,
+                "display_reference": account.display_reference,
+                "is_active": account.is_active,
+                "ledger_account_id": str(ledger.id),
+                "ledger_code": ledger.code,
+            },
+        }), 201
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Platform owner financial account creation failed"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Platform account could not be created.",
+        }), 500
+
+
 @platform_bp.get("/owner/financial-accounts")
 @platform_owner_required()
 def list_owner_platform_financial_accounts():
@@ -2530,6 +2668,16 @@ def list_owner_platform_financial_accounts():
                     "display_reference": account.display_reference,
                 }
                 for account in accounts
+            ],
+            "currencies": [
+                {
+                    "code": currency.code,
+                    "name": currency.name,
+                    "minor_unit": currency.minor_unit,
+                }
+                for currency in Currency.query.filter_by(
+                    is_active=True
+                ).order_by(Currency.code.asc()).all()
             ],
         }), 200
 

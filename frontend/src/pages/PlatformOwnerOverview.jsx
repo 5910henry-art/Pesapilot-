@@ -13,14 +13,14 @@ function formatMoney(minor, currency) {
 
 function MetricCard({ label, value, icon: Icon, detail }) {
   return (
-    <section className="card">
-      <div className="flex items-center justify-between gap-3">
+    <section className="platform-owner-finance-card platform-owner-overview-metric">
+      <div className="platform-owner-finance-card-content">
         <div>
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <h3 className="text-2xl font-semibold mt-2">{value}</h3>
-          {detail && <p className="text-xs text-muted-foreground mt-1">{detail}</p>}
+          <p className="platform-owner-finance-muted">{label}</p>
+          <h3 className="platform-owner-finance-value large">{value}</h3>
+          {detail && <p className="platform-owner-finance-muted small">{detail}</p>}
         </div>
-        <div className="rounded-xl p-3 bg-muted">
+        <div className="platform-owner-finance-icon">
           <Icon size={22} />
         </div>
       </div>
@@ -54,18 +54,18 @@ export default function PlatformOwnerOverview() {
   const currencies = report?.currencies || [];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+    <div className="platform-owner-page platform-owner-overview-page">
+      <div className="platform-owner-page-header">
         <div>
-          <h1 className="text-2xl font-semibold">Platform overview</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <h1 className="platform-owner-page-title">Platform overview</h1>
+          <p className="platform-owner-page-subtitle">
             PesaPilot Lending Business portfolio and performance.
           </p>
         </div>
 
         <button
           type="button"
-          className="btn btn-secondary"
+          className="platform-owner-button secondary"
           onClick={loadReport}
           disabled={loading}
         >
@@ -75,15 +75,15 @@ export default function PlatformOwnerOverview() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-300 p-4 text-sm text-red-700">
+        <div className="platform-owner-notice error">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="card p-6">Loading portfolio report...</div>
+        <div className="platform-owner-finance-panel">Loading portfolio report...</div>
       ) : currencies.length === 0 ? (
-        <div className="card p-6">
+        <div className="platform-owner-finance-panel">
           <h2 className="font-semibold">No portfolio activity yet</h2>
           <p className="text-sm text-muted-foreground mt-2">
             Portfolio figures will appear here when lending activity is recorded.
@@ -91,10 +91,10 @@ export default function PlatformOwnerOverview() {
         </div>
       ) : (
         currencies.map((item) => (
-          <section key={item.currency_code} className="space-y-4">
-            <h2 className="text-lg font-semibold">{item.currency_code} portfolio</h2>
+          <section key={item.currency_code} className="platform-owner-finance-section">
+            <h2 className="platform-owner-finance-section-title">{item.currency_code} portfolio</h2>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="platform-owner-finance-grid">
               <MetricCard
                 label="Total loans"
                 value={item.loan_count}
@@ -138,18 +138,18 @@ export default function PlatformOwnerOverview() {
               />
             </div>
 
-            <div className="card p-4">
-              <h3 className="font-semibold mb-3">Funding sources</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="platform-owner-finance-panel">
+              <h3 className="platform-owner-finance-panel-title">Funding sources</h3>
+              <div className="platform-owner-finance-grid two-columns">
                 <div>
-                  <p className="text-sm text-muted-foreground">PesaPilot capital</p>
-                  <p className="text-lg font-semibold mt-1">
+                  <p className="platform-owner-finance-muted">PesaPilot capital</p>
+                  <p className="platform-owner-finance-value">
                     {formatMoney(item.funding_sources?.pesapilot_capital, item.currency_code)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">External investor capital</p>
-                  <p className="text-lg font-semibold mt-1">
+                  <p className="platform-owner-finance-muted">External investor capital</p>
+                  <p className="platform-owner-finance-value">
                     {formatMoney(item.funding_sources?.external_investor, item.currency_code)}
                   </p>
                 </div>
@@ -160,7 +160,7 @@ export default function PlatformOwnerOverview() {
       )}
 
       {report?.as_of_date && (
-        <p className="text-xs text-muted-foreground">
+        <p className="platform-owner-finance-muted small">
           Report as of {report.as_of_date}
         </p>
       )}

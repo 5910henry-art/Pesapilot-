@@ -536,6 +536,13 @@ export const platformOwnerApi = {
     );
   },
 
+  createFinancialAccount(payload) {
+    return apiRequest("/platform/owner/financial-accounts", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
   listCustomerAccounts(loanId) {
     return apiRequest(
       `/platform/owner/loans/${encodeURIComponent(loanId)}/customer-accounts`

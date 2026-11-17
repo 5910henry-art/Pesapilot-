@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Wallet, Eye, EyeOff, ArrowRight } from "lucide-react";
 import { useAuth } from "../context/useAuth";
 import "./AuthPages.css";
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const { login } = useAuth();
 
@@ -22,7 +23,12 @@ export default function Login() {
 
     try {
       await login({ email: email.trim(), password });
-      navigate("/", { replace: true });
+      const destination = location.state?.from;
+      const returnTo = destination?.pathname?.startsWith("/")
+        && !destination.pathname.startsWith("//")
+        ? `${destination.pathname}${destination.search || ""}${destination.hash || ""}`
+        : "/";
+      navigate(returnTo, { replace: true });
     } catch (err) {
       setError(err.message || "Unable to sign in. Please try again.");
     } finally {

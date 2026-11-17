@@ -11919,3 +11919,641 @@ button { font: inherit; cursor: pointer; }
     font-size: 22px;
   }
 }
+
+
+/* PesaPilot Platform Owner unified visual system */
+
+.page-content:has(.platform-owner-page) {
+  min-height: calc(100vh - 70px);
+  background: #f4f7f5;
+}
+
+.platform-owner-page {
+  --owner-green: #087c55;
+  --owner-green-dark: #075b40;
+  --owner-ink: #172a22;
+  --owner-muted: #718078;
+  --owner-border: #e1eae4;
+  display: flex;
+  flex-direction: column;
+  gap: 21px;
+  width: 100%;
+  min-width: 0;
+  color: var(--owner-ink);
+}
+
+.platform-owner-page-header,
+.platform-owner-page-heading,
+.platform-owner-page .lending-header,
+.platform-owner-finance-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 0;
+}
+
+.platform-owner-page-title,
+.platform-owner-page-header h1,
+.platform-owner-page-heading h1,
+.platform-owner-page .lending-header h1 {
+  margin: 0;
+  color: var(--owner-ink);
+  font-size: clamp(22px, 3vw, 28px);
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -.6px;
+}
+
+.platform-owner-page-subtitle,
+.platform-owner-page-header p,
+.platform-owner-page-heading p,
+.platform-owner-page .lending-header p {
+  margin: 6px 0 0;
+  color: var(--owner-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.platform-owner-button,
+.platform-owner-page .lending-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 39px;
+  padding: 9px 15px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.platform-owner-button.primary,
+.platform-owner-button.platform-owner-button-primary,
+.platform-owner-page .lending-button-primary {
+  color: white;
+  background: var(--owner-green);
+  border-color: var(--owner-green);
+}
+
+.platform-owner-button.primary:hover,
+.platform-owner-button.platform-owner-button-primary:hover,
+.platform-owner-page .lending-button-primary:hover {
+  background: var(--owner-green-dark);
+}
+
+.platform-owner-button.secondary,
+.platform-owner-button.platform-owner-button-secondary,
+.platform-owner-page .lending-button-secondary {
+  color: #315344;
+  background: white;
+  border-color: var(--owner-border);
+}
+
+.platform-owner-button.secondary:hover,
+.platform-owner-button.platform-owner-button-secondary:hover,
+.platform-owner-page .lending-button-secondary:hover {
+  background: #edf5f0;
+}
+
+.platform-owner-stat-row {
+  margin: 0;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+}
+
+.platform-owner-stat-card,
+.platform-owner-finance-card,
+.platform-owner-finance-panel,
+.platform-owner-product-card,
+.platform-loan-table-card {
+  border: 1px solid var(--owner-border);
+  border-radius: 14px;
+  background: white;
+  box-shadow: 0 3px 12px rgb(24 54 38 / 4%);
+}
+
+.platform-owner-stat-card {
+  position: relative;
+  overflow: hidden;
+  padding: 19px;
+}
+
+.platform-owner-stat-card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--owner-green);
+  content: "";
+}
+
+.platform-owner-stat-card strong {
+  color: var(--owner-ink);
+}
+
+.platform-owner-finance-card {
+  min-width: 0;
+  padding: 18px;
+}
+
+.platform-owner-finance-card:nth-child(4n + 1) .platform-owner-finance-icon {
+  color: #087c55;
+  background: #e7f5ed;
+}
+
+.platform-owner-finance-card:nth-child(4n + 2) .platform-owner-finance-icon {
+  color: #2563a8;
+  background: #eaf2fc;
+}
+
+.platform-owner-finance-card:nth-child(4n + 3) .platform-owner-finance-icon {
+  color: #a66b13;
+  background: #fff4df;
+}
+
+.platform-owner-finance-card:nth-child(4n) .platform-owner-finance-icon {
+  color: #7652a5;
+  background: #f2ebfb;
+}
+
+.platform-owner-finance-panel {
+  padding: 20px;
+}
+
+.platform-owner-finance-value {
+  color: var(--owner-ink);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.platform-owner-finance-muted {
+  color: var(--owner-muted);
+}
+
+.platform-owner-finance-section-title,
+.platform-owner-finance-panel-title {
+  color: var(--owner-ink);
+}
+
+.platform-owner-toolbar,
+.platform-loan-toolbar {
+  margin: 0;
+  padding: 13px;
+  border: 1px solid var(--owner-border);
+  border-radius: 12px;
+  background: white;
+}
+
+.platform-owner-filter-tabs {
+  max-width: 100%;
+  overflow-x: auto;
+  background: #edf4ef;
+}
+
+.platform-owner-filter-tabs button {
+  white-space: nowrap;
+}
+
+.platform-owner-table-wrap,
+.platform-loan-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--owner-border);
+  border-radius: 12px;
+  background: white;
+}
+
+.platform-owner-table,
+.platform-loan-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.platform-owner-table th,
+.platform-loan-table th {
+  padding: 13px 15px;
+  background: #eff5f1;
+  color: #63746a;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .45px;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.platform-owner-table td {
+  padding: 14px 15px;
+  border-top: 1px solid #edf1ee;
+  color: #304238;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.platform-owner-table tbody tr:hover,
+.platform-loan-table tbody tr:hover {
+  background: #f7faf8;
+}
+
+.platform-owner-status {
+  white-space: nowrap;
+  text-transform: capitalize;
+}
+
+.platform-owner-empty,
+.platform-loan-empty {
+  border: 1px dashed #cbd9cf;
+  border-radius: 13px;
+  background: white;
+}
+
+.platform-owner-modal {
+  border: 1px solid var(--owner-border);
+  box-shadow: 0 24px 80px rgb(12 35 23 / 24%);
+}
+
+.platform-owner-review-summary {
+  border: 1px solid var(--owner-border);
+  background: #f5f8f6;
+}
+
+.platform-owner-page .platform-loan-detail-section {
+  padding: 17px;
+  border: 1px solid var(--owner-border);
+  border-radius: 12px;
+  background: white;
+}
+
+.platform-owner-overview-metric {
+  min-height: 116px;
+}
+
+.platform-owner-overview-page .platform-owner-finance-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+@media (max-width: 760px) {
+  .page-content:has(.platform-owner-page) {
+    padding: 22px 16px;
+  }
+
+  .platform-owner-page {
+    gap: 17px;
+  }
+
+  .platform-owner-page-header,
+  .platform-owner-page-heading,
+  .platform-owner-page .lending-header {
+    align-items: flex-start;
+  }
+
+  .platform-owner-stat-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .platform-owner-finance-grid,
+  .platform-owner-finance-grid.two-columns,
+  .platform-owner-finance-grid.three-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .platform-owner-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 480px) {
+  .platform-owner-stat-row,
+  .platform-owner-finance-grid,
+  .platform-owner-finance-grid.two-columns,
+  .platform-owner-finance-grid.three-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-owner-modal-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* PesaPilot Platform Owner status and operations polish */
+
+
+/* PesaPilot Platform Owner status and operations polish */
+
+.platform-owner-eyebrow {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: #087c55;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 1.15px;
+}
+
+.platform-owner-page .platform-owner-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 25px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 30px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.platform-owner-status-pending,
+.platform-owner-status-created,
+.platform-owner-status-funding,
+.platform-owner-status-partially_paid {
+  color: #94600b;
+  background: #fff5df;
+  border-color: #f4dfb5;
+}
+
+.platform-owner-status-approved,
+.platform-owner-status-confirmed,
+.platform-owner-status-paid,
+.platform-owner-status-active,
+.platform-owner-status-completed,
+.platform-owner-status-posted,
+.platform-owner-status-success {
+  color: #176b45;
+  background: #e8f6ed;
+  border-color: #c8e9d3;
+}
+
+.platform-owner-status-rejected,
+.platform-owner-status-overdue,
+.platform-owner-status-failed,
+.platform-owner-status-written_off,
+.platform-owner-status-error {
+  color: #a33232;
+  background: #fff0ef;
+  border-color: #f4d0cd;
+}
+
+.platform-owner-status-withdrawn,
+.platform-owner-status-cancelled,
+.platform-owner-status-inactive,
+.platform-owner-status-reversed,
+.platform-owner-status-unknown {
+  color: #68766e;
+  background: #eff2f0;
+  border-color: #dce4de;
+}
+
+.platform-owner-status.is-active {
+  color: #176b45;
+  background: #e8f6ed;
+  border-color: #c8e9d3;
+}
+
+.platform-owner-status.is-inactive {
+  color: #68766e;
+  background: #eff2f0;
+  border-color: #dce4de;
+}
+
+.platform-owner-stat-card:nth-child(4n + 1)::before {
+  background: #087c55;
+}
+
+.platform-owner-stat-card:nth-child(4n + 2)::before {
+  background: #3478bd;
+}
+
+.platform-owner-stat-card:nth-child(4n + 3)::before {
+  background: #d49a35;
+}
+
+.platform-owner-stat-card:nth-child(4n)::before {
+  background: #8964b5;
+}
+
+.platform-owner-stat-card span {
+  line-height: 1.45;
+}
+
+.platform-owner-stat-card strong {
+  display: block;
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.platform-owner-notice {
+  box-shadow: 0 2px 8px rgb(24 54 38 / 3%);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.platform-owner-notice.success {
+  color: #176b45;
+  background: #edf8f0;
+  border-color: #ccebd5;
+}
+
+.platform-owner-notice.error {
+  color: #a33232;
+  background: #fff1f0;
+  border-color: #f2d0cd;
+}
+
+.platform-owner-purpose {
+  border-left-color: #087c55;
+  border-radius: 0 10px 10px 0;
+}
+
+.platform-owner-review-summary > div {
+  min-width: 0;
+}
+
+.platform-owner-review-summary strong {
+  color: #243c30;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.platform-owner-form label {
+  color: #42564a;
+}
+
+.platform-owner-form input:focus,
+.platform-owner-form select:focus,
+.platform-owner-form textarea:focus {
+  border-color: #087c55;
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(8 124 85 / 10%);
+}
+
+.platform-owner-table tbody tr {
+  transition: background 140ms ease;
+}
+
+.platform-owner-row-actions button,
+.platform-owner-button {
+  transition: background 140ms ease, border-color 140ms ease,
+    box-shadow 140ms ease, transform 140ms ease;
+}
+
+.platform-owner-button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.platform-owner-button.primary:not(:disabled):hover,
+.platform-owner-button.platform-owner-button-primary:not(:disabled):hover {
+  box-shadow: 0 4px 12px rgb(8 124 85 / 18%);
+}
+
+.platform-owner-page .platform-owner-empty {
+  padding: 32px 20px;
+  color: #718078;
+}
+
+.platform-owner-page .platform-owner-empty h3 {
+  color: #243c30;
+}
+
+.platform-owner-page .platform-owner-modal-header h2 {
+  color: #172a22;
+}
+
+.platform-owner-page .platform-owner-modal-header p {
+  color: #718078;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 600px) {
+  .platform-owner-stat-card {
+    padding: 14px;
+  }
+
+  .platform-owner-stat-card strong {
+    font-size: 21px;
+  }
+
+  .platform-owner-page .platform-owner-table-wrap {
+    border-radius: 9px;
+  }
+
+  .platform-owner-page .platform-owner-modal-actions > button {
+    flex: 1;
+  }
+}
+
+
+
+/* Platform Owner funding account management */
+.platform-owner-finance-account-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.platform-owner-finance-account-count {
+  padding: 6px 10px;
+  border-radius: 20px;
+  background: #e8f3ed;
+  color: #176344;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.platform-owner-finance-account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 11px;
+  background: var(--surface, #f8faf9);
+}
+
+.platform-owner-finance-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+
+.platform-owner-finance-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--text, #26372f);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.platform-owner-finance-field input,
+.platform-owner-finance-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid var(--border, #dce5df);
+  border-radius: 8px;
+  background: var(--card, #fff);
+  color: var(--text, #17251f);
+  font: inherit;
+  font-weight: 450;
+}
+
+.platform-owner-finance-field input:focus,
+.platform-owner-finance-field select:focus {
+  outline: 2px solid rgba(8, 124, 85, .18);
+  border-color: var(--primary, #087c55);
+}
+
+.platform-owner-finance-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  gap: 8px;
+  min-height: 40px;
+  padding: 9px 15px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--primary, #087c55);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.platform-owner-finance-submit:disabled {
+  opacity: .6;
+  cursor: wait;
+}
+
+.platform-owner-finance-success {
+  padding: 12px 15px;
+  border: 1px solid #bbdfc9;
+  border-radius: 9px;
+  background: #edf8f0;
+  color: #176344;
+  font-size: 13px;
+}
+
+@media (max-width: 600px) {
+  .platform-owner-finance-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-owner-finance-submit {
+    width: 100%;
+  }
+}

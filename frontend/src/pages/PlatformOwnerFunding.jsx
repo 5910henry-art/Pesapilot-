@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, Landmark, Users, Wallet, TrendingUp } from "lucide-react";
+import { RefreshCw, Landmark, Users, Wallet, TrendingUp, Plus } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
 
 const ZERO_DECIMAL = new Set([
@@ -17,7 +17,7 @@ function money(minor, currency = "KES") {
 
 function Metric({ label, value, icon: Icon, detail }) {
   return (
-    <section className="card">
+    <section className="platform-owner-finance-card">
       <div className="platform-owner-finance-card-content">
         <div>
           <p className="platform-owner-finance-muted">{label}</p>
@@ -33,19 +33,33 @@ function Metric({ label, value, icon: Icon, detail }) {
 export default function PlatformOwnerFunding() {
   const [report, setReport] = useState(null);
   const [investors, setInvestors] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [accountCurrencies, setAccountCurrencies] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [savingAccount, setSavingAccount] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [accountForm, setAccountForm] = useState({
+    name: "PesaPilot Main Account",
+    account_type: "bank",
+    currency_code: "KES",
+    institution_name: "",
+    display_reference: "",
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [portfolio, investorResponse] = await Promise.all([
+      const [portfolio, investorResponse, accountResponse] = await Promise.all([
         platformOwnerApi.getPortfolioReport(),
         platformOwnerApi.listInvestors({ page: 1, per_page: 100 }),
+        platformOwnerApi.listFinancialAccounts(),
       ]);
       setReport(portfolio);
       setInvestors(investorResponse.investors || []);
+      setAccounts(accountResponse.accounts || []);
+      setAccountCurrencies(accountResponse.currencies || []);
     } catch (err) {
       setError(err.message || "Could not load funding information.");
     } finally {
@@ -54,6 +68,45 @@ export default function PlatformOwnerFunding() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleAccountChange = (event) => {
+    const { name, value } = event.target;
+    setAccountForm((current) => ({ ...current, [name]: value }));
+  };
+
+  const handleCreateAccount = async (event) => {
+    event.preventDefault();
+    setError("");
+    setSuccess("");
+
+    if (!accountForm.name.trim() || !accountForm.currency_code) {
+      setError("Enter an account name and select a currency.");
+      return;
+    }
+
+    setSavingAccount(true);
+    try {
+      const response = await platformOwnerApi.createFinancialAccount({
+        ...accountForm,
+        name: accountForm.name.trim(),
+        institution_name: accountForm.institution_name.trim(),
+        display_reference: accountForm.display_reference.trim(),
+      });
+
+      setSuccess(response.message || "Platform account created successfully.");
+      setAccountForm((current) => ({
+        ...current,
+        name: "",
+        institution_name: "",
+        display_reference: "",
+      }));
+      await load();
+    } catch (err) {
+      setError(err.message || "Could not create the platform account.");
+    } finally {
+      setSavingAccount(false);
+    }
+  };
 
   const currencies = report?.currencies || [];
   const capitalByCurrency = {};
@@ -94,6 +147,12 @@ export default function PlatformOwnerFunding() {
         </div>
       )}
 
+      {success && (
+        <div className="platform-owner-finance-success">
+          {success}
+        </div>
+      )}
+
       {loading ? (
         <div className="platform-owner-finance-panel">Loading funding information...</div>
       ) : (
@@ -107,6 +166,137 @@ export default function PlatformOwnerFunding() {
             <Metric label="Funding currencies" value={currencies.length}
               icon={Landmark} />
           </div>
+
+          <section className="platform-owner-finance-panel">
+            <div className="platform-owner-finance-account-heading">
+              <div>
+                <h2 className="platform-owner-finance-panel-title">Platform accounts</h2>
+                <p className="platform-owner-finance-subtitle">
+                  Accounts owned by PesaPilot. Investor contributions and platform
+                  funding transactions are recorded against these accounts.
+                </p>
+              </div>
+              <span className="platform-owner-finance-account-count">
+                {accounts.length} active
+              </span>
+            </div>
+
+            <form
+              className="platform-owner-finance-account-form"
+              onSubmit={handleCreateAccount}
+            >
+              <div className="platform-owner-finance-form-grid">
+                <label className="platform-owner-finance-field">
+                  Account name
+                  <input
+                    name="name"
+                    value={accountForm.name}
+                    onChange={handleAccountChange}
+                    placeholder="PesaPilot Main Account"
+                    maxLength={150}
+                    required
+                  />
+                </label>
+
+                <label className="platform-owner-finance-field">
+                  Account type
+                  <select
+                    name="account_type"
+                    value={accountForm.account_type}
+                    onChange={handleAccountChange}
+                    required
+                  >
+                    <option value="bank">Bank</option>
+                    <option value="mobile_money">Mobile money</option>
+                    <option value="cash">Cash</option>
+                  </select>
+                </label>
+
+                <label className="platform-owner-finance-field">
+                  Currency
+                  <select
+                    name="currency_code"
+                    value={accountForm.currency_code}
+                    onChange={handleAccountChange}
+                    required
+                  >
+                    {accountCurrencies.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.code} — {currency.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="platform-owner-finance-field">
+                  Institution (optional)
+                  <input
+                    name="institution_name"
+                    value={accountForm.institution_name}
+                    onChange={handleAccountChange}
+                    placeholder="Bank or mobile money provider"
+                    maxLength={150}
+                  />
+                </label>
+
+                <label className="platform-owner-finance-field">
+                  Account reference (optional)
+                  <input
+                    name="display_reference"
+                    value={accountForm.display_reference}
+                    onChange={handleAccountChange}
+                    placeholder="Account number or reference"
+                    maxLength={100}
+                  />
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                className="platform-owner-finance-submit"
+                disabled={savingAccount || accountCurrencies.length === 0}
+              >
+                <Plus size={16} />
+                {savingAccount ? "Creating account..." : "Add platform account"}
+              </button>
+            </form>
+
+            <div className="platform-owner-table-wrap">
+              {accounts.length === 0 ? (
+                <p className="platform-owner-finance-muted">
+                  No active platform accounts yet. Create your first account above.
+                </p>
+              ) : (
+                <table className="platform-owner-table">
+                  <thead>
+                    <tr>
+                      <th>Account</th>
+                      <th>Type</th>
+                      <th>Currency</th>
+                      <th>Institution</th>
+                      <th>Reference</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {accounts.map((account) => (
+                      <tr key={account.id}>
+                        <td><strong>{account.name}</strong></td>
+                        <td>
+                          {account.account_type === "mobile_money"
+                            ? "Mobile money"
+                            : account.account_type.charAt(0).toUpperCase()
+                              + account.account_type.slice(1)}
+                        </td>
+                        <td>{account.currency_code}</td>
+                        <td>{account.institution_name || "—"}</td>
+                        <td>{account.display_reference || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
 
           {currencies.length === 0 ? (
             <div className="platform-owner-finance-panel">No lending funding activity has been recorded yet.</div>

@@ -17,7 +17,7 @@ function money(minor, currency = "KES") {
 
 function Metric({ label, value, icon: Icon }) {
   return (
-    <section className="card">
+    <section className="platform-owner-finance-card">
       <div className="platform-owner-finance-card-content">
         <div>
           <p className="platform-owner-finance-muted">{label}</p>

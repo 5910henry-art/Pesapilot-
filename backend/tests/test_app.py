@@ -2437,6 +2437,99 @@ class PesaPilotTestCase(unittest.TestCase):
             for item in filtered.json["accounts"]
         ))
 
+    def test_platform_owner_can_create_financial_account_with_asset_ledger(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/v1/platform/owner/financial-accounts",
+            headers=self.headers,
+            json={
+                "name": "PesaPilot Main Account",
+                "account_type": "bank",
+                "currency_code": "KES",
+                "institution_name": "Test Bank",
+                "display_reference": "MAIN-001",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+
+        account_data = response.json["account"]
+        account = db.session.get(
+            PlatformFinancialAccount,
+            UUID(account_data["id"]),
+        )
+        self.assertIsNotNone(account)
+        self.assertEqual(account.name, "PesaPilot Main Account")
+        self.assertEqual(account.account_type, "bank")
+        self.assertEqual(account.currency_code, "KES")
+        self.assertTrue(account.is_active)
+
+        ledger = PlatformLedgerAccount.query.filter_by(
+            financial_account_id=account.id
+        ).one()
+
+        self.assertEqual(account_data["ledger_account_id"], str(ledger.id))
+        self.assertEqual(ledger.account_class, "asset")
+        self.assertEqual(ledger.normal_balance, "debit")
+        self.assertEqual(ledger.currency_code, "KES")
+        self.assertFalse(ledger.is_system)
+        self.assertTrue(ledger.is_active)
+        self.assertTrue(ledger.code.startswith("PL-BANK-"))
+
+        listed = self.client.get(
+            "/api/v1/platform/owner/financial-accounts",
+            headers=self.headers,
+        )
+        self.assertEqual(listed.status_code, 200, listed.json)
+        self.assertIn(
+            account_data["id"],
+            [item["id"] for item in listed.json["accounts"]],
+        )
+
+    def test_platform_owner_cannot_create_account_with_invalid_type_or_currency(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        existing_account_count = PlatformFinancialAccount.query.count()
+
+        invalid_type = self.client.post(
+            "/api/v1/platform/owner/financial-accounts",
+            headers=self.headers,
+            json={
+                "name": "Invalid Account",
+                "account_type": "crypto",
+                "currency_code": "KES",
+            },
+        )
+        self.assertEqual(invalid_type.status_code, 400, invalid_type.json)
+
+        invalid_currency = self.client.post(
+            "/api/v1/platform/owner/financial-accounts",
+            headers=self.headers,
+            json={
+                "name": "Invalid Currency Account",
+                "account_type": "bank",
+                "currency_code": "ZZZ",
+            },
+        )
+        self.assertEqual(invalid_currency.status_code, 400, invalid_currency.json)
+
+        self.assertEqual(
+            PlatformFinancialAccount.query.count(),
+            existing_account_count,
+        )
+
     def test_platform_financial_accounts_require_platform_owner_access(self):
         unauthenticated = self.client.get(
             "/api/v1/platform/owner/financial-accounts",
@@ -2448,6 +2541,27 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
         )
         self.assertEqual(non_owner.status_code, 403, non_owner.json)
+
+        unauthenticated_create = self.client.post(
+            "/api/v1/platform/owner/financial-accounts",
+            json={
+                "name": "Unauthorized Account",
+                "account_type": "bank",
+                "currency_code": "KES",
+            },
+        )
+        self.assertEqual(unauthenticated_create.status_code, 401)
+
+        non_owner_create = self.client.post(
+            "/api/v1/platform/owner/financial-accounts",
+            headers=self.headers,
+            json={
+                "name": "Unauthorized Account",
+                "account_type": "bank",
+                "currency_code": "KES",
+            },
+        )
+        self.assertEqual(non_owner_create.status_code, 403, non_owner_create.json)
 
 
     def test_platform_owner_can_create_list_and_update_loan_products(self):

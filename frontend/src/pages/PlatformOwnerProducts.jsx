@@ -273,7 +273,7 @@ export default function PlatformOwnerProducts() {
   }
 
   return (
-    <div className="lending-page">
+    <div className="platform-owner-page lending-page">
       <div className="lending-header">
         <div>
           <span className="lending-eyebrow"><Package size={14} /> LENDING CONFIGURATION</span>
