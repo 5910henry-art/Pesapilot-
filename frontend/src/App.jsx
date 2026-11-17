@@ -25,6 +25,10 @@ import PlatformOwnerOverview from "./pages/PlatformOwnerOverview";
 import PlatformOwnerProducts from "./pages/PlatformOwnerProducts";
 import PlatformOwnerApplications from "./pages/PlatformOwnerApplications";
 import PlatformOwnerLoans from "./pages/PlatformOwnerLoans";
+import PlatformOwnerInvestors from "./pages/PlatformOwnerInvestors";
+import PlatformOwnerCollections from "./pages/PlatformOwnerCollections";
+import PlatformOwnerFunding from "./pages/PlatformOwnerFunding";
+import PlatformOwnerAccounting from "./pages/PlatformOwnerAccounting";
 import Bills from "./pages/Bills";
 import Expenses from "./pages/Expenses";
 import AIManager from "./pages/AIManager";
@@ -62,6 +66,10 @@ export default function App() {
                 <Route path="/platform-owner/products" element={<PlatformOwnerProducts />} />
                 <Route path="/platform-owner/applications" element={<PlatformOwnerApplications />} />
                 <Route path="/platform-owner/loans" element={<PlatformOwnerLoans />} />
+                <Route path="/platform-owner/investors" element={<PlatformOwnerInvestors />} />
+                <Route path="/platform-owner/collections" element={<PlatformOwnerCollections />} />
+                <Route path="/platform-owner/funding" element={<PlatformOwnerFunding />} />
+                <Route path="/platform-owner/accounting" element={<PlatformOwnerAccounting />} />
               </Route>
             </Route>
           </Route>

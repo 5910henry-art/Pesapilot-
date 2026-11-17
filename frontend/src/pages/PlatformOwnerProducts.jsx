@@ -83,7 +83,8 @@ function ProductForm({ initial, onClose, onSave, saving }) {
       return;
     }
 
-    payload.interest_rate = rate;
+    delete payload.interest_rate;
+    payload.interest_rate_percent = rate;
     payload.currency_code = payload.currency_code.trim().toUpperCase();
     payload.name = payload.name.trim();
     payload.code = payload.code.trim().toUpperCase();

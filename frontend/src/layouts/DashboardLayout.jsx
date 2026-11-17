@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Wallet, ArrowLeftRight, ChartNoAxesCombined, Sparkles,
@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../context/useAuth";
 import SessionExpiryGuard from "../components/SessionExpiryGuard";
+import { apiRequest } from "../api/client";
 
 const navigation = [
   { label: "Overview", icon: LayoutDashboard, path: "/" },
@@ -23,7 +24,40 @@ export default function DashboardLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  const { user, profile, activeWorkspace, logout } = useAuth();
+  const [isPlatformOwner, setIsPlatformOwner] = useState(false);
+  const [ownerCheckComplete, setOwnerCheckComplete] = useState(false);
+  const { user, profile, activeWorkspace, logout, loading, isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    let active = true;
+
+    if (loading) return undefined;
+
+    if (!isAuthenticated) {
+      setIsPlatformOwner(false);
+      setOwnerCheckComplete(true);
+      return undefined;
+    }
+
+    setOwnerCheckComplete(false);
+
+    apiRequest("/platform/owner/access")
+      .then((data) => {
+        if (active) {
+          setIsPlatformOwner(data.success === true && data.role === "owner");
+        }
+      })
+      .catch(() => {
+        if (active) setIsPlatformOwner(false);
+      })
+      .finally(() => {
+        if (active) setOwnerCheckComplete(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [loading, isAuthenticated]);
   const navigate = useNavigate();
 
   const fullName = [profile?.first_name, profile?.last_name]
@@ -101,7 +135,12 @@ export default function DashboardLayout() {
         <div className="nav-label">MENU</div>
 
         <nav className="navigation">
-          {navigation.map(({ label, icon: Icon, path }) => (
+          {navigation
+            .filter((item) =>
+              item.path !== "/lending" ||
+              (ownerCheckComplete && !isPlatformOwner)
+            )
+            .map(({ label, icon: Icon, path }) => (
             <NavLink
               key={label}
               to={path}
