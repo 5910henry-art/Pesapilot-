@@ -451,6 +451,53 @@ export const loansApi = {
   },
 };
 
+
+export const platformLendingApi = {
+  listProducts() {
+    return apiRequest("/platform/products");
+  },
+
+  listLoans(options = {}) {
+    const params = new URLSearchParams();
+    if (options.page) params.set("page", String(options.page));
+    if (options.per_page) params.set("per_page", String(options.per_page));
+    const query = params.toString();
+    return apiRequest(`/platform/loans${query ? `?${query}` : ""}`);
+  },
+
+  getLoan(loanId) {
+    return apiRequest(`/platform/loans/${encodeURIComponent(loanId)}`);
+  },
+
+  listApplications() {
+    return apiRequest("/platform/applications");
+  },
+
+  createApplication(payload) {
+    return apiRequest("/platform/applications", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  withdrawApplication(applicationId) {
+    return apiRequest(
+      `/platform/applications/${encodeURIComponent(applicationId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  submitRepayment(loanId, payload) {
+    return apiRequest(
+      `/platform/loans/${encodeURIComponent(loanId)}/payments`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+};
+
 export const aiApi = {
   getOverview(workspaceId) {
     return apiRequest(
@@ -467,5 +514,172 @@ export const aiApi = {
         external_ai_consent: true,
       }),
     });
+  },
+};
+
+
+export const platformOwnerApi = {
+  checkAccess() {
+    return apiRequest("/platform/owner/access");
+  },
+
+  getPortfolioReport() {
+    return apiRequest("/platform/owner/reports/portfolio");
+  },
+
+  listFinancialAccounts(currencyCode = "") {
+    const params = new URLSearchParams();
+    if (currencyCode) params.set("currency_code", currencyCode);
+    const query = params.toString();
+    return apiRequest(
+      `/platform/owner/financial-accounts${query ? `?${query}` : ""}`
+    );
+  },
+
+  listCollections(options = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["currency_code", "page", "per_page"]) {
+      if (options[key] !== undefined && options[key] !== "") {
+        params.set(key, String(options[key]));
+      }
+    }
+    const query = params.toString();
+    return apiRequest(`/platform/owner/collections${query ? `?${query}` : ""}`);
+  },
+
+  listApplications(options = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["status", "page", "per_page"]) {
+      if (options[key] !== undefined && options[key] !== "") {
+        params.set(key, String(options[key]));
+      }
+    }
+    const query = params.toString();
+    return apiRequest(`/platform/owner/applications${query ? `?${query}` : ""}`);
+  },
+
+  decideApplication(applicationId, payload) {
+    return apiRequest(
+      `/platform/owner/applications/${encodeURIComponent(applicationId)}/decision`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  createLoanFromApplication(applicationId) {
+    return apiRequest(
+      `/platform/owner/applications/${encodeURIComponent(applicationId)}/create-loan`,
+      { method: "POST", body: JSON.stringify({}) }
+    );
+  },
+
+  listProducts(options = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["is_active", "page", "per_page"]) {
+      if (options[key] !== undefined && options[key] !== "") {
+        params.set(key, String(options[key]));
+      }
+    }
+    const query = params.toString();
+    return apiRequest(`/platform/owner/products${query ? `?${query}` : ""}`);
+  },
+
+  createProduct(payload) {
+    return apiRequest("/platform/owner/products", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateProduct(productId, payload) {
+    return apiRequest(`/platform/owner/products/${encodeURIComponent(productId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  listLoans(options = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["status", "page", "per_page"]) {
+      if (options[key] !== undefined && options[key] !== "") {
+        params.set(key, String(options[key]));
+      }
+    }
+    const query = params.toString();
+    return apiRequest(`/platform/owner/loans${query ? `?${query}` : ""}`);
+  },
+
+  getLoan(loanId) {
+    return apiRequest(`/platform/owner/loans/${encodeURIComponent(loanId)}`);
+  },
+
+  disburseLoan(loanId, payload) {
+    return apiRequest(
+      `/platform/owner/loans/${encodeURIComponent(loanId)}/disburse`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  confirmPayment(paymentId, payload) {
+    return apiRequest(
+      `/platform/owner/collections/payments/${encodeURIComponent(paymentId)}/confirm`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  reversePayment(paymentId, payload) {
+    return apiRequest(
+      `/platform/owner/collections/payments/${encodeURIComponent(paymentId)}/reverse`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  listInvestors(options = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["search", "is_active", "page", "per_page"]) {
+      if (options[key] !== undefined && options[key] !== "") {
+        params.set(key, String(options[key]));
+      }
+    }
+    const query = params.toString();
+    return apiRequest(`/platform/owner/investors${query ? `?${query}` : ""}`);
+  },
+
+  createInvestor(payload) {
+    return apiRequest("/platform/owner/investors", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getInvestor(investorId) {
+    return apiRequest(`/platform/owner/investors/${encodeURIComponent(investorId)}`);
+  },
+
+  recordContribution(investorId, payload) {
+    return apiRequest(
+      `/platform/owner/investors/${encodeURIComponent(investorId)}/contributions`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  recordWithdrawal(investorId, payload) {
+    return apiRequest(
+      `/platform/owner/investors/${encodeURIComponent(investorId)}/withdrawals`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  reverseContribution(contributionId, payload) {
+    return apiRequest(
+      `/platform/owner/investors/contributions/${encodeURIComponent(contributionId)}/reverse`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  reverseWithdrawal(withdrawalId, payload) {
+    return apiRequest(
+      `/platform/owner/investors/withdrawals/${encodeURIComponent(withdrawalId)}/reverse`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
   },
 };

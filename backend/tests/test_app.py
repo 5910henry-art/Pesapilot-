@@ -2354,6 +2354,226 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+    def test_platform_owner_can_list_active_financial_accounts(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+
+        active_account = PlatformFinancialAccount(
+            name="PesaPilot Main Bank",
+            account_type="bank",
+            currency_code="KES",
+            institution_name="Test Bank",
+            display_reference="MAIN-001",
+            is_active=True,
+        )
+        inactive_account = PlatformFinancialAccount(
+            name="Inactive Cash Account",
+            account_type="cash",
+            currency_code="KES",
+            is_active=False,
+        )
+        db.session.add_all([active_account, inactive_account])
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/financial-accounts",
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+
+        accounts = response.json["accounts"]
+        account_ids = [item["id"] for item in accounts]
+
+        self.assertIn(str(active_account.id), account_ids)
+        self.assertNotIn(str(inactive_account.id), account_ids)
+
+        listed = next(
+            item for item in accounts
+            if item["id"] == str(active_account.id)
+        )
+        self.assertEqual(listed["name"], "PesaPilot Main Bank")
+        self.assertEqual(listed["account_type"], "bank")
+        self.assertEqual(listed["currency_code"], "KES")
+        self.assertEqual(listed["institution_name"], "Test Bank")
+        self.assertEqual(listed["display_reference"], "MAIN-001")
+
+        filtered = self.client.get(
+            "/api/v1/platform/owner/financial-accounts?currency_code=kes",
+            headers=self.headers,
+        )
+        self.assertEqual(filtered.status_code, 200, filtered.json)
+        self.assertTrue(all(
+            item["currency_code"] == "KES"
+            for item in filtered.json["accounts"]
+        ))
+
+    def test_platform_financial_accounts_require_platform_owner_access(self):
+        unauthenticated = self.client.get(
+            "/api/v1/platform/owner/financial-accounts",
+        )
+        self.assertEqual(unauthenticated.status_code, 401)
+
+        non_owner = self.client.get(
+            "/api/v1/platform/owner/financial-accounts",
+            headers=self.headers,
+        )
+        self.assertEqual(non_owner.status_code, 403, non_owner.json)
+
+
+    def test_platform_owner_can_create_list_and_update_loan_products(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        created = self.client.post(
+            "/api/v1/platform/owner/products",
+            headers=self.headers,
+            json={
+                "name": "Starter Business Loan",
+                "code": "STARTER-BIZ",
+                "description": "Short-term business financing",
+                "currency_code": "KES",
+                "min_principal_minor": 100000,
+                "max_principal_minor": 2000000,
+                "interest_method": "reducing",
+                "interest_rate_percent": "8.5",
+                "repayment_frequency": "monthly",
+                "min_term_count": 1,
+                "max_term_count": 12,
+                "origination_fee_minor": 5000,
+                "late_payment_fee_minor": 1000,
+                "allow_early_repayment": True,
+            },
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        self.assertTrue(created.json["success"])
+        product = created.json["product"]
+        product_id = product["id"]
+        self.assertEqual(product["code"], "STARTER-BIZ")
+        self.assertTrue(product["is_active"])
+
+        listing = self.client.get(
+            "/api/v1/platform/owner/products",
+            headers=self.headers,
+        )
+        self.assertEqual(listing.status_code, 200, listing.json)
+        self.assertIn(
+            product_id,
+            [item["id"] for item in listing.json["products"]],
+        )
+
+        updated = self.client.patch(
+            f"/api/v1/platform/owner/products/{product_id}",
+            headers=self.headers,
+            json={
+                "name": "Starter Business Loan Plus",
+                "interest_rate_percent": "9.25",
+                "is_active": False,
+            },
+        )
+        self.assertEqual(updated.status_code, 200, updated.json)
+        self.assertEqual(
+            updated.json["product"]["name"],
+            "Starter Business Loan Plus",
+        )
+        self.assertEqual(
+            updated.json["product"]["interest_rate_percent"],
+            "9.250000",
+        )
+        self.assertFalse(updated.json["product"]["is_active"])
+
+        inactive = self.client.get(
+            "/api/v1/platform/owner/products?is_active=false",
+            headers=self.headers,
+        )
+        self.assertEqual(inactive.status_code, 200, inactive.json)
+        self.assertIn(
+            product_id,
+            [item["id"] for item in inactive.json["products"]],
+        )
+
+        customer_listing = self.client.get(
+            "/api/v1/platform/products",
+            headers=self.headers,
+        )
+        self.assertEqual(customer_listing.status_code, 200)
+        self.assertNotIn(
+            product_id,
+            [item["id"] for item in customer_listing.json["products"]],
+        )
+
+    def test_platform_owner_product_creation_rejects_invalid_data(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        payload = {
+            "name": "Invalid Product",
+            "code": "INVALID-PRODUCT",
+            "currency_code": "KES",
+            "min_principal_minor": 100000,
+            "max_principal_minor": 50000,
+            "interest_method": "none",
+            "interest_rate_percent": "5",
+            "repayment_frequency": "monthly",
+            "min_term_count": 1,
+            "max_term_count": 12,
+        }
+        response = self.client.post(
+            "/api/v1/platform/owner/products",
+            headers=self.headers,
+            json=payload,
+        )
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertFalse(response.json["success"])
+
+    def test_non_owner_cannot_manage_platform_loan_products(self):
+        product = self.create_platform_loan_product()
+        db.session.commit()
+
+        listing = self.client.get(
+            "/api/v1/platform/owner/products",
+            headers=self.headers,
+        )
+        self.assertEqual(listing.status_code, 403, listing.json)
+
+        creation = self.client.post(
+            "/api/v1/platform/owner/products",
+            headers=self.headers,
+            json={
+                "name": "Unauthorized Product",
+                "code": "UNAUTHORIZED",
+                "currency_code": "KES",
+                "min_principal_minor": 10000,
+                "max_principal_minor": 50000,
+                "interest_method": "none",
+                "interest_rate_percent": 0,
+                "repayment_frequency": "monthly",
+                "min_term_count": 1,
+                "max_term_count": 3,
+            },
+        )
+        self.assertEqual(creation.status_code, 403, creation.json)
+
+        update = self.client.patch(
+            f"/api/v1/platform/owner/products/{product.id}",
+            headers=self.headers,
+            json={"is_active": False},
+        )
+        self.assertEqual(update.status_code, 403, update.json)
+        self.assertTrue(product.is_active)
+
+
     def test_platform_owner_can_register_list_and_view_investor(self):
         db.session.add(PlatformAdmin(
             user_id=self.user.id,

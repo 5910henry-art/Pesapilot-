@@ -8,8 +8,10 @@ import {
 import { AuthProvider } from "./context/AuthContext";
 import { AccountsProvider } from "./context/AccountsContext";
 import ProtectedRoute from "./components/ProtectedRoute";
+import PlatformOwnerRoute from "./components/PlatformOwnerRoute";
 
 import DashboardLayout from "./layouts/DashboardLayout";
+import PlatformOwnerLayout from "./layouts/PlatformOwnerLayout";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -18,6 +20,11 @@ import Transactions from "./pages/Transactions";
 import Budgets from "./pages/Budgets";
 import Savings from "./pages/Savings";
 import Loans from "./pages/Loans";
+import PlatformLending from "./pages/PlatformLending";
+import PlatformOwnerOverview from "./pages/PlatformOwnerOverview";
+import PlatformOwnerProducts from "./pages/PlatformOwnerProducts";
+import PlatformOwnerApplications from "./pages/PlatformOwnerApplications";
+import PlatformOwnerLoans from "./pages/PlatformOwnerLoans";
 import Bills from "./pages/Bills";
 import Expenses from "./pages/Expenses";
 import AIManager from "./pages/AIManager";
@@ -41,9 +48,21 @@ export default function App() {
               <Route path="/budgets" element={<Budgets />} />
               <Route path="/savings" element={<Savings />} />
               <Route path="/loans" element={<Loans />} />
+              <Route path="/lending" element={<PlatformLending />} />
               <Route path="/bills" element={<Bills />} />
               <Route path="/expenses" element={<Expenses />} />
               <Route path="/ai-manager" element={<AIManager />} />
+            </Route>
+          </Route>
+
+          <Route element={<ProtectedRoute />}>
+            <Route element={<PlatformOwnerRoute />}>
+              <Route element={<PlatformOwnerLayout />}>
+                <Route path="/platform-owner" element={<PlatformOwnerOverview />} />
+                <Route path="/platform-owner/products" element={<PlatformOwnerProducts />} />
+                <Route path="/platform-owner/applications" element={<PlatformOwnerApplications />} />
+                <Route path="/platform-owner/loans" element={<PlatformOwnerLoans />} />
+              </Route>
             </Route>
           </Route>
 

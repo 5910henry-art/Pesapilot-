@@ -2,7 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Wallet, ArrowLeftRight, ChartNoAxesCombined, Sparkles,
-  PiggyBank, HandCoins, Receipt, Settings, Menu, X, Bell,
+  PiggyBank, HandCoins, Landmark, Receipt, Settings, Menu, X, Bell,
   CircleUserRound, ChevronDown, LogOut, PanelLeftClose, PanelLeftOpen, ReceiptText
 } from "lucide-react";
 import { useAuth } from "../context/useAuth";
@@ -16,6 +16,7 @@ const navigation = [
   { label: "Budgets", icon: ChartNoAxesCombined, path: "/budgets" },
   { label: "Savings", icon: PiggyBank, path: "/savings" },
   { label: "Loans", icon: HandCoins, path: "/loans" },
+  { label: "PesaPilot Lending", icon: Landmark, path: "/lending" },
 ];
 
 export default function DashboardLayout() {

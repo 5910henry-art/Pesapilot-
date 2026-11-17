@@ -22,8 +22,9 @@ from app.models import (
     PlatformInvestorContribution,
     PlatformInvestorWithdrawal,
     PlatformLoanFundingAllocation,
+    PlatformFinancialAccount,
 )
-from app.models.core import User, utc_now
+from app.models.core import Currency, User, utc_now
 from app.services.platform_lending import (
     PlatformLendingValidationError,
     create_platform_loan_from_application,
@@ -2240,6 +2241,371 @@ def submit_platform_loan_repayment(loan_id):
         return jsonify({
             "success": False,
             "message": "Repayment could not be reported.",
+        }), 500
+
+
+
+def _owner_product_response(product):
+    return {
+        "id": str(product.id),
+        "name": product.name,
+        "code": product.code,
+        "description": product.description,
+        "currency_code": product.currency_code,
+        "min_principal_minor": product.min_principal_minor,
+        "max_principal_minor": product.max_principal_minor,
+        "interest_method": product.interest_method,
+        "interest_rate_percent": str(product.interest_rate_percent),
+        "repayment_frequency": product.repayment_frequency,
+        "min_term_count": product.min_term_count,
+        "max_term_count": product.max_term_count,
+        "origination_fee_minor": product.origination_fee_minor,
+        "late_payment_fee_minor": product.late_payment_fee_minor,
+        "allow_early_repayment": product.allow_early_repayment,
+        "is_active": product.is_active,
+        "created_at": product.created_at.isoformat() if product.created_at else None,
+        "updated_at": product.updated_at.isoformat() if product.updated_at else None,
+    }
+
+
+def _validate_owner_product_payload(data, existing=None):
+    if not isinstance(data, dict) or not data:
+        raise ValueError("A non-empty JSON object is required.")
+
+    allowed = {
+        "name", "code", "description", "currency_code",
+        "min_principal_minor", "max_principal_minor",
+        "interest_method", "interest_rate_percent",
+        "repayment_frequency", "min_term_count", "max_term_count",
+        "origination_fee_minor", "late_payment_fee_minor",
+        "allow_early_repayment", "is_active",
+    }
+    unknown = set(data) - allowed
+    if unknown:
+        raise ValueError(f"Unsupported product fields: {', '.join(sorted(unknown))}.")
+
+    required = {
+        "name", "code", "currency_code",
+        "min_principal_minor", "max_principal_minor",
+        "interest_method", "interest_rate_percent",
+        "repayment_frequency", "min_term_count", "max_term_count",
+    }
+    if existing is None and not required.issubset(data):
+        missing = sorted(required - set(data))
+        raise ValueError(f"Missing required fields: {', '.join(missing)}.")
+
+    values = {}
+    defaults = {
+        "description": None,
+        "origination_fee_minor": 0,
+        "late_payment_fee_minor": 0,
+        "allow_early_repayment": True,
+        "is_active": True,
+    }
+
+    for field in allowed:
+        if field in data:
+            values[field] = data[field]
+        elif existing is not None:
+            values[field] = getattr(existing, field)
+        elif field in defaults:
+            values[field] = defaults[field]
+
+    for field, limit in (("name", 120), ("code", 40)):
+        value = values.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Product {field} is required.")
+        value = value.strip()
+        if len(value) > limit:
+            raise ValueError(f"Product {field} cannot exceed {limit} characters.")
+        values[field] = value.upper() if field == "code" else value
+
+    description = values.get("description")
+    if description is not None and not isinstance(description, str):
+        raise ValueError("Product description must be text.")
+    if isinstance(description, str):
+        description = description.strip() or None
+        if description and len(description) > 5000:
+            raise ValueError("Product description cannot exceed 5000 characters.")
+    values["description"] = description
+
+    currency = values.get("currency_code")
+    if not isinstance(currency, str) or not currency.strip():
+        raise ValueError("A currency code is required.")
+    currency = currency.strip().upper()
+    if db.session.get(Currency, currency) is None:
+        raise ValueError("The selected currency does not exist.")
+    if not db.session.get(Currency, currency).is_active:
+        raise ValueError("The selected currency is inactive.")
+    values["currency_code"] = currency
+
+    integer_fields = (
+        "min_principal_minor", "max_principal_minor",
+        "min_term_count", "max_term_count",
+        "origination_fee_minor", "late_payment_fee_minor",
+    )
+    for field in integer_fields:
+        value = values.get(field)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{field} must be a non-negative integer.")
+
+    if values["min_principal_minor"] <= 0:
+        raise ValueError("Minimum principal must be greater than zero.")
+    if values["max_principal_minor"] < values["min_principal_minor"]:
+        raise ValueError("Maximum principal cannot be below minimum principal.")
+    if values["min_term_count"] <= 0:
+        raise ValueError("Minimum term count must be greater than zero.")
+    if values["max_term_count"] < values["min_term_count"]:
+        raise ValueError("Maximum term count cannot be below minimum term count.")
+
+    method = values.get("interest_method")
+    if method not in {"none", "flat", "reducing"}:
+        raise ValueError("Invalid interest method.")
+
+    try:
+        from decimal import Decimal, InvalidOperation
+        rate = Decimal(str(values.get("interest_rate_percent")))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("Interest rate must be a valid decimal number.")
+    if not rate.is_finite() or rate < 0:
+        raise ValueError("Interest rate must be a finite non-negative number.")
+    if method == "none" and rate != 0:
+        raise ValueError("Interest rate must be zero when interest method is none.")
+    values["interest_rate_percent"] = rate
+
+    if values.get("repayment_frequency") not in {
+        "weekly", "biweekly", "monthly", "quarterly", "one_time"
+    }:
+        raise ValueError("Invalid repayment frequency.")
+
+    for field in ("allow_early_repayment", "is_active"):
+        if type(values.get(field)) is not bool:
+            raise ValueError(f"{field} must be true or false.")
+
+    return values
+
+
+@platform_bp.get("/owner/financial-accounts")
+@platform_owner_required()
+def list_owner_platform_financial_accounts():
+    """List active platform-owned financial accounts for owner operations."""
+    try:
+        currency_code = request.args.get("currency_code", "").strip().upper()
+
+        query = PlatformFinancialAccount.query.filter(
+            PlatformFinancialAccount.is_active.is_(True)
+        )
+
+        if currency_code:
+            query = query.filter(
+                PlatformFinancialAccount.currency_code == currency_code
+            )
+
+        accounts = query.order_by(
+            PlatformFinancialAccount.currency_code.asc(),
+            PlatformFinancialAccount.name.asc(),
+            PlatformFinancialAccount.id.asc(),
+        ).all()
+
+        return jsonify({
+            "success": True,
+            "accounts": [
+                {
+                    "id": str(account.id),
+                    "name": account.name,
+                    "account_type": account.account_type,
+                    "currency_code": account.currency_code,
+                    "institution_name": account.institution_name,
+                    "display_reference": account.display_reference,
+                }
+                for account in accounts
+            ],
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Platform owner financial account listing failed"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Platform financial accounts could not be loaded.",
+        }), 500
+
+
+@platform_bp.get("/owner/products")
+@platform_owner_required()
+def list_owner_platform_loan_products():
+    """List all platform lending products, including inactive products."""
+    try:
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 20))
+        if page < 1 or per_page < 1:
+            raise ValueError
+        per_page = min(per_page, 100)
+    except (TypeError, ValueError):
+        return jsonify({
+            "success": False,
+            "message": "Page and per_page must be positive integers.",
+        }), 400
+
+    active_filter = request.args.get("is_active")
+    if active_filter not in (None, "", "true", "false"):
+        return jsonify({
+            "success": False,
+            "message": "is_active must be true or false.",
+        }), 400
+
+    try:
+        query = PlatformLoanProduct.query
+        if active_filter:
+            query = query.filter(
+                PlatformLoanProduct.is_active == (active_filter == "true")
+            )
+
+        total = query.count()
+        products = (
+            query.order_by(
+                PlatformLoanProduct.currency_code.asc(),
+                PlatformLoanProduct.name.asc(),
+                PlatformLoanProduct.id.asc(),
+            )
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+
+        return jsonify({
+            "success": True,
+            "products": [_owner_product_response(item) for item in products],
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "total_pages": (total + per_page - 1) // per_page,
+            },
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Platform owner product listing failed")
+        return jsonify({
+            "success": False,
+            "message": "Loan products could not be loaded.",
+        }), 500
+
+
+@platform_bp.post("/owner/products")
+@platform_owner_required()
+def create_owner_platform_loan_product():
+    """Create a platform lending product."""
+    owner_id = _customer_id()
+    if owner_id is None:
+        return jsonify({
+            "success": False,
+            "message": "A valid owner identity is required.",
+        }), 401
+
+    data = request.get_json(silent=True)
+    try:
+        values = _validate_owner_product_payload(data)
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+
+    if PlatformLoanProduct.query.filter_by(code=values["code"]).first():
+        return jsonify({
+            "success": False,
+            "message": "A loan product with this code already exists.",
+        }), 409
+
+    try:
+        product = PlatformLoanProduct(
+            **values,
+            created_by=owner_id,
+            updated_by=owner_id,
+        )
+        db.session.add(product)
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "message": "Loan product created successfully.",
+            "product": _owner_product_response(product),
+        }), 201
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Platform owner product creation failed")
+        return jsonify({
+            "success": False,
+            "message": "Loan product could not be created.",
+        }), 500
+
+
+@platform_bp.patch("/owner/products/<product_id>")
+@platform_owner_required()
+def update_owner_platform_loan_product(product_id):
+    """Update a platform lending product or its active status."""
+    try:
+        product_uuid = UUID(str(product_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid product ID.",
+        }), 400
+
+    owner_id = _customer_id()
+    if owner_id is None:
+        return jsonify({
+            "success": False,
+            "message": "A valid owner identity is required.",
+        }), 401
+
+    data = request.get_json(silent=True)
+    try:
+        product = (
+            PlatformLoanProduct.query
+            .filter_by(id=product_uuid)
+            .with_for_update()
+            .first()
+        )
+        if product is None:
+            return jsonify({
+                "success": False,
+                "message": "Loan product not found.",
+            }), 404
+
+        values = _validate_owner_product_payload(data, existing=product)
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+
+    duplicate = PlatformLoanProduct.query.filter(
+        PlatformLoanProduct.code == values["code"],
+        PlatformLoanProduct.id != product_uuid,
+    ).first()
+    if duplicate:
+        return jsonify({
+            "success": False,
+            "message": "A loan product with this code already exists.",
+        }), 409
+
+    try:
+        for field, value in values.items():
+            setattr(product, field, value)
+        product.updated_by = owner_id
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Loan product updated successfully.",
+            "product": _owner_product_response(product),
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Platform owner product update failed")
+        return jsonify({
+            "success": False,
+            "message": "Loan product could not be updated.",
         }), 500
 
 
