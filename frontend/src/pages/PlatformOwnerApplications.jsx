@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   RefreshCw,
   CheckCircle,
@@ -7,6 +8,10 @@ import {
   X,
   AlertCircle,
   Plus,
+  Search,
+  Clock3,
+  Wallet,
+  Eye,
 } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
 
@@ -23,20 +28,30 @@ const ZERO_DECIMAL = new Set([
 ]);
 
 function money(minor, currency = "KES") {
-  const divisor = ZERO_DECIMAL.has(currency) ? 1 : 100;
-  const amount = Number(minor || 0) / divisor;
+  const amount = Number(minor || 0) /
+    (ZERO_DECIMAL.has(currency) ? 1 : 100);
 
-  return new Intl.NumberFormat("en", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: ZERO_DECIMAL.has(currency) ? 0 : 2,
-  }).format(amount);
+  try {
+    return new Intl.NumberFormat("en", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: ZERO_DECIMAL.has(currency) ? 0 : 2,
+    }).format(amount);
+  } catch {
+    return `${currency} ${amount.toLocaleString()}`;
+  }
 }
 
 function dateTime(value) {
   if (!value) return "—";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleDateString("en-KE", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
 }
 
 function statusClass(status) {
@@ -50,6 +65,9 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
   );
   const [notes, setNotes] = useState("");
 
+  const applicant = application.applicant || null;
+  const assessment = application.affordability_assessment || null;
+
   async function submit(event) {
     event.preventDefault();
 
@@ -60,14 +78,16 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
 
     if (decision === "approved") {
       const amount = Number(approvedAmount);
-      if (!Number.isSafeInteger(amount) || amount <= 0) {
-        window.alert("Enter a valid approved principal amount in minor units.");
+
+      if (
+        !Number.isSafeInteger(amount) ||
+        amount <= 0 ||
+        amount > application.requested_principal_minor
+      ) {
+        window.alert("Enter a valid amount not exceeding the requested amount.");
         return;
       }
-      if (amount > application.requested_principal_minor) {
-        window.alert("Approved amount cannot exceed the requested amount.");
-        return;
-      }
+
       payload.approved_principal_minor = amount;
     }
 
@@ -75,9 +95,12 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
   }
 
   return (
-    <div className="platform-owner-modal-backdrop" onMouseDown={onClose}>
+    <div
+      className="platform-owner-modal-backdrop"
+      onMouseDown={onClose}
+    >
       <section
-        className="platform-owner-modal"
+        className="platform-owner-modal loan-review-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="application-decision-title"
@@ -85,10 +108,17 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
       >
         <div className="platform-owner-modal-header">
           <div>
+            <span className="platform-owner-eyebrow">APPLICATION REVIEW</span>
             <h2 id="application-decision-title">Review application</h2>
-            <p>{application.customer_email}</p>
+            <p>{application.customer_email || "Customer"}</p>
           </div>
-          <button type="button" className="platform-owner-icon-button" onClick={onClose}>
+
+          <button
+            type="button"
+            className="platform-owner-icon-button"
+            onClick={onClose}
+            aria-label="Close"
+          >
             <X size={18} />
           </button>
         </div>
@@ -96,35 +126,197 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
         <div className="platform-owner-review-summary">
           <div>
             <span>Loan product</span>
-            <strong>{application.product_name}</strong>
+            <strong>{application.product_name || "—"}</strong>
           </div>
           <div>
             <span>Requested amount</span>
             <strong>
-              {money(application.requested_principal_minor, application.currency_code)}
+              {money(
+                application.requested_principal_minor,
+                application.currency_code
+              )}
             </strong>
           </div>
           <div>
-            <span>Requested term</span>
+            <span>Repayment term</span>
             <strong>{application.term_count} periods</strong>
           </div>
           <div>
-            <span>Submitted</span>
+            <span>Application date</span>
             <strong>{dateTime(application.submitted_at)}</strong>
           </div>
         </div>
 
+        {applicant && (
+          <>
+            <div className="platform-owner-purpose">
+              <span>Applicant information</span>
+              <div className="platform-owner-review-summary">
+                <div>
+                  <span>Full name</span>
+                  <strong>{applicant.full_name || "—"}</strong>
+                </div>
+                <div>
+                  <span>Phone</span>
+                  <strong>{applicant.phone || "—"}</strong>
+                </div>
+                <div>
+                  <span>Email</span>
+                  <strong>{applicant.email || "—"}</strong>
+                </div>
+                <div>
+                  <span>Residential address</span>
+                  <strong>{applicant.residential_address || "—"}</strong>
+                </div>
+                <div>
+                  <span>Employment status</span>
+                  <strong>
+                    {applicant.employment_status
+                      ? applicant.employment_status.replaceAll("_", " ")
+                      : "—"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Employer / business</span>
+                  <strong>{applicant.employer_business_name || "—"}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="platform-owner-purpose">
+              <span>Declared monthly finances</span>
+              <div className="platform-owner-review-summary">
+                <div>
+                  <span>Monthly income</span>
+                  <strong>
+                    {money(applicant.monthly_income_minor, application.currency_code)}
+                  </strong>
+                </div>
+                <div>
+                  <span>Monthly expenses</span>
+                  <strong>
+                    {money(applicant.monthly_expenses_minor, application.currency_code)}
+                  </strong>
+                </div>
+                <div>
+                  <span>Existing monthly repayments</span>
+                  <strong>
+                    {money(
+                      applicant.existing_monthly_repayments_minor,
+                      application.currency_code
+                    )}
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            {(applicant.explanation ||
+              applicant.alternative_contact ||
+              applicant.additional_notes) && (
+              <div className="platform-owner-purpose">
+                <span>Additional applicant information</span>
+
+                {applicant.explanation && (
+                  <p>
+                    <strong>Application explanation:</strong>{" "}
+                    {applicant.explanation}
+                  </p>
+                )}
+
+                {applicant.alternative_contact && (
+                  <p>
+                    <strong>Alternative contact:</strong>{" "}
+                    {applicant.alternative_contact.name || "—"} ·{" "}
+                    {applicant.alternative_contact.phone || "—"} ·{" "}
+                    {applicant.alternative_contact.relationship || "—"}
+                  </p>
+                )}
+
+                {applicant.additional_notes && (
+                  <p>
+                    <strong>Additional notes:</strong>{" "}
+                    {applicant.additional_notes}
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {assessment && (
+          <div className="platform-owner-purpose">
+            <span>Affordability assessment · Version {assessment.version}</span>
+
+            <div className="platform-owner-review-summary">
+              <div>
+                <span>Assessment status</span>
+                <strong>{assessment.status.replaceAll("_", " ")}</strong>
+              </div>
+              <div>
+                <span>Recommended monthly instalment</span>
+                <strong>
+                  {money(
+                    assessment.recommended_monthly_instalment_minor,
+                    application.currency_code
+                  )}
+                </strong>
+              </div>
+              <div>
+                <span>Estimated affordable principal</span>
+                <strong>
+                  {money(
+                    assessment.estimated_affordable_principal_minor,
+                    application.currency_code
+                  )}
+                </strong>
+              </div>
+              <div>
+                <span>Evidence period</span>
+                <strong>
+                  {assessment.evidence_window_months || "—"} months
+                </strong>
+              </div>
+              <div>
+                <span>Customer-authorized workspace records</span>
+                <strong>
+                  {assessment.source_workspace_id
+                    ? "Included"
+                    : "Not included"}
+                </strong>
+              </div>
+            </div>
+
+            <p>
+              {assessment.status === "verified"
+                ? "Available authorized workspace records support the declared figures. This does not constitute external identity or bank verification."
+                : assessment.status === "needs_review"
+                  ? "The available evidence contains discrepancies that require human review."
+                  : assessment.status === "high_risk"
+                    ? "The assessment identified elevated repayment risk. Review the evidence carefully before deciding."
+                    : "There are insufficient records to substantiate the declared figures. This is not an automatic rejection."}
+            </p>
+
+            <p>
+              This assessment is advisory. The platform owner makes the final
+              lending decision.
+            </p>
+          </div>
+        )}
+
         {application.purpose && (
           <div className="platform-owner-purpose">
-            <span>Purpose</span>
+            <span>Loan purpose</span>
             <p>{application.purpose}</p>
           </div>
         )}
 
         <form onSubmit={submit} className="platform-owner-form">
           <label>
-            Decision
-            <select value={decision} onChange={(event) => setDecision(event.target.value)}>
+            Application decision
+            <select
+              value={decision}
+              onChange={(event) => setDecision(event.target.value)}
+            >
               <option value="approved">Approve application</option>
               <option value="rejected">Reject application</option>
             </select>
@@ -143,7 +335,11 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
                 onChange={(event) => setApprovedAmount(event.target.value)}
               />
               <small>
-                Maximum: {money(application.requested_principal_minor, application.currency_code)}
+                Maximum:{" "}
+                {money(
+                  application.requested_principal_minor,
+                  application.currency_code
+                )}
               </small>
             </label>
           )}
@@ -151,19 +347,28 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
           <label>
             Decision notes
             <textarea
-              rows="3"
+              rows="4"
               maxLength="5000"
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
-              placeholder="Optional notes for the decision..."
+              placeholder="Enter review comments..."
             />
           </label>
 
           <div className="platform-owner-modal-actions">
-            <button type="button" className="platform-owner-button secondary" onClick={onClose}>
+            <button
+              type="button"
+              className="platform-owner-button secondary"
+              onClick={onClose}
+            >
               Cancel
             </button>
-            <button type="submit" className="platform-owner-button primary" disabled={saving}>
+
+            <button
+              type="submit"
+              className="platform-owner-button primary"
+              disabled={saving}
+            >
               {saving ? "Saving..." : "Save decision"}
             </button>
           </div>
@@ -176,6 +381,7 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
 export default function PlatformOwnerApplications() {
   const [applications, setApplications] = useState([]);
   const [filter, setFilter] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -189,21 +395,45 @@ export default function PlatformOwnerApplications() {
 
     try {
       const response = await platformOwnerApi.listApplications({
-        status: filter || undefined,
         page: 1,
         per_page: 100,
       });
+
       setApplications(response.applications || []);
     } catch (err) {
       setError(err.message || "Applications could not be loaded.");
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, []);
 
   useEffect(() => {
     loadApplications();
   }, [loadApplications]);
+
+  const counts = useMemo(() => ({
+    total: applications.length,
+    pending: applications.filter((a) => a.status === "pending").length,
+    approved: applications.filter((a) => a.status === "approved").length,
+    rejected: applications.filter((a) => a.status === "rejected").length,
+  }), [applications]);
+
+  const filteredApplications = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return applications.filter((application) => {
+      const matchesStatus = !filter || application.status === filter;
+
+      const searchable = [
+        application.customer_email,
+        application.customer_id,
+        application.product_name,
+        application.id,
+      ].join(" ").toLowerCase();
+
+      return matchesStatus && (!query || searchable.includes(query));
+    });
+  }, [applications, filter, search]);
 
   async function saveDecision(applicationId, payload) {
     setSaving(true);
@@ -226,6 +456,7 @@ export default function PlatformOwnerApplications() {
     const confirmed = window.confirm(
       `Create a platform loan for ${application.customer_email} using the approved application?`
     );
+
     if (!confirmed) return;
 
     setCreatingLoan(application.id);
@@ -233,8 +464,13 @@ export default function PlatformOwnerApplications() {
     setNotice("");
 
     try {
-      const response = await platformOwnerApi.createLoanFromApplication(application.id);
-      setNotice(`Loan created successfully. Loan ID: ${response.loan?.id || "Created"}`);
+      const response =
+        await platformOwnerApi.createLoanFromApplication(application.id);
+
+      setNotice(
+        `Loan created successfully. Loan ID: ${response.loan?.id || "Created"}`
+      );
+
       await loadApplications();
     } catch (err) {
       setError(err.message || "The loan could not be created.");
@@ -243,32 +479,39 @@ export default function PlatformOwnerApplications() {
     }
   }
 
-  const pendingCount = applications.filter((item) => item.status === "pending").length;
-
   return (
-    <div className="platform-owner-page">
-      <div className="platform-owner-page-header">
+    <div className="platform-owner-page loan-applications-page">
+
+      <header className="platform-owner-page-header">
         <div>
-          <span className="platform-owner-eyebrow">LENDING OPERATIONS</span>
+          <span className="platform-owner-eyebrow">
+            PESAPILOT / LENDING OPERATIONS
+          </span>
           <h1>Loan applications</h1>
-          <p>Review customer requests, record decisions and create approved loans.</p>
+          <p>
+            Manage customer applications, assess requests and authorize loans.
+          </p>
         </div>
+
         <button
           type="button"
           className="platform-owner-button secondary"
           onClick={loadApplications}
           disabled={loading}
         >
-          <RefreshCw size={16} className={loading ? "platform-owner-spin" : ""} />
-          Refresh
+          <RefreshCw
+            size={16}
+            className={loading ? "platform-owner-spin" : ""}
+          />
+          Refresh data
         </button>
-      </div>
+      </header>
 
       {notice && (
         <div className="platform-owner-notice success">
           <CheckCircle size={17} />
-          {notice}
-          <button type="button" onClick={() => setNotice("")} aria-label="Dismiss">
+          <span>{notice}</span>
+          <button onClick={() => setNotice("")} aria-label="Dismiss">
             <X size={16} />
           </button>
         </div>
@@ -277,119 +520,264 @@ export default function PlatformOwnerApplications() {
       {error && (
         <div className="platform-owner-notice error">
           <AlertCircle size={17} />
-          {error}
-          <button type="button" onClick={() => setError("")} aria-label="Dismiss">
+          <span>{error}</span>
+          <button onClick={() => setError("")} aria-label="Dismiss">
             <X size={16} />
           </button>
         </div>
       )}
 
-      <div className="platform-owner-stat-row">
-        <div className="platform-owner-stat-card">
-          <span>Applications loaded</span>
-          <strong>{applications.length}</strong>
-        </div>
-        <div className="platform-owner-stat-card">
-          <span>Pending in current view</span>
-          <strong>{pendingCount}</strong>
-        </div>
-      </div>
+      <section className="loan-applications-stats">
 
-      <div className="platform-owner-toolbar">
-        <div className="platform-owner-filter-tabs">
-          {FILTERS.map((item) => (
-            <button
-              type="button"
-              key={item.value || "all"}
-              className={filter === item.value ? "active" : ""}
-              onClick={() => setFilter(item.value)}
-            >
-              {item.label}
-            </button>
-          ))}
+        <div className="loan-stat-card">
+          <div className="loan-stat-top">
+            <span>Total applications</span>
+            <div className="loan-stat-icon green">
+              <FileText size={19} />
+            </div>
+          </div>
+          <strong>{loading ? "—" : counts.total}</strong>
+          <small>Applications loaded</small>
         </div>
-      </div>
 
-      {loading ? (
-        <div className="platform-owner-empty">Loading applications...</div>
-      ) : applications.length === 0 ? (
-        <div className="platform-owner-empty">
-          <FileText size={32} />
-          <h3>No applications found</h3>
-          <p>There are no applications matching this filter.</p>
+        <div className="loan-stat-card">
+          <div className="loan-stat-top">
+            <span>Pending review</span>
+            <div className="loan-stat-icon amber">
+              <Clock3 size={19} />
+            </div>
+          </div>
+          <strong>{loading ? "—" : counts.pending}</strong>
+          <small>Awaiting a decision</small>
         </div>
-      ) : (
-        <div className="platform-owner-table-wrap">
-          <table className="platform-owner-table">
-            <thead>
-              <tr>
-                <th>Customer</th>
-                <th>Product</th>
-                <th>Requested</th>
-                <th>Approved</th>
-                <th>Term</th>
-                <th>Submitted</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {applications.map((application) => (
-                <tr key={application.id}>
-                  <td>
-                    <strong>{application.customer_email || "Customer"}</strong>
-                    <small>{application.customer_id}</small>
-                  </td>
-                  <td>
-                    <strong>{application.product_name}</strong>
-                    <small>{application.currency_code}</small>
-                  </td>
-                  <td>{money(application.requested_principal_minor, application.currency_code)}</td>
-                  <td>
-                    {application.approved_principal_minor == null
-                      ? "—"
-                      : money(application.approved_principal_minor, application.currency_code)}
-                  </td>
-                  <td>{application.term_count}</td>
-                  <td>{dateTime(application.submitted_at)}</td>
-                  <td>
-                    <span className={statusClass(application.status)}>
-                      {application.status}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="platform-owner-row-actions">
-                      {application.status === "pending" && (
-                        <button
-                          type="button"
-                          className="platform-owner-button small primary"
-                          onClick={() => setSelected(application)}
-                        >
-                          Review
-                        </button>
-                      )}
-                      {application.status === "approved" && (
-                        <button
-                          type="button"
-                          className="platform-owner-button small primary"
-                          onClick={() => createLoan(application)}
-                          disabled={creatingLoan === application.id}
-                        >
-                          <Plus size={14} />
-                          {creatingLoan === application.id ? "Creating..." : "Create loan"}
-                        </button>
-                      )}
-                      {application.status !== "pending" && application.status !== "approved" && (
-                        <span className="platform-owner-muted">No action</span>
-                      )}
-                    </div>
-                  </td>
+
+        <div className="loan-stat-card">
+          <div className="loan-stat-top">
+            <span>Approved</span>
+            <div className="loan-stat-icon blue">
+              <CheckCircle size={19} />
+            </div>
+          </div>
+          <strong>{loading ? "—" : counts.approved}</strong>
+          <small>Approved applications</small>
+        </div>
+
+        <div className="loan-stat-card">
+          <div className="loan-stat-top">
+            <span>Rejected</span>
+            <div className="loan-stat-icon red">
+              <XCircle size={19} />
+            </div>
+          </div>
+          <strong>{loading ? "—" : counts.rejected}</strong>
+          <small>Unsuccessful applications</small>
+        </div>
+
+      </section>
+
+      <section className="loan-applications-workspace">
+
+        <div className="loan-applications-section-heading">
+          <div>
+            <h2>Applications overview</h2>
+            <p>Review and manage submitted loan requests.</p>
+          </div>
+
+          <span className="loan-results-count">
+            {filteredApplications.length} results
+          </span>
+        </div>
+
+        <div className="loan-applications-toolbar">
+
+          <div className="loan-application-search">
+            <Search size={18} />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search customer, product or ID..."
+              aria-label="Search applications"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
+              >
+                <X size={15} />
+              </button>
+            )}
+          </div>
+
+          <div className="platform-owner-filter-tabs">
+            {FILTERS.map((item) => (
+              <button
+                type="button"
+                key={item.value || "all"}
+                className={filter === item.value ? "active" : ""}
+                onClick={() => setFilter(item.value)}
+              >
+                {item.label}
+                <span>
+                  {item.value === ""
+                    ? counts.total
+                    : applications.filter((a) => a.status === item.value).length}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="platform-owner-empty">
+            <RefreshCw size={23} className="platform-owner-spin" />
+            <h3>Loading applications</h3>
+            <p>Retrieving loan application records...</p>
+          </div>
+        ) : filteredApplications.length === 0 ? (
+          <div className="platform-owner-empty">
+            <FileText size={34} />
+            <h3>No applications found</h3>
+            <p>
+              {search
+                ? "Try another search term or change the selected filter."
+                : "There are no applications matching this filter."}
+            </p>
+            {(search || filter) && (
+              <button
+                type="button"
+                className="platform-owner-button secondary"
+                onClick={() => {
+                  setSearch("");
+                  setFilter("");
+                }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="platform-owner-table-wrap loan-applications-table-wrap">
+            <table className="platform-owner-table loan-applications-table">
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Loan product</th>
+                  <th>Requested amount</th>
+                  <th>Approved amount</th>
+                  <th>Term</th>
+                  <th>Submitted</th>
+                  <th>Status</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+
+              <tbody>
+                {filteredApplications.map((application) => (
+                  <tr key={application.id}>
+                    <td>
+                      <div className="loan-customer-cell">
+                        <div className="loan-customer-avatar">
+                          {(application.customer_email || "C")
+                            .charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <strong>
+                            {application.customer_email || "Customer"}
+                          </strong>
+                          <small>ID: {application.customer_id || "—"}</small>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td>
+                      <strong>{application.product_name || "—"}</strong>
+                      <small>{application.currency_code || "KES"}</small>
+                    </td>
+
+                    <td className="loan-amount-cell">
+                      {money(
+                        application.requested_principal_minor,
+                        application.currency_code
+                      )}
+                    </td>
+
+                    <td className="loan-amount-cell">
+                      {application.approved_principal_minor == null
+                        ? "—"
+                        : money(
+                            application.approved_principal_minor,
+                            application.currency_code
+                          )}
+                    </td>
+
+                    <td>{application.term_count ?? "—"} periods</td>
+                    <td>{dateTime(application.submitted_at)}</td>
+
+                    <td>
+                      <span className={statusClass(application.status)}>
+                        {application.status}
+                      </span>
+                    </td>
+
+                    <td>
+                      <div className="platform-owner-row-actions">
+                        {application.status === "pending" && (
+                          <button
+                            type="button"
+                            className="platform-owner-button small primary"
+                            onClick={() => setSelected(application)}
+                          >
+                            <Eye size={14} />
+                            Review
+                          </button>
+                        )}
+
+                        {application.status === "approved" && (
+                          <button
+                            type="button"
+                            className="platform-owner-button small primary"
+                            onClick={() => createLoan(application)}
+                            disabled={creatingLoan === application.id}
+                          >
+                            <Plus size={14} />
+                            {creatingLoan === application.id
+                              ? "Creating..."
+                              : "Create loan"}
+                          </button>
+                        )}
+
+                        {application.status !== "pending" &&
+                          application.status !== "approved" && (
+                            <span className="platform-owner-muted">
+                              No action
+                            </span>
+                          )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="loan-applications-footer">
+          <span>
+            Showing {filteredApplications.length} of {applications.length} loaded applications
+          </span>
+          <button
+            type="button"
+            onClick={loadApplications}
+            disabled={loading}
+          >
+            <RefreshCw size={14} />
+            Update records
+          </button>
         </div>
-      )}
+
+      </section>
 
       {selected && (
         <DecisionModal
@@ -399,6 +787,7 @@ export default function PlatformOwnerApplications() {
           saving={saving}
         />
       )}
+
     </div>
   );
 }

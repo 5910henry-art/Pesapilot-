@@ -265,6 +265,7 @@ def create_platform_loan_from_application(*, application_id):
         interest_method=product.interest_method,
         interest_rate_percent=product.interest_rate_percent,
         repayment_frequency=product.repayment_frequency,
+        one_time_due_days=product.one_time_due_days,
         term_count=application.term_count,
         status="created",
     )
@@ -283,27 +284,28 @@ def create_platform_loan_from_application(*, application_id):
 
 
 
-def _platform_loan_due_date(start_date, frequency, term_count, one_time_due_date=None):
-    """Calculate the final due date from the loan's repayment frequency."""
+def _platform_loan_due_date(
+    start_date,
+    frequency,
+    term_count,
+    one_time_due_days=None,
+):
+    """Calculate the final due date using the loan's stored product terms."""
 
     if frequency == "one_time":
         if term_count != 1:
             raise PlatformLendingValidationError(
                 "A one-time loan must have exactly one installment."
             )
-        if not isinstance(one_time_due_date, date):
+        if type(one_time_due_days) is not int or one_time_due_days <= 0:
             raise PlatformLendingValidationError(
-                "A due date is required for a one-time loan."
+                "The one-time loan product must have a positive maturity period in days."
             )
-        if one_time_due_date <= start_date:
-            raise PlatformLendingValidationError(
-                "The one-time repayment due date must be after the start date."
-            )
-        return one_time_due_date
+        return start_date + timedelta(days=one_time_due_days)
 
-    if one_time_due_date is not None:
+    if one_time_due_days is not None:
         raise PlatformLendingValidationError(
-            "A manual due date is only accepted for one-time loans."
+            "A maturity period in days is only valid for one-time loans."
         )
 
     if frequency == "weekly":
@@ -462,7 +464,6 @@ def disburse_platform_loan(
     disbursement_date,
     recorded_by,
     notes=None,
-    one_time_due_date=None,
     investor_allocations=None,
 ):
     """Record and account for a platform loan funding tranche."""
@@ -708,7 +709,7 @@ def disburse_platform_loan(
             start_date,
             loan.repayment_frequency,
             loan.term_count,
-            one_time_due_date,
+            loan.one_time_due_days,
         )
 
         schedule_loan = type(

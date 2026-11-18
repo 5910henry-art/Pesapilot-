@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from sqlalchemy import event
+from cryptography.fernet import Fernet
 
 from app import create_app
 from app.extensions import db
@@ -37,6 +38,8 @@ from app.models import (
     PlatformJournalLine,
     PlatformLoanProduct,
     PlatformLoanApplication,
+    PlatformLoanApplicationDetails,
+    PlatformLoanAffordabilityAssessment,
     PlatformLoan,
     PlatformLoanInstallment,
     PlatformLoanDisbursement,
@@ -50,6 +53,7 @@ from app.models import (
 )
 
 from app.services.accounting import create_draft_entry, post_entry, reverse_entry
+from app.services.identity import decrypt_national_id
 from app.services.platform_lending import (
     PlatformLendingValidationError,
     create_platform_loan_from_application,
@@ -90,6 +94,7 @@ class PesaPilotTestCase(unittest.TestCase):
             "JWT_SECRET_KEY": "isolated-test-jwt-secret-key-32-bytes-minimum",
             "SQLALCHEMY_DATABASE_URI": "sqlite+pysqlite:///:memory:",
             "SQLALCHEMY_ENGINE_OPTIONS": {},
+            "IDENTITY_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii"),
         })
 
         cls.app_context = cls.app.app_context()
@@ -480,6 +485,32 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(ledger.currency_code, "KES")
 
 
+
+    def platform_application_payload(self, product, **overrides):
+        payload = {
+            "product_id": str(product.id),
+            "requested_principal_minor": 100000,
+            "term_count": 6,
+            "purpose": "Business stock",
+            "full_name": "Test Applicant",
+            "national_id": "12345678",
+            "phone": "+254700000000",
+            "email": self.user.email,
+            "residential_address": "Nairobi, Kenya",
+            "employment_status": "employed",
+            "employer_business_name": "Test Employer",
+            "monthly_income_minor": 4000000,
+            "monthly_expenses_minor": 2000000,
+            "existing_monthly_repayments_minor": 0,
+            "explanation": None,
+            "alternative_contact_name": None,
+            "alternative_contact_phone": None,
+            "alternative_contact_relationship": None,
+            "additional_notes": None,
+            "affordability_consent": False,
+        }
+        payload.update(overrides)
+        return payload
 
     def create_platform_loan_product(self, **overrides):
         values = {
@@ -1123,7 +1154,7 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(loan.principal_minor, 0)
         self.assertEqual(loan.status, "created")
 
-    def test_one_time_platform_loan_requires_owner_selected_due_date(self):
+    def test_one_time_platform_loan_uses_product_maturity_snapshot(self):
         account = self.create_platform_accounting_setup()
         product = self.create_platform_loan_product(
             interest_method="flat",
@@ -1131,6 +1162,7 @@ class PesaPilotTestCase(unittest.TestCase):
             repayment_frequency="one_time",
             min_term_count=1,
             max_term_count=1,
+            one_time_due_days=30,
         )
         application = self.create_approved_platform_application(
             term_count=1,
@@ -1139,23 +1171,18 @@ class PesaPilotTestCase(unittest.TestCase):
         loan = create_platform_loan_from_application(
             application_id=application.id
         )
-        funding_date = datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc)
 
-        with self.assertRaises(PlatformLendingValidationError):
-            disburse_platform_loan(
-                loan_id=loan.id,
-                financial_account_id=account.id,
-                customer_financial_account_id=self.source_account.id,
-                amount_minor=100000,
-                funding_source="pesapilot_capital",
-                disbursement_date=funding_date,
-                recorded_by=self.user.id,
-            )
+        self.assertEqual(loan.one_time_due_days, 30)
 
-        self.assertEqual(loan.principal_minor, 0)
-        self.assertEqual(loan.status, "created")
+        # Later product edits must not change an existing loan's terms.
+        product.one_time_due_days = 60
+        db.session.flush()
+        self.assertEqual(product.one_time_due_days, 60)
+        self.assertEqual(loan.one_time_due_days, 30)
 
-        selected_due_date = date(2027, 2, 16)
+        funding_date = datetime(
+            2026, 11, 16, 9, 0, tzinfo=timezone.utc
+        )
         disbursement = disburse_platform_loan(
             loan_id=loan.id,
             financial_account_id=account.id,
@@ -1164,9 +1191,9 @@ class PesaPilotTestCase(unittest.TestCase):
             funding_source="pesapilot_capital",
             disbursement_date=funding_date,
             recorded_by=self.user.id,
-            one_time_due_date=selected_due_date,
         )
 
+        expected_due_date = date(2026, 12, 16)
         installments = PlatformLoanInstallment.query.filter_by(
             loan_id=loan.id
         ).all()
@@ -1174,9 +1201,9 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertIsNotNone(disbursement.id)
         self.assertEqual(loan.status, "active")
         self.assertEqual(loan.start_date, date(2026, 11, 16))
-        self.assertEqual(loan.due_date, selected_due_date)
+        self.assertEqual(loan.due_date, expected_due_date)
         self.assertEqual(len(installments), 1)
-        self.assertEqual(installments[0].due_date, selected_due_date)
+        self.assertEqual(installments[0].due_date, expected_due_date)
         self.assertEqual(installments[0].principal_minor, 100000)
 
     def create_funded_platform_loan_for_repayment(self):
@@ -2997,6 +3024,67 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.json)
         self.assertFalse(response.json["success"])
 
+    def test_platform_owner_one_time_product_maturity_rules(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        base_payload = {
+            "name": "One-Time Test Loan",
+            "currency_code": "KES",
+            "min_principal_minor": 100000,
+            "max_principal_minor": 500000,
+            "interest_method": "none",
+            "interest_rate_percent": "0",
+            "repayment_frequency": "one_time",
+            "min_term_count": 1,
+            "max_term_count": 1,
+        }
+
+        missing_maturity = dict(
+            base_payload,
+            code="ONE-TIME-NO-DAYS",
+        )
+        response = self.client.post(
+            "/api/v1/platform/owner/products",
+            headers=self.headers,
+            json=missing_maturity,
+        )
+        self.assertEqual(response.status_code, 400, response.json)
+
+        multiple_installments = dict(
+            base_payload,
+            code="ONE-TIME-MULTI",
+            one_time_due_days=30,
+            max_term_count=2,
+        )
+        response = self.client.post(
+            "/api/v1/platform/owner/products",
+            headers=self.headers,
+            json=multiple_installments,
+        )
+        self.assertEqual(response.status_code, 400, response.json)
+
+        valid_product = dict(
+            base_payload,
+            code="ONE-TIME-VALID",
+            one_time_due_days=30,
+        )
+        response = self.client.post(
+            "/api/v1/platform/owner/products",
+            headers=self.headers,
+            json=valid_product,
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(
+            response.json["product"]["one_time_due_days"],
+            30,
+        )
+
     def test_non_owner_cannot_manage_platform_loan_products(self):
         product = self.create_platform_loan_product()
         db.session.commit()
@@ -3596,12 +3684,7 @@ class PesaPilotTestCase(unittest.TestCase):
         submitted = self.client.post(
             "/api/v1/platform/applications",
             headers=self.headers,
-            json={
-                "product_id": str(product.id),
-                "requested_principal_minor": 100000,
-                "term_count": 6,
-                "purpose": "Business stock",
-            },
+            json=self.platform_application_payload(product),
         )
         self.assertEqual(submitted.status_code, 201, submitted.json)
 
@@ -4390,6 +4473,8 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(own_pending["customer_email"], self.user.email)
         self.assertEqual(own_pending["product_name"], product.name)
         self.assertEqual(own_pending["currency_code"], "KES")
+        self.assertIsNone(own_pending["applicant"])
+        self.assertIsNone(own_pending["affordability_assessment"])
 
         filtered = self.client.get(
             "/api/v1/platform/owner/applications?status=withdrawn",
@@ -4414,6 +4499,74 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
         )
         self.assertEqual(invalid.status_code, 400, invalid.json)
+
+    def test_platform_owner_can_view_application_details_and_affordability_without_national_id(self):
+        product = self.create_platform_loan_product()
+
+        submitted = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=self.platform_application_payload(product),
+        )
+        self.assertEqual(submitted.status_code, 201, submitted.json)
+
+        application_id = submitted.json["application"]["id"]
+        application = db.session.get(
+            PlatformLoanApplication,
+            UUID(application_id),
+        )
+        details = db.session.get(
+            PlatformLoanApplicationDetails,
+            application.id,
+        )
+        self.assertIsNotNone(details)
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/applications",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        item = next(
+            row for row in response.json["applications"]
+            if row["id"] == application_id
+        )
+
+        applicant = item["applicant"]
+        self.assertEqual(applicant["full_name"], "Test Applicant")
+        self.assertEqual(applicant["phone"], "+254700000000")
+        self.assertEqual(applicant["email"], self.user.email)
+        self.assertEqual(applicant["residential_address"], "Nairobi, Kenya")
+        self.assertEqual(applicant["employment_status"], "employed")
+        self.assertEqual(applicant["employer_business_name"], "Test Employer")
+        self.assertEqual(applicant["monthly_income_minor"], 4000000)
+        self.assertEqual(applicant["monthly_expenses_minor"], 2000000)
+        self.assertEqual(applicant["existing_monthly_repayments_minor"], 0)
+        self.assertFalse(applicant["affordability_consent"])
+
+        assessment = item["affordability_assessment"]
+        self.assertIsNotNone(assessment)
+        self.assertEqual(assessment["version"], 1)
+        self.assertEqual(assessment["status"], "insufficient_records")
+        self.assertEqual(
+            assessment["recommended_monthly_instalment_minor"],
+            1400000,
+        )
+
+        self.assertNotIn("national_id", applicant)
+        self.assertNotIn("national_id_encrypted", applicant)
+        self.assertNotIn("national_id", item)
+        self.assertNotIn("national_id_encrypted", item)
+        self.assertNotIn("12345678", str(item))
+        self.assertNotIn(details.national_id_encrypted, str(item))
+
 
     def test_platform_owner_can_create_loan_from_approved_application(self):
         application = self.create_approved_platform_application(
@@ -4949,12 +5102,7 @@ class PesaPilotTestCase(unittest.TestCase):
         response = self.client.post(
             "/api/v1/platform/applications",
             headers=self.headers,
-            json={
-                "product_id": str(product.id),
-                "requested_principal_minor": 100000,
-                "term_count": 6,
-                "purpose": "Business stock",
-            },
+            json=self.platform_application_payload(product),
         )
 
         self.assertEqual(response.status_code, 201, response.json)
@@ -4976,15 +5124,41 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(application.customer_id, self.user.id)
         self.assertEqual(application.product_id, product.id)
 
+        assessment_data = response.json["affordability_assessment"]
+        self.assertEqual(assessment_data["status"], "insufficient_records")
+        self.assertEqual(
+            assessment_data["recommended_monthly_instalment_minor"],
+            1400000,
+        )
+        self.assertGreaterEqual(
+            assessment_data["estimated_affordable_principal_minor"],
+            0,
+        )
+
+        details = db.session.get(PlatformLoanApplicationDetails, application.id)
+        self.assertIsNotNone(details)
+        self.assertNotEqual(details.national_id_encrypted, "12345678")
+        self.assertEqual(
+            decrypt_national_id(details.national_id_encrypted),
+            "12345678",
+        )
+        self.assertNotIn("national_id", response.json)
+        self.assertNotIn(details.national_id_encrypted, str(response.json))
+
+        assessment = PlatformLoanAffordabilityAssessment.query.filter_by(
+            application_id=application.id,
+            version=1,
+        ).one()
+        self.assertEqual(assessment.status, "insufficient_records")
+        self.assertTrue(assessment.report["assessment_is_advisory"])
+        self.assertFalse(
+            assessment.report["automatic_approval_or_rejection"]
+        )
+
     def test_customer_cannot_submit_second_pending_application(self):
         product = self.create_platform_loan_product()
 
-        payload = {
-            "product_id": str(product.id),
-            "requested_principal_minor": 100000,
-            "term_count": 6,
-            "purpose": "Business stock",
-        }
+        payload = self.platform_application_payload(product)
 
         first = self.client.post(
             "/api/v1/platform/applications",
@@ -5015,12 +5189,7 @@ class PesaPilotTestCase(unittest.TestCase):
         submitted = self.client.post(
             "/api/v1/platform/applications",
             headers=self.headers,
-            json={
-                "product_id": str(product.id),
-                "requested_principal_minor": 100000,
-                "term_count": 6,
-                "purpose": "Business stock",
-            },
+            json=self.platform_application_payload(product),
         )
         self.assertEqual(submitted.status_code, 201, submitted.json)
 

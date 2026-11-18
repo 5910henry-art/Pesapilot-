@@ -127,7 +127,6 @@ export default function PlatformOwnerLoans() {
       .toISOString()
       .slice(0, 16);
   });
-  const [oneTimeDueDate, setOneTimeDueDate] = useState("");
   const [notes, setNotes] = useState("");
   const [allocations, setAllocations] = useState([
     { investor_id: "", amount: "" },
@@ -350,15 +349,6 @@ export default function PlatformOwnerLoans() {
       return;
     }
 
-    if (
-      activeLoan.repayment_frequency === "one_time" &&
-      oneTimeDueDate &&
-      !/^\d{4}-\d{2}-\d{2}$/.test(oneTimeDueDate)
-    ) {
-      setFormError("Enter a valid one-time repayment due date.");
-      return;
-    }
-
     const payload = {
       financial_account_id: accountId,
       customer_financial_account_id: customerAccountId,
@@ -367,9 +357,6 @@ export default function PlatformOwnerLoans() {
       disbursement_date: new Date(disbursementDate).toISOString(),
       notes: notes.trim() || undefined,
       ...(investorAllocations ? { investor_allocations: investorAllocations } : {}),
-      ...(activeLoan.repayment_frequency === "one_time" && oneTimeDueDate
-        ? { one_time_due_date: oneTimeDueDate }
-        : {}),
     };
 
     setSaving(true);
@@ -847,14 +834,11 @@ export default function PlatformOwnerLoans() {
             </label>
 
             {activeLoan?.repayment_frequency === "one_time" && (
-              <label>
-                One-time repayment due date
-                <input
-                  type="date"
-                  value={oneTimeDueDate}
-                  onChange={(event) => setOneTimeDueDate(event.target.value)}
-                />
-              </label>
+              <p className="platform-loan-muted">
+                One-time maturity: {activeLoan.one_time_due_days
+                  ? `${activeLoan.one_time_due_days} days after disbursement. The repayment due date is calculated automatically.`
+                  : "Maturity period is not configured on this loan."}
+              </p>
             )}
 
             <label>

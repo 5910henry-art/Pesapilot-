@@ -92,6 +92,11 @@ class PlatformLoan(db.Model):
         nullable=False,
     )
 
+    one_time_due_days: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
     term_count: Mapped[int] = mapped_column(
         db.Integer,
         nullable=False,
@@ -157,6 +162,10 @@ class PlatformLoan(db.Model):
             "repayment_frequency IN "
             "('weekly', 'biweekly', 'monthly', 'quarterly', 'one_time')",
             name="ck_platform_loan_frequency",
+        ),
+        CheckConstraint(
+            "one_time_due_days IS NULL OR one_time_due_days > 0",
+            name="ck_platform_loan_one_time_due_days",
         ),
         CheckConstraint(
             "term_count > 0",

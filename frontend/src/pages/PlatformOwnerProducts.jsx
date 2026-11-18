@@ -12,6 +12,7 @@ const EMPTY_FORM = {
   interest_method: "reducing",
   interest_rate: "10",
   repayment_frequency: "monthly",
+  one_time_due_days: "",
   min_term_count: "1",
   max_term_count: "12",
   origination_fee_minor: "0",
@@ -75,6 +76,17 @@ function ProductForm({ initial, onClose, onSave, saving }) {
         return;
       }
       payload[key] = value;
+    }
+
+    if (payload.repayment_frequency === "one_time") {
+      const maturityDays = Number(payload.one_time_due_days);
+      if (!Number.isSafeInteger(maturityDays) || maturityDays <= 0) {
+        setError("One-time maturity period must be a positive whole number of days.");
+        return;
+      }
+      payload.one_time_due_days = maturityDays;
+    } else {
+      payload.one_time_due_days = null;
     }
 
     const rate = Number(payload.interest_rate);
@@ -144,6 +156,18 @@ function ProductForm({ initial, onClose, onSave, saving }) {
                 {FREQUENCIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </Field>
+            {form.repayment_frequency === "one_time" && (
+              <Field label="Maturity period (days)">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={form.one_time_due_days}
+                  onChange={(e) => update("one_time_due_days", e.target.value)}
+                />
+              </Field>
+            )}
             <Field label="Minimum principal (minor units)">
               <input type="number" min="1" step="1" required value={form.min_principal_minor} onChange={(e) => update("min_principal_minor", e.target.value)} />
             </Field>
@@ -263,6 +287,9 @@ export default function PlatformOwnerProducts() {
       interest_method: product.interest_method || "none",
       interest_rate: String(product.interest_rate_percent ?? 0),
       repayment_frequency: product.repayment_frequency || "monthly",
+      one_time_due_days: product.one_time_due_days == null
+        ? ""
+        : String(product.one_time_due_days),
       min_term_count: String(product.min_term_count ?? 1),
       max_term_count: String(product.max_term_count ?? 1),
       origination_fee_minor: String(product.origination_fee_minor ?? 0),
@@ -327,7 +354,14 @@ export default function PlatformOwnerProducts() {
               <div className="platform-owner-product-details">
                 <div><span>Principal range</span><strong>{money(product.min_principal_minor, product.currency_code)} – {money(product.max_principal_minor, product.currency_code)}</strong></div>
                 <div><span>Interest</span><strong>{product.interest_method === "none" ? "No interest" : `${product.interest_rate_percent}% · ${product.interest_method}`}</strong></div>
-                <div><span>Repayment</span><strong>{product.repayment_frequency}</strong></div>
+                <div>
+                  <span>Repayment</span>
+                  <strong>
+                    {product.repayment_frequency === "one_time"
+                      ? `One-time · ${product.one_time_due_days ?? "Not configured"} days`
+                      : product.repayment_frequency}
+                  </strong>
+                </div>
                 <div><span>Term range</span><strong>{product.min_term_count} – {product.max_term_count}</strong></div>
               </div>
               <div className="platform-owner-product-actions">

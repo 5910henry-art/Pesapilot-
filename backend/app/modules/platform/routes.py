@@ -11,6 +11,9 @@ from flask import current_app, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
+from app.services.identity import encrypt_national_id
+from app.services.platform_affordability import estimate_affordable_principal
+from app.services.platform_affordability_evidence import build_affordability_evidence_report
 from app.models import (
     PlatformLoan,
     PlatformLoanApplication,
@@ -22,6 +25,8 @@ from app.models import (
     PlatformInvestorContribution,
     PlatformInvestorWithdrawal,
     PlatformLoanFundingAllocation,
+    PlatformLoanApplicationDetails,
+    PlatformLoanAffordabilityAssessment,
     PlatformFinancialAccount,
     PlatformLedgerAccount,
     PlatformJournalEntry,
@@ -39,6 +44,7 @@ from app.services.platform_lending import (
     reverse_platform_loan_payment,
     review_loan_application,
     submit_loan_application,
+    _platform_loan_due_date,
     record_platform_investor_contribution,
     record_platform_investor_withdrawal,
     reverse_platform_investor_contribution,
@@ -396,6 +402,46 @@ def list_owner_platform_applications():
             .all()
         )
 
+        application_ids = [row[0].id for row in rows]
+
+        details_by_application = {}
+        assessments_by_application = {}
+
+        if application_ids:
+            detail_rows = (
+                PlatformLoanApplicationDetails.query
+                .filter(
+                    PlatformLoanApplicationDetails.application_id.in_(
+                        application_ids
+                    )
+                )
+                .all()
+            )
+            details_by_application = {
+                detail.application_id: detail
+                for detail in detail_rows
+            }
+
+            assessment_rows = (
+                PlatformLoanAffordabilityAssessment.query
+                .filter(
+                    PlatformLoanAffordabilityAssessment.application_id.in_(
+                        application_ids
+                    )
+                )
+                .order_by(
+                    PlatformLoanAffordabilityAssessment.assessed_at.desc(),
+                    PlatformLoanAffordabilityAssessment.version.desc(),
+                )
+                .all()
+            )
+
+            for assessment in assessment_rows:
+                assessments_by_application.setdefault(
+                    assessment.application_id,
+                    assessment,
+                )
+
         applications = []
 
         for application, customer_email, product_name, currency_code in rows:
@@ -410,6 +456,65 @@ def list_owner_platform_applications():
                     if application.reviewed_by else None
                 ),
             })
+
+            details = details_by_application.get(application.id)
+            if details:
+                item["applicant"] = {
+                    "full_name": details.full_name,
+                    "phone": details.phone,
+                    "email": details.email,
+                    "residential_address": details.residential_address,
+                    "employment_status": details.employment_status,
+                    "employer_business_name": details.employer_business_name,
+                    "monthly_income_minor": details.monthly_income_minor,
+                    "monthly_expenses_minor": details.monthly_expenses_minor,
+                    "existing_monthly_repayments_minor": (
+                        details.existing_monthly_repayments_minor
+                    ),
+                    "explanation": details.explanation,
+                    "alternative_contact": {
+                        "name": details.alternative_contact_name,
+                        "phone": details.alternative_contact_phone,
+                        "relationship": (
+                            details.alternative_contact_relationship
+                        ),
+                    } if details.alternative_contact_name else None,
+                    "additional_notes": details.additional_notes,
+                    "affordability_consent": details.affordability_consent,
+                    "affordability_consent_at": (
+                        details.affordability_consent_at.isoformat()
+                        if details.affordability_consent_at else None
+                    ),
+                }
+            else:
+                item["applicant"] = None
+
+            assessment = assessments_by_application.get(application.id)
+            if assessment:
+                item["affordability_assessment"] = {
+                    "id": str(assessment.id),
+                    "version": assessment.version,
+                    "status": assessment.status,
+                    "source_workspace_id": (
+                        str(assessment.source_workspace_id)
+                        if assessment.source_workspace_id else None
+                    ),
+                    "evidence_window_months": (
+                        assessment.evidence_window_months
+                    ),
+                    "recommended_monthly_instalment_minor": (
+                        assessment.recommended_monthly_instalment_minor
+                    ),
+                    "estimated_affordable_principal_minor": (
+                        assessment.estimated_affordable_principal_minor
+                    ),
+                    "report": assessment.report,
+                    "reasons": assessment.reasons,
+                    "assessed_at": assessment.assessed_at.isoformat(),
+                }
+            else:
+                item["affordability_assessment"] = None
+
             applications.append(item)
 
         return jsonify({
@@ -565,6 +670,7 @@ def create_owner_platform_loan(application_id):
                 "interest_method": loan.interest_method,
                 "interest_rate_percent": str(loan.interest_rate_percent),
                 "repayment_frequency": loan.repayment_frequency,
+                "one_time_due_days": loan.one_time_due_days,
                 "term_count": loan.term_count,
                 "start_date": (
                     loan.start_date.isoformat() if loan.start_date else None
@@ -1288,6 +1394,7 @@ def list_owner_platform_loans():
                 "interest_method": loan.interest_method,
                 "interest_rate_percent": str(loan.interest_rate_percent),
                 "repayment_frequency": loan.repayment_frequency,
+                "one_time_due_days": loan.one_time_due_days,
                 "term_count": loan.term_count,
                 "start_date": (
                     loan.start_date.isoformat() if loan.start_date else None
@@ -1409,6 +1516,7 @@ def get_owner_platform_loan(loan_id):
             "interest_method": loan.interest_method,
             "interest_rate_percent": str(loan.interest_rate_percent),
             "repayment_frequency": loan.repayment_frequency,
+            "one_time_due_days": loan.one_time_due_days,
             "term_count": loan.term_count,
             "start_date": (
                 loan.start_date.isoformat() if loan.start_date else None
@@ -1652,6 +1760,15 @@ def disburse_owner_platform_loan(loan_id):
             "message": "A valid JSON request body is required.",
         }), 400
 
+    if "one_time_due_date" in data:
+        return jsonify({
+            "success": False,
+            "message": (
+                "Manual one-time due dates are no longer accepted. "
+                "The loan product maturity period determines the due date."
+            ),
+        }), 400
+
     try:
         account_id = UUID(str(data.get("financial_account_id", "")))
         customer_account_id = UUID(
@@ -1667,14 +1784,6 @@ def disburse_owner_platform_loan(loan_id):
         disbursement_date = datetime.fromisoformat(
             raw_disbursement_date.replace("Z", "+00:00")
         )
-
-        raw_due_date = data.get("one_time_due_date")
-        one_time_due_date = None
-
-        if raw_due_date is not None:
-            if not isinstance(raw_due_date, str):
-                raise ValueError("One-time due date must use YYYY-MM-DD.")
-            one_time_due_date = date.fromisoformat(raw_due_date)
 
     except (ValueError, TypeError, OverflowError):
         return jsonify({
@@ -1693,7 +1802,6 @@ def disburse_owner_platform_loan(loan_id):
             disbursement_date=disbursement_date,
             recorded_by=owner_id,
             notes=data.get("notes"),
-            one_time_due_date=one_time_due_date,
         )
 
         if disbursement is None:
@@ -2162,6 +2270,7 @@ def list_customer_platform_loans():
             "interest_method": loan.interest_method,
             "interest_rate_percent": str(loan.interest_rate_percent),
             "repayment_frequency": loan.repayment_frequency,
+            "one_time_due_days": loan.one_time_due_days,
             "term_count": loan.term_count,
             "start_date": loan.start_date.isoformat() if loan.start_date else None,
             "due_date": loan.due_date.isoformat() if loan.due_date else None,
@@ -2268,6 +2377,7 @@ def get_customer_platform_loan(loan_id):
                 "interest_method": loan.interest_method,
                 "interest_rate_percent": str(loan.interest_rate_percent),
                 "repayment_frequency": loan.repayment_frequency,
+                "one_time_due_days": loan.one_time_due_days,
                 "term_count": loan.term_count,
                 "start_date": loan.start_date.isoformat() if loan.start_date else None,
                 "due_date": loan.due_date.isoformat() if loan.due_date else None,
@@ -2466,6 +2576,7 @@ def _owner_product_response(product):
         "interest_method": product.interest_method,
         "interest_rate_percent": str(product.interest_rate_percent),
         "repayment_frequency": product.repayment_frequency,
+        "one_time_due_days": product.one_time_due_days,
         "min_term_count": product.min_term_count,
         "max_term_count": product.max_term_count,
         "origination_fee_minor": product.origination_fee_minor,
@@ -2485,7 +2596,8 @@ def _validate_owner_product_payload(data, existing=None):
         "name", "code", "description", "currency_code",
         "min_principal_minor", "max_principal_minor",
         "interest_method", "interest_rate_percent",
-        "repayment_frequency", "min_term_count", "max_term_count",
+        "repayment_frequency", "one_time_due_days",
+        "min_term_count", "max_term_count",
         "origination_fee_minor", "late_payment_fee_minor",
         "allow_early_repayment", "is_active",
     }
@@ -2506,6 +2618,7 @@ def _validate_owner_product_payload(data, existing=None):
     values = {}
     defaults = {
         "description": None,
+        "one_time_due_days": None,
         "origination_fee_minor": 0,
         "late_payment_fee_minor": 0,
         "allow_early_repayment": True,
@@ -2586,6 +2699,32 @@ def _validate_owner_product_payload(data, existing=None):
         "weekly", "biweekly", "monthly", "quarterly", "one_time"
     }:
         raise ValueError("Invalid repayment frequency.")
+
+    maturity_days = values.get("one_time_due_days")
+    if values["repayment_frequency"] == "one_time":
+        if (
+            values["min_term_count"] != 1
+            or values["max_term_count"] != 1
+        ):
+            raise ValueError(
+                "One-time products must have exactly one installment."
+            )
+        if maturity_days is not None and (
+            type(maturity_days) is not int or maturity_days <= 0
+        ):
+            raise ValueError(
+                "One-time maturity period must be a positive whole number of days."
+            )
+        if values.get("is_active") and maturity_days is None:
+            raise ValueError(
+                "An active one-time product requires a maturity period in days."
+            )
+    else:
+        if maturity_days is not None:
+            raise ValueError(
+                "Maturity period in days is only valid for one-time products."
+            )
+        values["one_time_due_days"] = None
 
     for field in ("allow_early_repayment", "is_active"):
         if type(values.get(field)) is not bool:
@@ -3163,6 +3302,7 @@ def list_customer_platform_loan_products():
                         product.interest_rate_percent
                     ),
                     "repayment_frequency": product.repayment_frequency,
+                    "one_time_due_days": product.one_time_due_days,
                     "min_term_count": product.min_term_count,
                     "max_term_count": product.max_term_count,
                     "origination_fee_minor": product.origination_fee_minor,
@@ -3187,6 +3327,8 @@ def list_customer_platform_loan_products():
 @platform_bp.post("/applications")
 @jwt_required()
 def submit_platform_application():
+    """Submit declarations and an advisory affordability assessment atomically."""
+
     customer_id = _customer_id()
 
     if customer_id is None:
@@ -3203,6 +3345,13 @@ def submit_platform_application():
             "message": "A valid JSON object is required.",
         }), 400
 
+    # Never accept an application containing an unencrypted identity number.
+    if not current_app.config.get("IDENTITY_ENCRYPTION_KEY"):
+        return jsonify({
+            "success": False,
+            "message": "Secure identity storage is not configured. Please try again later.",
+        }), 503
+
     try:
         product_id = UUID(str(data.get("product_id")))
     except (ValueError, TypeError, AttributeError):
@@ -3211,23 +3360,153 @@ def submit_platform_application():
             "message": "A valid product ID is required.",
         }), 400
 
-    principal = data.get("requested_principal_minor")
-    term_count = data.get("term_count")
-    purpose = data.get("purpose")
+    product = PlatformLoanProduct.query.filter_by(
+        id=product_id,
+        is_active=True,
+    ).first()
 
-    if type(principal) is not int or principal <= 0:
+    if product is None:
         return jsonify({
             "success": False,
-            "message": "Requested principal must be a positive whole number in minor units.",
+            "message": "The selected loan product is unavailable.",
         }), 400
 
-    if type(term_count) is not int or term_count <= 0:
-        return jsonify({
-            "success": False,
-            "message": "Term count must be a positive integer.",
-        }), 400
+    def required_text(field, label, maximum):
+        value = data.get(field)
+        if not isinstance(value, str):
+            raise ValueError(f"{label} is required.")
+        value = value.strip()
+        if not value:
+            raise ValueError(f"{label} is required.")
+        if len(value) > maximum:
+            raise ValueError(f"{label} must not exceed {maximum} characters.")
+        return value
+
+    def optional_text(field, label, maximum):
+        value = data.get(field)
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be text.")
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) > maximum:
+            raise ValueError(f"{label} must not exceed {maximum} characters.")
+        return value
+
+    def required_minor(field, label):
+        value = data.get(field)
+        if type(value) is not int or value < 0:
+            raise ValueError(
+                f"{label} must be a non-negative whole number in minor units."
+            )
+        return value
 
     try:
+        principal = data.get("requested_principal_minor")
+        term_count = data.get("term_count")
+
+        if type(principal) is not int or principal <= 0:
+            raise ValueError(
+                "Requested principal must be a positive whole number in minor units."
+            )
+        if type(term_count) is not int or term_count <= 0:
+            raise ValueError("Repayment term must be a positive integer.")
+
+        purpose = required_text("purpose", "Loan purpose", 500)
+        full_name = required_text("full_name", "Full name", 150)
+        national_id = required_text("national_id", "National ID number", 100)
+        phone = required_text("phone", "Phone number", 30)
+        residential_address = required_text(
+            "residential_address", "Residential address", 500
+        )
+
+        email = optional_text("email", "Email address", 255)
+        if email and ("@" not in email or email.startswith("@") or email.endswith("@")):
+            raise ValueError("Enter a valid email address.")
+
+        employment_status = required_text(
+            "employment_status", "Employment status", 30
+        ).lower()
+
+        allowed_employment = {
+            "employed", "self_employed", "unemployed",
+            "student", "retired", "other",
+        }
+        if employment_status not in allowed_employment:
+            raise ValueError("Select a valid employment status.")
+
+        employer_name = optional_text(
+            "employer_business_name", "Employer or business name", 200
+        )
+        if employment_status in {"employed", "self_employed"} and not employer_name:
+            raise ValueError(
+                "Employer or business name is required for this employment status."
+            )
+
+        monthly_income = required_minor(
+            "monthly_income_minor", "Monthly income"
+        )
+        monthly_expenses = required_minor(
+            "monthly_expenses_minor", "Monthly expenses"
+        )
+        existing_repayments = data.get(
+            "existing_monthly_repayments_minor", 0
+        )
+        if type(existing_repayments) is not int or existing_repayments < 0:
+            raise ValueError(
+                "Existing monthly repayments must be a non-negative whole number in minor units."
+            )
+
+        explanation = optional_text(
+            "explanation", "Additional explanation", 5000
+        )
+        alternative_name = optional_text(
+            "alternative_contact_name", "Alternative contact name", 150
+        )
+        alternative_phone = optional_text(
+            "alternative_contact_phone", "Alternative contact phone", 30
+        )
+        alternative_relationship = optional_text(
+            "alternative_contact_relationship",
+            "Alternative contact relationship",
+            80,
+        )
+
+        alternative_values = (
+            alternative_name,
+            alternative_phone,
+            alternative_relationship,
+        )
+        if any(alternative_values) and not all(alternative_values):
+            raise ValueError(
+                "Provide the alternative contact's name, phone number and relationship, or leave all three blank."
+            )
+
+        additional_notes = optional_text(
+            "additional_notes", "Additional notes", 5000
+        )
+
+        consent = data.get("affordability_consent", False)
+        if type(consent) is not bool:
+            raise ValueError("Affordability consent must be true or false.")
+
+        workspace_id = None
+        if consent:
+            try:
+                workspace_id = UUID(str(data.get("affordability_workspace_id")))
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError(
+                    "Select the personal workspace you want to share."
+                ) from None
+        elif data.get("affordability_workspace_id") not in (None, ""):
+            raise ValueError(
+                "A workspace cannot be selected without your consent."
+            )
+
+        encrypted_national_id = encrypt_national_id(national_id)
+
         application = submit_loan_application(
             customer_id=customer_id,
             product_id=product_id,
@@ -3236,20 +3515,137 @@ def submit_platform_application():
             purpose=purpose,
         )
 
+        details = PlatformLoanApplicationDetails(
+            application_id=application.id,
+            customer_id=customer_id,
+            full_name=full_name,
+            national_id_encrypted=encrypted_national_id,
+            phone=phone,
+            email=email,
+            residential_address=residential_address,
+            employment_status=employment_status,
+            employer_business_name=employer_name,
+            monthly_income_minor=monthly_income,
+            monthly_expenses_minor=monthly_expenses,
+            existing_monthly_repayments_minor=existing_repayments,
+            explanation=explanation,
+            alternative_contact_name=alternative_name,
+            alternative_contact_phone=alternative_phone,
+            alternative_contact_relationship=alternative_relationship,
+            additional_notes=additional_notes,
+            affordability_consent=consent,
+            affordability_workspace_id=workspace_id,
+            affordability_consent_at=utc_now() if consent else None,
+        )
+        db.session.add(details)
+        db.session.flush()
+
+        evidence_report = build_affordability_evidence_report(
+            customer_id=customer_id,
+            declared_monthly_income_minor=monthly_income,
+            declared_monthly_expenses_minor=monthly_expenses,
+            declared_existing_monthly_repayments_minor=existing_repayments,
+            consent=consent,
+            workspace_id=workspace_id,
+        )
+
+        assessment_date = date.today()
+        maturity_date = _platform_loan_due_date(
+            assessment_date,
+            product.repayment_frequency,
+            term_count,
+            product.one_time_due_days,
+        )
+
+        estimate = estimate_affordable_principal(
+            monthly_capacity_minor=(
+                evidence_report["capacity"][
+                    "recommended_monthly_instalment_minor"
+                ]
+            ),
+            maximum_principal_minor=product.max_principal_minor,
+            term_count=term_count,
+            start_date=assessment_date,
+            due_date=maturity_date,
+            repayment_frequency=product.repayment_frequency,
+            interest_method=product.interest_method,
+            interest_rate_percent=product.interest_rate_percent,
+        )
+
+        previous_version = (
+            db.session.query(
+                db.func.max(PlatformLoanAffordabilityAssessment.version)
+            )
+            .filter_by(application_id=application.id)
+            .scalar()
+            or 0
+        )
+
+        assessment = PlatformLoanAffordabilityAssessment(
+            application_id=application.id,
+            version=previous_version + 1,
+            status=evidence_report["status"],
+            source_workspace_id=workspace_id if consent else None,
+            evidence_window_months=6,
+            recommended_monthly_instalment_minor=(
+                evidence_report["capacity"][
+                    "recommended_monthly_instalment_minor"
+                ]
+            ),
+            estimated_affordable_principal_minor=(
+                estimate["estimated_affordable_principal_minor"]
+            ),
+            report={
+                **evidence_report,
+                "principal_estimate": {
+                    "estimated_affordable_principal_minor":
+                        estimate["estimated_affordable_principal_minor"],
+                    "maximum_scheduled_instalment_minor":
+                        estimate["maximum_scheduled_instalment_minor"],
+                },
+                "employment_status": employment_status,
+                "employer_business_name": employer_name,
+                "assessment_is_advisory": True,
+                "automatic_approval_or_rejection": False,
+            },
+            reasons=[
+                "This assessment is advisory and requires human review.",
+                "Declared income and expenses are not independently verified.",
+            ],
+        )
+        db.session.add(assessment)
         db.session.commit()
 
         return jsonify({
             "success": True,
             "message": "Loan application submitted successfully.",
             "application": _application_response(application),
+            "affordability_assessment": {
+                "status": assessment.status,
+                "version": assessment.version,
+                "recommended_monthly_instalment_minor":
+                    assessment.recommended_monthly_instalment_minor,
+                "estimated_affordable_principal_minor":
+                    assessment.estimated_affordable_principal_minor,
+            },
         }), 201
 
-    except PlatformLendingValidationError as exc:
+    except (ValueError, PlatformLendingValidationError) as exc:
         db.session.rollback()
         return jsonify({
             "success": False,
             "message": str(exc),
         }), 400
+
+    except RuntimeError:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Platform application identity encryption failed"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Secure identity storage is unavailable. Please try again later.",
+        }), 503
 
     except Exception:
         db.session.rollback()

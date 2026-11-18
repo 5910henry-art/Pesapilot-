@@ -78,6 +78,11 @@ class PlatformLoanProduct(db.Model):
         nullable=False,
     )
 
+    one_time_due_days: Mapped[int | None] = mapped_column(
+        db.Integer,
+        nullable=True,
+    )
+
     min_term_count: Mapped[int] = mapped_column(
         db.Integer,
         nullable=False,
@@ -160,6 +165,10 @@ class PlatformLoanProduct(db.Model):
             "repayment_frequency IN "
             "('weekly', 'biweekly', 'monthly', 'quarterly', 'one_time')",
             name="ck_platform_product_frequency",
+        ),
+        CheckConstraint(
+            "one_time_due_days IS NULL OR one_time_due_days > 0",
+            name="ck_platform_product_one_time_due_days",
         ),
         CheckConstraint(
             "min_term_count > 0 AND max_term_count >= min_term_count",

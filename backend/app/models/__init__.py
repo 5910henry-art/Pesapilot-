@@ -56,3 +56,8 @@ from .platform_investors import (
     PlatformLoanFundingRelease,
 )
 from .business import BusinessProfile
+
+from .platform_lending_assessments import (
+    PlatformLoanApplicationDetails,
+    PlatformLoanAffordabilityAssessment,
+)
