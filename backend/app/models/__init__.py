@@ -55,3 +55,4 @@ from .platform_investors import (
     PlatformLoanFundingAllocation,
     PlatformLoanFundingRelease,
 )
+from .business import BusinessProfile

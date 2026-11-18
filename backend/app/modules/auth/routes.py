@@ -17,6 +17,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
 from app.models import (
+    BusinessProfile,
     User,
     UserProfile,
     Workspace,
@@ -582,3 +583,222 @@ def get_current_user():
             for membership, workspace in memberships
         ],
     }), 200
+
+
+# BUSINESS WORKSPACE REGISTRATION
+# ---------------------------------------------------------
+
+@auth_bp.post("/workspaces/business")
+@jwt_required()
+def create_business_workspace():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    name = data.get("name")
+    business_type = data.get("business_type")
+    country = data.get("country")
+    currency_code = data.get("currency", "KES")
+
+    if not all(
+        isinstance(value, str)
+        for value in (name, business_type, country, currency_code)
+    ):
+        return jsonify({
+            "success": False,
+            "message": "Business name, type, country and currency must be strings.",
+        }), 400
+
+    name = name.strip()
+    business_type = business_type.strip()
+    country = country.strip()
+    currency_code = currency_code.strip().upper()
+
+    if not name or len(name) > 150:
+        return jsonify({
+            "success": False,
+            "message": "Business name is required and must not exceed 150 characters.",
+        }), 400
+
+    if not business_type or len(business_type) > 80:
+        return jsonify({
+            "success": False,
+            "message": "Business type is required and must not exceed 80 characters.",
+        }), 400
+
+    if not country or len(country) > 100:
+        return jsonify({
+            "success": False,
+            "message": "Country is required and must not exceed 100 characters.",
+        }), 400
+
+    if len(currency_code) != 3 or not currency_code.isalpha():
+        return jsonify({
+            "success": False,
+            "message": "Please provide a valid three-letter currency code.",
+        }), 400
+
+    optional_fields = {
+        "registration_number": 100,
+        "business_phone": 30,
+        "business_email": 255,
+        "address": 255,
+    }
+    optional_values = {}
+
+    for field, max_length in optional_fields.items():
+        value = data.get(field)
+
+        if value is not None and not isinstance(value, str):
+            return jsonify({
+                "success": False,
+                "message": f"{field.replace('_', ' ').capitalize()} must be a string.",
+            }), 400
+
+        value = value.strip() if isinstance(value, str) else None
+
+        if value == "":
+            value = None
+
+        if value is not None and len(value) > max_length:
+            return jsonify({
+                "success": False,
+                "message": f"{field.replace('_', ' ').capitalize()} must not exceed {max_length} characters.",
+            }), 400
+
+        optional_values[field] = value
+
+    if optional_values["business_email"]:
+        try:
+            optional_values["business_email"] = validate_email(
+                optional_values["business_email"],
+                check_deliverability=False,
+            ).normalized
+        except EmailNotValidError:
+            return jsonify({
+                "success": False,
+                "message": "Please provide a valid business email address.",
+            }), 400
+
+    currency = db.session.get(Currency, currency_code)
+
+    if currency is None or not currency.is_active:
+        return jsonify({
+            "success": False,
+            "message": "The selected currency is unavailable.",
+        }), 400
+
+    try:
+        user_id = UUID(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    user = db.session.get(User, user_id)
+
+    if user is None or not user.is_active:
+        return jsonify({
+            "success": False,
+            "message": "Account is unavailable.",
+        }), 403
+
+    try:
+        workspace = Workspace(
+            name=name,
+            workspace_type="business",
+            functional_currency=currency_code,
+        )
+        db.session.add(workspace)
+        db.session.flush()
+
+        business_profile = BusinessProfile(
+            workspace_id=workspace.id,
+            business_type=business_type,
+            country=country,
+            **optional_values,
+        )
+
+        membership = WorkspaceMember(
+            workspace_id=workspace.id,
+            user_id=user.id,
+            role="owner",
+        )
+
+        ledger_accounts = [
+            LedgerAccount(
+                workspace_id=workspace.id,
+                code=code,
+                name=account_name,
+                account_class=account_class,
+                normal_balance=normal_balance,
+                currency_code=currency_code,
+                is_system=True,
+                is_active=True,
+            )
+            for code, account_name, account_class, normal_balance
+            in DEFAULT_LEDGER_ACCOUNTS
+        ]
+
+        audit = AuditLog(
+            workspace_id=workspace.id,
+            user_id=user.id,
+            action="business_workspace_created",
+            resource_type="workspace",
+            resource_id=str(workspace.id),
+            details={
+                "business_type": business_type,
+                "country": country,
+                "currency": currency_code,
+            },
+            ip_address=request.remote_addr,
+        )
+
+        db.session.add_all([
+            business_profile,
+            membership,
+            *ledger_accounts,
+            audit,
+        ])
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Business workspace created successfully.",
+            "workspace": {
+                "id": str(workspace.id),
+                "name": workspace.name,
+                "type": workspace.workspace_type,
+                "currency": workspace.functional_currency,
+                "role": membership.role,
+                "joined_at": membership.joined_at.isoformat(),
+                "business_profile": {
+                    "business_type": business_profile.business_type,
+                    "country": business_profile.country,
+                    "registration_number": business_profile.registration_number,
+                    "business_phone": business_profile.business_phone,
+                    "business_email": business_profile.business_email,
+                    "address": business_profile.address,
+                },
+            },
+        }), 201
+
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": "The business workspace could not be created because of a conflicting record.",
+        }), 409
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Business workspace creation failed")
+        return jsonify({
+            "success": False,
+            "message": "Business workspace could not be created. Please try again.",
+        }), 500

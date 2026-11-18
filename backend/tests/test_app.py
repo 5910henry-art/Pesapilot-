@@ -10,6 +10,7 @@ from app import create_app
 from app.extensions import db
 from app.models.loan_repayments import LoanPaymentAllocation
 from app.models import (
+    BusinessProfile,
     Currency,
     AuditLog,
     User,
@@ -238,6 +239,142 @@ class PesaPilotTestCase(unittest.TestCase):
     def tearDown(self):
         db.session.rollback()
         db.session.remove()
+
+    def test_business_workspace_registration_creates_complete_workspace(self):
+        payload = {
+            "name": "Acme Traders",
+            "business_type": "Retail",
+            "country": "Kenya",
+            "currency": "KES",
+            "registration_number": "PVT-12345",
+            "business_phone": "+254712345678",
+            "business_email": "accounts@acme.example",
+            "address": "Nairobi",
+            "user_id": str(uuid4()),
+        }
+
+        response = self.client.post(
+            "/api/v1/auth/workspaces/business",
+            headers=self.headers,
+            json=payload,
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+
+        workspace_data = response.json["workspace"]
+        workspace_id = UUID(workspace_data["id"])
+
+        self.assertEqual(workspace_data["name"], "Acme Traders")
+        self.assertEqual(workspace_data["type"], "business")
+        self.assertEqual(workspace_data["currency"], "KES")
+        self.assertEqual(workspace_data["role"], "owner")
+
+        workspace = db.session.get(Workspace, workspace_id)
+        self.assertIsNotNone(workspace)
+        self.assertEqual(workspace.workspace_type, "business")
+
+        profile = db.session.get(BusinessProfile, workspace_id)
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.business_type, "Retail")
+        self.assertEqual(profile.country, "Kenya")
+        self.assertEqual(profile.registration_number, "PVT-12345")
+        self.assertEqual(profile.business_phone, "+254712345678")
+        self.assertEqual(profile.business_email, "accounts@acme.example")
+        self.assertEqual(profile.address, "Nairobi")
+
+        membership = WorkspaceMember.query.filter_by(
+            workspace_id=workspace_id
+        ).one()
+        self.assertEqual(membership.user_id, self.user.id)
+        self.assertEqual(membership.role, "owner")
+
+        ledger_count = LedgerAccount.query.filter_by(
+            workspace_id=workspace_id
+        ).count()
+        self.assertEqual(ledger_count, 10)
+
+        audit = AuditLog.query.filter_by(
+            workspace_id=workspace_id,
+            action="business_workspace_created",
+        ).one()
+        self.assertEqual(audit.user_id, self.user.id)
+
+        current_user = self.client.get(
+            "/api/v1/auth/me",
+            headers=self.headers,
+        )
+        self.assertEqual(current_user.status_code, 200)
+        workspace_ids = {
+            item["id"] for item in current_user.json["workspaces"]
+        }
+        self.assertIn(str(self.workspace.id), workspace_ids)
+        self.assertIn(str(workspace_id), workspace_ids)
+
+    def test_business_workspace_registration_allows_multiple_workspaces(self):
+        for name in ("First Business", "Second Business"):
+            response = self.client.post(
+                "/api/v1/auth/workspaces/business",
+                headers=self.headers,
+                json={
+                    "name": name,
+                    "business_type": "Retail",
+                    "country": "Kenya",
+                },
+            )
+            self.assertEqual(response.status_code, 201, response.json)
+
+        business_count = (
+            db.session.query(WorkspaceMember)
+            .join(Workspace, Workspace.id == WorkspaceMember.workspace_id)
+            .filter(
+                WorkspaceMember.user_id == self.user.id,
+                Workspace.workspace_type == "business",
+            )
+            .count()
+        )
+        self.assertEqual(business_count, 2)
+
+    def test_business_workspace_registration_rejects_invalid_payloads(self):
+        valid_payload = {
+            "name": "Valid Business",
+            "business_type": "Retail",
+            "country": "Kenya",
+            "currency": "KES",
+        }
+
+        invalid_payloads = [
+            {"name": ""},
+            {"name": 123},
+            {"business_type": ""},
+            {"country": ""},
+            {"currency": "INVALID"},
+            {"business_email": "not-an-email"},
+            {"business_phone": 12345},
+            {"registration_number": "X" * 101},
+        ]
+
+        for invalid_fields in invalid_payloads:
+            with self.subTest(invalid_fields=invalid_fields):
+                payload = {**valid_payload, **invalid_fields}
+                response = self.client.post(
+                    "/api/v1/auth/workspaces/business",
+                    headers=self.headers,
+                    json=payload,
+                )
+                self.assertEqual(response.status_code, 400, response.json)
+
+    def test_business_workspace_registration_requires_authentication(self):
+        response = self.client.post(
+            "/api/v1/auth/workspaces/business",
+            json={
+                "name": "Unauthorized Business",
+                "business_type": "Retail",
+                "country": "Kenya",
+            },
+        )
+        self.assertEqual(response.status_code, 401)
+
 
     def create_personal_loan(self, **overrides):
         start = date.today()

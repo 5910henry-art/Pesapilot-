@@ -163,6 +163,13 @@ export const authApi = {
     return apiRequest("/auth/me");
   },
 
+  createBusinessWorkspace(payload) {
+    return apiRequest("/auth/workspaces/business", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
   async logout() {
     const refreshToken = getRefreshToken();
 
