@@ -136,6 +136,12 @@ class LoanPayment(db.Model):
     payment_method: Mapped[str] = mapped_column(
         String(20), default="other", nullable=False
     )
+    payment_source: Mapped[str] = mapped_column(
+        String(20),
+        default="registered",
+        server_default="registered",
+        nullable=False,
+    )
     reference: Mapped[str | None] = mapped_column(
         String(120), nullable=True
     )
@@ -197,12 +203,18 @@ class LoanPayment(db.Model):
             name="ck_loan_payment_method",
         ),
         CheckConstraint(
+            "payment_source IN ('registered', 'external')",
+            name="ck_loan_payment_source",
+        ),
+        CheckConstraint(
             "status IN ('pending', 'confirmed', 'failed', 'reversed')",
             name="ck_loan_payment_status",
         ),
         CheckConstraint(
             "status != 'confirmed' OR "
-            "(financial_account_id IS NOT NULL AND journal_entry_id IS NOT NULL)",
+            "(journal_entry_id IS NOT NULL AND "
+            "((payment_source = 'registered' AND financial_account_id IS NOT NULL) "
+            "OR (payment_source = 'external' AND financial_account_id IS NULL)))",
             name="ck_loan_payment_confirmed_accounting",
         ),
         Index(

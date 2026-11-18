@@ -5171,6 +5171,33 @@ class PesaPilotTestCase(unittest.TestCase):
         category = self.create_category("Food")
         category_id = category.json["category"]["id"]
 
+        # This test checks budget overspending, not insufficient account funds.
+        extra = create_draft_entry(
+            workspace_id=self.workspace.id,
+            created_by=self.user.id,
+            reference=f"TEST-BUDGET-FUND-{uuid4().hex[:12]}",
+            description="Additional test funding",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {
+                    "ledger_account_id": self.source_ledger.id,
+                    "debit_minor": 50000,
+                    "credit_minor": 0,
+                },
+                {
+                    "ledger_account_id": self.equity_ledger.id,
+                    "debit_minor": 0,
+                    "credit_minor": 50000,
+                },
+            ],
+        )
+        post_entry(
+            entry_id=extra.id,
+            workspace_id=self.workspace.id,
+            posted_by=self.user.id,
+        )
+        db.session.commit()
+
         created = self.create_budget(category_id, amount=100000)
         self.assertEqual(created.status_code, 201, created.json)
 
@@ -6932,6 +6959,7 @@ class PesaPilotTestCase(unittest.TestCase):
             interest_minor=0,
             payment_date=today,
             payment_method="mobile_money",
+            reference="TEST-LOAN-PAYMENT-001",
             status="pending",
             recorded_by=self.user.id,
         )
@@ -7029,6 +7057,125 @@ class PesaPilotTestCase(unittest.TestCase):
 
         self.assertEqual(amounts[receivable.id], (0, 9000))
         self.assertEqual(amounts[income.id], (0, 1000))
+
+    def test_external_borrowed_repayment_does_not_debit_registered_account(self):
+        loan, installment, payment = self.create_repayment_case("borrowed")
+        payment.payment_source = "external"
+        db.session.commit()
+
+        starting_balance = self.source_balance_minor()
+
+        confirmed = confirm_loan_payment(
+            payment_id=payment.id,
+            workspace_id=self.workspace.id,
+            confirmed_by=self.user.id,
+            financial_account_id=None,
+        )
+        db.session.commit()
+
+        self.assertEqual(confirmed.status, "confirmed")
+        self.assertIsNone(confirmed.financial_account_id)
+        self.assertEqual(self.source_balance_minor(), starting_balance)
+
+        clearing = LedgerAccount.query.filter_by(
+            workspace_id=self.workspace.id,
+            code="LN-EXT-PAY-CLEARING-KES",
+        ).one()
+
+        clearing_line = JournalLine.query.filter_by(
+            journal_entry_id=confirmed.journal_entry_id,
+            ledger_account_id=clearing.id,
+        ).one()
+
+        self.assertEqual(clearing_line.functional_credit_minor, 10000)
+
+    def test_external_lent_loan_receipt_does_not_credit_registered_account(self):
+        loan, installment, payment = self.create_repayment_case("lent")
+        payment.payment_source = "external"
+        db.session.commit()
+
+        starting_balance = self.source_balance_minor()
+
+        confirmed = confirm_loan_payment(
+            payment_id=payment.id,
+            workspace_id=self.workspace.id,
+            confirmed_by=self.user.id,
+            financial_account_id=None,
+        )
+        db.session.commit()
+
+        self.assertEqual(confirmed.status, "confirmed")
+        self.assertIsNone(confirmed.financial_account_id)
+        self.assertEqual(self.source_balance_minor(), starting_balance)
+
+        clearing = LedgerAccount.query.filter_by(
+            workspace_id=self.workspace.id,
+            code="LN-EXT-REC-CLEARING-KES",
+        ).one()
+
+        clearing_line = JournalLine.query.filter_by(
+            journal_entry_id=confirmed.journal_entry_id,
+            ledger_account_id=clearing.id,
+        ).one()
+
+        self.assertEqual(clearing_line.functional_debit_minor, 10000)
+
+    def test_borrowed_repayment_rejects_insufficient_registered_funds(self):
+        loan, installment, payment = self.create_repayment_case("borrowed")
+
+        opening_line = JournalLine.query.filter_by(
+            ledger_account_id=self.source_ledger.id
+        ).one()
+
+        equity_line = JournalLine.query.filter_by(
+            journal_entry_id=opening_line.journal_entry_id,
+            ledger_account_id=self.equity_ledger.id,
+        ).one()
+
+        # Keep the opening journal balanced at KES 50.00.
+        opening_line.debit_minor = 5000
+        opening_line.functional_debit_minor = 5000
+        equity_line.credit_minor = 5000
+        equity_line.functional_credit_minor = 5000
+        db.session.commit()
+
+        with self.assertRaisesRegex(ValueError, "Insufficient funds"):
+            confirm_loan_payment(
+                payment_id=payment.id,
+                workspace_id=self.workspace.id,
+                confirmed_by=self.user.id,
+                financial_account_id=self.source_account.id,
+            )
+
+        db.session.rollback()
+        db.session.refresh(payment)
+        db.session.refresh(installment)
+
+        self.assertEqual(payment.status, "pending")
+        self.assertIsNone(payment.journal_entry_id)
+        self.assertEqual(installment.paid_minor, 0)
+        self.assertEqual(self.source_balance_minor(), 5000)
+
+    def test_registered_cash_account_can_be_used_for_mobile_money_payment(self):
+        loan, installment, payment = self.create_repayment_case("borrowed")
+
+        # Payment method and registered account type are independent.
+        self.source_account.account_type = "cash"
+        payment.payment_method = "mobile_money"
+        db.session.commit()
+
+        confirmed = confirm_loan_payment(
+            payment_id=payment.id,
+            workspace_id=self.workspace.id,
+            confirmed_by=self.user.id,
+            financial_account_id=self.source_account.id,
+        )
+        db.session.commit()
+
+        self.assertEqual(confirmed.status, "confirmed")
+        self.assertEqual(confirmed.payment_method, "mobile_money")
+        self.assertEqual(self.source_balance_minor(), 90000)
+
 
     def test_partial_repayment_allocates_interest_before_principal(self):
         installment = SimpleNamespace(

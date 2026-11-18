@@ -1247,11 +1247,22 @@ def record_personal_loan_payment(loan_id):
     if payment_method not in {"cash", "bank", "mobile_money", "other"}:
         return jsonify({"success": False, "message": "Invalid payment method."}), 400
 
+    payment_source = data.get("payment_source", "registered")
+    if payment_source not in {"registered", "external"}:
+        return jsonify({"success": False, "message": "Invalid payment source."}), 400
+
     reference = data.get("reference")
     notes = data.get("notes")
 
-    if reference is not None and (not isinstance(reference, str) or len(reference.strip()) > 120):
-        return jsonify({"success": False, "message": "Payment reference must not exceed 120 characters."}), 400
+    if (
+        not isinstance(reference, str)
+        or not reference.strip()
+        or len(reference.strip()) > 120
+    ):
+        return jsonify({
+            "success": False,
+            "message": "A payment reference is required and must not exceed 120 characters.",
+        }), 400
 
     if notes is not None and (not isinstance(notes, str) or len(notes.strip()) > 2000):
         return jsonify({"success": False, "message": "Payment notes must not exceed 2000 characters."}), 400
@@ -1286,7 +1297,8 @@ def record_personal_loan_payment(loan_id):
             interest_minor=0,
             payment_date=payment_date,
             payment_method=payment_method,
-            reference=reference.strip() if reference else None,
+            payment_source=payment_source,
+            reference=reference.strip(),
             status="pending",
             recorded_by=user_id,
             notes=notes.strip() if notes else None,
@@ -1307,6 +1319,8 @@ def record_personal_loan_payment(loan_id):
                 "currency": loan.currency_code,
                 "payment_date": payment_date.isoformat(),
                 "payment_method": payment_method,
+                "payment_source": payment_source,
+                "reference": reference.strip(),
             },
             ip_address=request.remote_addr,
         ))
@@ -1321,6 +1335,7 @@ def record_personal_loan_payment(loan_id):
                 "amount_minor": payment.amount_minor,
                 "payment_date": payment.payment_date.isoformat(),
                 "payment_method": payment.payment_method,
+                "payment_source": payment.payment_source,
                 "reference": payment.reference,
                 "status": payment.status,
                 "notes": payment.notes,
@@ -1398,11 +1413,22 @@ def update_pending_loan_payment(loan_id, payment_id):
     if payment_method not in {"cash", "bank", "mobile_money", "other"}:
         return jsonify({"success": False, "message": "Invalid payment method."}), 400
 
+    payment_source = data.get("payment_source", payment.payment_source)
+    if payment_source not in {"registered", "external"}:
+        return jsonify({"success": False, "message": "Invalid payment source."}), 400
+
     reference = data.get("reference")
     notes = data.get("notes")
 
-    if reference is not None and (not isinstance(reference, str) or len(reference.strip()) > 120):
-        return jsonify({"success": False, "message": "Payment reference must not exceed 120 characters."}), 400
+    if (
+        not isinstance(reference, str)
+        or not reference.strip()
+        or len(reference.strip()) > 120
+    ):
+        return jsonify({
+            "success": False,
+            "message": "A payment reference is required and must not exceed 120 characters.",
+        }), 400
 
     if notes is not None and (not isinstance(notes, str) or len(notes.strip()) > 2000):
         return jsonify({"success": False, "message": "Payment notes must not exceed 2000 characters."}), 400
@@ -1433,6 +1459,7 @@ def update_pending_loan_payment(loan_id, payment_id):
             "amount_minor": payment.amount_minor,
             "payment_date": payment.payment_date.isoformat(),
             "payment_method": payment.payment_method,
+            "payment_source": payment.payment_source,
             "reference": payment.reference,
             "notes": payment.notes,
         }
@@ -1442,7 +1469,8 @@ def update_pending_loan_payment(loan_id, payment_id):
         payment.interest_minor = 0
         payment.payment_date = payment_date
         payment.payment_method = payment_method
-        payment.reference = reference.strip() if reference and reference.strip() else None
+        payment.payment_source = payment_source
+        payment.reference = reference.strip()
         payment.notes = notes.strip() if notes and notes.strip() else None
 
         db.session.add(AuditLog(
@@ -1458,6 +1486,7 @@ def update_pending_loan_payment(loan_id, payment_id):
                     "amount_minor": amount,
                     "payment_date": payment_date.isoformat(),
                     "payment_method": payment_method,
+                    "payment_source": payment_source,
                     "reference": payment.reference,
                     "notes": payment.notes,
                 },
@@ -1475,6 +1504,7 @@ def update_pending_loan_payment(loan_id, payment_id):
                 "amount_minor": payment.amount_minor,
                 "payment_date": payment.payment_date.isoformat(),
                 "payment_method": payment.payment_method,
+                "payment_source": payment.payment_source,
                 "reference": payment.reference,
                 "status": payment.status,
                 "notes": payment.notes,
@@ -1591,13 +1621,14 @@ def confirm_personal_loan_payment(loan_id, payment_id):
         return jsonify({"success": False, "message": "A valid JSON request is required."}), 400
 
     workspace_id = _workspace_id(data.get("workspace_id"))
-    financial_account_id = _workspace_id(data.get("financial_account_id"))
+    raw_account_id = data.get("financial_account_id")
+    financial_account_id = _workspace_id(raw_account_id)
     user_id = _user_id()
 
-    if workspace_id is None or financial_account_id is None:
+    if workspace_id is None:
         return jsonify({
             "success": False,
-            "message": "A valid workspace and financial account are required.",
+            "message": "A valid workspace ID is required.",
         }), 400
 
     membership = _membership(workspace_id, user_id)
@@ -1624,6 +1655,25 @@ def confirm_personal_loan_payment(loan_id, payment_id):
     if not payment:
         return jsonify({"success": False, "message": "Repayment not found for this loan."}), 404
 
+    if payment.payment_source == "registered":
+        if financial_account_id is None:
+            return jsonify({
+                "success": False,
+                "message": "Select a registered account for this repayment.",
+            }), 400
+    elif payment.payment_source == "external":
+        if raw_account_id not in (None, ""):
+            return jsonify({
+                "success": False,
+                "message": "External repayments must not use a registered account.",
+            }), 400
+        financial_account_id = None
+    else:
+        return jsonify({
+            "success": False,
+            "message": "The repayment has an invalid payment source.",
+        }), 400
+
     try:
         confirmed = confirm_loan_payment(
             payment_id=payment_id,
@@ -1636,10 +1686,14 @@ def confirm_personal_loan_payment(loan_id, payment_id):
 
         return jsonify({
             "success": True,
-            "message": "Repayment confirmed and account balances updated.",
+            "message": "Repayment confirmed and accounting updated.",
             "payment": {
                 "id": str(confirmed.id),
-                "financial_account_id": str(confirmed.financial_account_id),
+                "financial_account_id": (
+                    str(confirmed.financial_account_id)
+                    if confirmed.financial_account_id else None
+                ),
+                "payment_source": confirmed.payment_source,
                 "journal_entry_id": str(confirmed.journal_entry_id),
                 "amount_minor": confirmed.amount_minor,
                 "principal_minor": confirmed.principal_minor,
@@ -1787,6 +1841,7 @@ def get_personal_loan(loan_id):
                 "interest_minor": payment.interest_minor,
                 "payment_date": payment.payment_date.isoformat(),
                 "payment_method": payment.payment_method,
+                "payment_source": payment.payment_source,
                 "reference": payment.reference,
                 "status": payment.status,
                 "notes": payment.notes,

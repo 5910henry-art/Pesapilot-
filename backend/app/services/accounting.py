@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.extensions import db
 from app.models import (
@@ -318,6 +318,51 @@ def _lock_entry_ledger_accounts(workspace_id, lines):
     return accounts
 
 
+def _validate_nonnegative_account_balances(
+    workspace_id, lines, locked_accounts, direction=1
+):
+    """Prevent registered asset accounts from going below zero."""
+    for account in locked_accounts:
+        if (
+            account.financial_account_id is None
+            or account.account_class != "asset"
+            or account.normal_balance != "debit"
+        ):
+            continue
+
+        current_balance = db.session.execute(
+            select(func.coalesce(
+                func.sum(JournalLine.debit_minor - JournalLine.credit_minor),
+                0,
+            ))
+            .join(
+                JournalEntry,
+                JournalEntry.id == JournalLine.journal_entry_id,
+            )
+            .where(
+                JournalLine.ledger_account_id == account.id,
+                JournalLine.currency_code == account.currency_code,
+                JournalEntry.workspace_id == workspace_id,
+                JournalEntry.status == "posted",
+            )
+        ).scalar_one()
+
+        change = sum(
+            line.debit_minor - line.credit_minor
+            for line in lines
+            if (
+                line.ledger_account_id == account.id
+                and line.currency_code == account.currency_code
+            )
+        ) * direction
+
+        if current_balance + change < 0:
+            raise AccountingError(
+                f"Insufficient funds in account '{account.name}'. "
+                "This transaction would make its balance negative."
+            )
+
+
 def post_entry(*, entry_id: UUID, workspace_id: UUID, posted_by: UUID):
     """Validate and post a draft entry. Caller must commit."""
 
@@ -345,7 +390,10 @@ def post_entry(*, entry_id: UUID, workspace_id: UUID, posted_by: UUID):
             "At least two journal lines are required before posting."
         )
 
-    _lock_entry_ledger_accounts(workspace_id, lines)
+    locked_accounts = _lock_entry_ledger_accounts(workspace_id, lines)
+    _validate_nonnegative_account_balances(
+        workspace_id, lines, locked_accounts
+    )
 
     total_debits = sum(
         line.functional_debit_minor for line in lines
@@ -449,7 +497,12 @@ def reverse_entry(
             "Original transaction has insufficient journal lines."
         )
 
-    _lock_entry_ledger_accounts(workspace_id, original_lines)
+    locked_accounts = _lock_entry_ledger_accounts(
+        workspace_id, original_lines
+    )
+    _validate_nonnegative_account_balances(
+        workspace_id, original_lines, locked_accounts, direction=-1
+    )
 
     if description is None:
         reversal_description = (

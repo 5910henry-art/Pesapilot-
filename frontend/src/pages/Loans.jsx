@@ -158,6 +158,7 @@ export default function Loans() {
     amount: "",
     payment_date: todayLocal(),
     payment_method: "cash",
+    payment_source: "registered",
     reference: "",
     notes: "",
   });
@@ -169,6 +170,7 @@ export default function Loans() {
     amount: "",
     payment_date: todayLocal(),
     payment_method: "cash",
+    payment_source: "registered",
     reference: "",
     notes: "",
   });
@@ -463,6 +465,7 @@ export default function Loans() {
       amount: "",
       payment_date: todayLocal(),
       payment_method: "cash",
+      payment_source: "registered",
       reference: "",
       notes: "",
     });
@@ -486,7 +489,8 @@ export default function Loans() {
         amount_minor: amountMinor,
         payment_date: repaymentForm.payment_date,
         payment_method: repaymentForm.payment_method,
-        reference: repaymentForm.reference.trim() || null,
+        payment_source: repaymentForm.payment_source,
+        reference: repaymentForm.reference.trim(),
         notes: repaymentForm.notes.trim() || null,
       });
 
@@ -495,6 +499,7 @@ export default function Loans() {
         amount: "",
         payment_date: todayLocal(),
         payment_method: "cash",
+        payment_source: "registered",
         reference: "",
         notes: "",
       });
@@ -524,6 +529,7 @@ export default function Loans() {
       amount: amount.toFixed(digits),
       payment_date: payment.payment_date,
       payment_method: payment.payment_method,
+      payment_source: payment.payment_source || "registered",
       reference: payment.reference || "",
       notes: payment.notes || "",
     });
@@ -547,7 +553,8 @@ export default function Loans() {
         amount_minor: amountMinor,
         payment_date: paymentEditForm.payment_date,
         payment_method: paymentEditForm.payment_method,
-        reference: paymentEditForm.reference.trim() || null,
+        payment_source: paymentEditForm.payment_source,
+        reference: paymentEditForm.reference.trim(),
         notes: paymentEditForm.notes.trim() || null,
       });
 
@@ -603,31 +610,27 @@ export default function Loans() {
   }
 
   async function handleConfirmLoanPayment(loan, payment) {
-    const eligibleAccounts = paymentAccounts.filter((account) => (
-      account.is_active &&
-      account.currency === loan.currency_code &&
-      ["cash", "bank", "mobile_money"].includes(account.account_type) &&
-      (
-        payment.payment_method === "other" ||
-        account.account_type === payment.payment_method
+    const isExternal = payment.payment_source === "external";
+    let accountId = "";
+
+    if (!isExternal) {
+      const eligibleAccounts = paymentAccounts.filter((account) => (
+        account.is_active &&
+        account.currency === loan.currency_code &&
+        ["cash", "bank", "mobile_money"].includes(account.account_type)
+      ));
+
+      const savedAccountId = paymentAccountSelections[payment.id];
+      accountId = eligibleAccounts.some(
+        (account) => account.id === savedAccountId
       )
-    ));
+        ? savedAccountId
+        : eligibleAccounts[0]?.id || "";
 
-    const savedAccountId = paymentAccountSelections[payment.id];
-    const accountId = eligibleAccounts.some(
-      (account) => account.id === savedAccountId
-    )
-      ? savedAccountId
-      : eligibleAccounts[0]?.id || "";
-
-    if (!accountId) {
-      setError("No active matching account is available for this repayment.");
-      return;
-    }
-
-    if (!accountId) {
-      setError("Choose the account that received this repayment.");
-      return;
+      if (!accountId) {
+        setError("No active matching account is available for this repayment.");
+        return;
+      }
     }
 
     setConfirmingPayment(payment.id);
@@ -637,10 +640,10 @@ export default function Loans() {
     try {
       await loansApi.confirmPayment(loan.id, payment.id, {
         workspace_id: workspaceId,
-        financial_account_id: accountId,
+        ...(isExternal ? {} : { financial_account_id: accountId }),
       });
 
-      setNotice("Repayment confirmed and posted to your accounts.");
+      setNotice("Repayment confirmed and accounting updated.");
 
       try {
         const refreshed = await loansApi.getLoan(loan.id, workspaceId);
@@ -1214,11 +1217,7 @@ export default function Loans() {
                                 const eligibleAccounts = paymentAccounts.filter((account) => (
                                   account.is_active &&
                                   account.currency === loan.currency_code &&
-                                  ["cash", "bank", "mobile_money"].includes(account.account_type) &&
-                                  (
-                                    payment.payment_method === "other" ||
-                                    account.account_type === payment.payment_method
-                                  )
+                                  ["cash", "bank", "mobile_money"].includes(account.account_type)
                                 ));
 
                                 return (
@@ -1280,6 +1279,20 @@ export default function Loans() {
                                             </label>
 
                                             <label>
+                                              Payment source
+                                              <select
+                                                value={paymentEditForm.payment_source}
+                                                onChange={(event) => setPaymentEditForm((current) => ({
+                                                  ...current,
+                                                  payment_source: event.target.value,
+                                                }))}
+                                              >
+                                                <option value="registered">Registered PesaPilot account</option>
+                                                <option value="external">Other / external payment</option>
+                                              </select>
+                                            </label>
+
+                                            <label>
                                               Payment method
                                               <select
                                                 value={paymentEditForm.payment_method}
@@ -1296,8 +1309,10 @@ export default function Loans() {
                                             </label>
 
                                             <label>
-                                              Reference (optional)
+                                              Payment reference (required)
                                               <input
+                                                type="text"
+                                                required
                                                 maxLength={120}
                                                 value={paymentEditForm.reference}
                                                 onChange={(event) => setPaymentEditForm((current) => ({
@@ -1361,43 +1376,57 @@ export default function Loans() {
                                               </button>
                                             </div>
 
-                                            <label htmlFor={`payment-account-${payment.id}`}>
-                                              Received into
-                                            </label>
-                                            <select
-                                              id={`payment-account-${payment.id}`}
-                                              value={
-                                                eligibleAccounts.some(
-                                                  (account) => account.id === paymentAccountSelections[payment.id]
-                                                )
-                                                  ? paymentAccountSelections[payment.id]
-                                                  : eligibleAccounts[0]?.id || ""
-                                              }
-                                              onChange={(event) => setPaymentAccountSelections((current) => ({
-                                                ...current,
-                                                [payment.id]: event.target.value,
-                                              }))}
-                                            >
-                                              <option value="">Choose an account</option>
-                                              {eligibleAccounts.map((account) => (
-                                                <option key={account.id} value={account.id}>
-                                                  {account.name} ({account.account_type})
-                                                </option>
-                                              ))}
-                                            </select>
+                                            {payment.payment_source === "external" ? (
+                                              <p className="loans-muted">
+                                                External payment. No registered PesaPilot account will be used.
+                                              </p>
+                                            ) : (
+                                              <>
+                                                <label htmlFor={`payment-account-${payment.id}`}>
+                                                  {loan.direction === "borrowed" ? "Pay from" : "Receive into"}
+                                                </label>
+                                                <select
+                                                  id={`payment-account-${payment.id}`}
+                                                  value={
+                                                    eligibleAccounts.some(
+                                                      (account) => account.id === paymentAccountSelections[payment.id]
+                                                    )
+                                                      ? paymentAccountSelections[payment.id]
+                                                      : eligibleAccounts[0]?.id || ""
+                                                  }
+                                                  onChange={(event) => setPaymentAccountSelections((current) => ({
+                                                    ...current,
+                                                    [payment.id]: event.target.value,
+                                                  }))}
+                                                >
+                                                  <option value="">Choose an account</option>
+                                                  {eligibleAccounts.map((account) => (
+                                                    <option key={account.id} value={account.id}>
+                                                      {account.name} ({account.account_type})
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                                {!eligibleAccounts.length && (
+                                                  <small className="loans-muted">
+                                                    No active cash, bank or mobile-money account is available in this loan currency.
+                                                  </small>
+                                                )}
+                                              </>
+                                            )}
                                             <button
                                               type="button"
                                               className="loans-primary-button"
                                               onClick={() => handleConfirmLoanPayment(loan, payment)}
-                                              disabled={confirmingPayment === payment.id || !eligibleAccounts.length}
+                                              disabled={
+                                                confirmingPayment === payment.id ||
+                                                (
+                                                  payment.payment_source !== "external" &&
+                                                  !eligibleAccounts.length
+                                                )
+                                              }
                                             >
                                               {confirmingPayment === payment.id ? "Confirming..." : "Confirm repayment"}
                                             </button>
-                                            {!eligibleAccounts.length && (
-                                              <small className="loans-muted">
-                                                No active matching account. Add a {payment.payment_method === "other" ? "cash, bank or mobile money" : payment.payment_method} account in this currency first.
-                                              </small>
-                                            )}
                                           </>
                                         )}
                                       </div>
@@ -1457,6 +1486,19 @@ export default function Loans() {
                                     />
                                   </label>
                                   <label>
+                                    Payment source
+                                    <select
+                                      value={repaymentForm.payment_source}
+                                      onChange={(event) => setRepaymentForm((current) => ({
+                                        ...current,
+                                        payment_source: event.target.value,
+                                      }))}
+                                    >
+                                      <option value="registered">Registered PesaPilot account</option>
+                                      <option value="external">Other / external payment</option>
+                                    </select>
+                                  </label>
+                                  <label>
                                     Payment method
                                     <select
                                       value={repaymentForm.payment_method}
@@ -1468,13 +1510,13 @@ export default function Loans() {
                                       <option value="cash">Cash</option>
                                       <option value="bank">Bank</option>
                                       <option value="mobile_money">Mobile money</option>
-                                      <option value="other">Other</option>
                                     </select>
                                   </label>
                                   <label>
-                                    Reference (optional)
+                                    Payment reference (required)
                                     <input
                                       value={repaymentForm.reference}
+                                      required
                                       maxLength={120}
                                       onChange={(event) => setRepaymentForm((current) => ({
                                         ...current,

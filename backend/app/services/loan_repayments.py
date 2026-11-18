@@ -7,6 +7,7 @@ from app.extensions import db
 from app.models import (
     AuditLog,
     FinancialAccount,
+    ExchangeRate,
     JournalEntry,
     JournalLine,
     LedgerAccount,
@@ -120,7 +121,7 @@ def confirm_loan_payment(
     payment_id,
     workspace_id,
     confirmed_by,
-    financial_account_id,
+    financial_account_id=None,
 ):
     """
     Confirm a pending repayment and post its accounting entry.
@@ -180,61 +181,84 @@ def confirm_loan_payment(
     if workspace is None:
         raise ValueError("Workspace not found.")
 
-    account = db.session.execute(
-        select(FinancialAccount)
-        .where(
-            FinancialAccount.id == financial_account_id,
-            FinancialAccount.workspace_id == workspace_id,
-        )
-        .with_for_update()
-    ).scalar_one_or_none()
+    if loan.direction not in ("borrowed", "lent"):
+        raise ValueError("Invalid loan direction.")
 
-    if account is None or not account.is_active:
-        raise ValueError("An active financial account is required.")
+    if workspace.functional_currency == loan.currency_code:
+        fx_rate = None
+    else:
+        fx_rate = db.session.execute(
+            select(ExchangeRate.rate)
+            .where(
+                ExchangeRate.base_currency == loan.currency_code,
+                ExchangeRate.quote_currency == workspace.functional_currency,
+                ExchangeRate.effective_at <= datetime.combine(
+                    payment.payment_date,
+                    time.max,
+                    tzinfo=timezone.utc,
+                ),
+            )
+            .order_by(ExchangeRate.effective_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
 
-    if account.account_type not in ("cash", "bank", "mobile_money"):
-        raise ValueError(
-            "Repayments require a cash, bank, or mobile-money account."
-        )
+        if fx_rate is None:
+            raise ValueError(
+                "No exchange rate is configured from "
+                f"{loan.currency_code} to {workspace.functional_currency} "
+                "on or before the repayment date."
+            )
 
-    if (
-        payment.payment_method != "other"
-        and payment.payment_method != account.account_type
-    ):
-        raise ValueError(
-            "Payment method does not match the selected financial account."
-        )
+    if not isinstance(payment.reference, str) or not payment.reference.strip():
+        raise ValueError("A payment reference is required before confirmation.")
 
-    if not (
-        loan.currency_code
-        == account.currency_code
-        == workspace.functional_currency
-    ):
-        raise ValueError(
-            "Loan, payment account, and workspace currencies must match."
-        )
+    if payment.payment_method not in ("cash", "bank", "mobile_money", "other"):
+        raise ValueError("Invalid repayment method.")
 
-    cash_ledger = db.session.execute(
-        select(LedgerAccount)
-        .where(
-            LedgerAccount.workspace_id == workspace_id,
-            LedgerAccount.financial_account_id == account.id,
-            LedgerAccount.is_active.is_(True),
-        )
-        .with_for_update()
-    ).scalar_one_or_none()
+    if payment.payment_source == "registered":
+        if financial_account_id is None:
+            raise ValueError("Select a registered account for this repayment.")
 
-    if cash_ledger is None:
-        raise ValueError(
-            "The selected financial account has no active ledger account."
-        )
+        account = db.session.execute(
+            select(FinancialAccount)
+            .where(
+                FinancialAccount.id == financial_account_id,
+                FinancialAccount.workspace_id == workspace_id,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
 
-    if cash_ledger.currency_code != loan.currency_code:
-        raise ValueError("Financial account ledger currency mismatch.")
+        if account is None or not account.is_active:
+            raise ValueError("An active financial account is required.")
 
-    # A borrowed-loan repayment is money leaving this account.
-    # Check its real posted ledger balance before creating the journal.
-    if loan.direction == "borrowed":
+        if account.account_type not in ("cash", "bank", "mobile_money"):
+            raise ValueError(
+                "Repayments require a cash, bank, or mobile-money account."
+            )
+
+        if account.currency_code != loan.currency_code:
+            raise ValueError(
+                "The selected account currency must match the loan currency."
+            )
+
+        cash_ledger = db.session.execute(
+            select(LedgerAccount)
+            .where(
+                LedgerAccount.workspace_id == workspace_id,
+                LedgerAccount.financial_account_id == account.id,
+                LedgerAccount.is_active.is_(True),
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+
+        if cash_ledger is None:
+            raise ValueError(
+                "The selected financial account has no active ledger account."
+            )
+
+        if cash_ledger.currency_code != loan.currency_code:
+            raise ValueError("Financial account ledger currency mismatch.")
+
         if (
             cash_ledger.account_class != "asset"
             or cash_ledger.normal_balance != "debit"
@@ -243,35 +267,96 @@ def confirm_loan_payment(
                 "The selected account does not have a valid cash ledger."
             )
 
-        available_minor = db.session.execute(
-            select(
-                func.coalesce(
-                    func.sum(
-                        JournalLine.debit_minor
-                        - JournalLine.credit_minor
-                    ),
-                    0,
+        if loan.direction == "borrowed":
+            available_minor = db.session.execute(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            JournalLine.debit_minor
+                            - JournalLine.credit_minor
+                        ),
+                        0,
+                    )
                 )
-            )
-            .join(
-                JournalEntry,
-                JournalEntry.id == JournalLine.journal_entry_id,
-            )
-            .where(
-                JournalLine.ledger_account_id == cash_ledger.id,
-                JournalEntry.workspace_id == workspace_id,
-                JournalEntry.status.in_(("posted", "reversed")),
-            )
-        ).scalar_one()
+                .join(
+                    JournalEntry,
+                    JournalEntry.id == JournalLine.journal_entry_id,
+                )
+                .where(
+                    JournalLine.ledger_account_id == cash_ledger.id,
+                    JournalEntry.workspace_id == workspace_id,
+                    JournalEntry.status == "posted",
+                )
+            ).scalar_one()
 
-        available_minor = int(available_minor or 0)
+            available_minor = int(available_minor or 0)
 
-        if payment.amount_minor > available_minor:
+            if payment.amount_minor > available_minor:
+                raise ValueError(
+                    "Insufficient funds in the selected account. "
+                    f"Available: {available_minor} minor units; "
+                    f"required: {payment.amount_minor} minor units."
+                )
+
+    elif payment.payment_source == "external":
+        if financial_account_id is not None:
             raise ValueError(
-                "Insufficient funds in the selected account. "
-                f"Available: {available_minor} minor units; "
-                f"required: {payment.amount_minor} minor units."
+                "External repayments must not use a registered account."
             )
+
+        account = None
+
+        if loan.direction == "borrowed":
+            clearing_code = f"LN-EXT-PAY-CLEARING-{loan.currency_code}"
+            clearing_name = (
+                f"External Loan Repayment Clearing - {loan.currency_code}"
+            )
+        else:
+            clearing_code = f"LN-EXT-REC-CLEARING-{loan.currency_code}"
+            clearing_name = (
+                f"External Loan Receipt Clearing - {loan.currency_code}"
+            )
+
+        clearing_class = "asset"
+        clearing_balance = "debit"
+
+        cash_ledger = db.session.execute(
+            select(LedgerAccount)
+            .where(
+                LedgerAccount.workspace_id == workspace_id,
+                LedgerAccount.code == clearing_code,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+
+        if cash_ledger is None:
+            cash_ledger = LedgerAccount(
+                workspace_id=workspace_id,
+                financial_account_id=None,
+                code=clearing_code,
+                name=clearing_name,
+                account_class=clearing_class,
+                normal_balance=clearing_balance,
+                currency_code=loan.currency_code,
+                is_system=True,
+                is_active=True,
+            )
+            db.session.add(cash_ledger)
+            db.session.flush()
+        elif (
+            cash_ledger.financial_account_id is not None
+            or not cash_ledger.is_system
+            or not cash_ledger.is_active
+            or cash_ledger.account_class != clearing_class
+            or cash_ledger.normal_balance != clearing_balance
+            or cash_ledger.currency_code != loan.currency_code
+        ):
+            raise ValueError(
+                f"External clearing ledger {clearing_code} has invalid configuration."
+            )
+
+    else:
+        raise ValueError("Invalid repayment source.")
 
     installments = db.session.execute(
         select(LoanInstallment)
@@ -381,6 +466,7 @@ def confirm_loan_payment(
                 "ledger_account_id": str(ledger.id),
                 "debit_minor": debit,
                 "credit_minor": credit,
+                "exchange_rate": fx_rate,
                 "memo": "Personal loan repayment",
             })
 
@@ -467,7 +553,7 @@ def confirm_loan_payment(
 
     payment.principal_minor = principal_total
     payment.interest_minor = interest_total
-    payment.financial_account_id = account.id
+    payment.financial_account_id = account.id if account is not None else None
     payment.journal_entry_id = journal.id
     payment.status = "confirmed"
 
@@ -497,6 +583,10 @@ def confirm_loan_payment(
             "amount_minor": payment.amount_minor,
             "principal_minor": principal_total,
             "interest_minor": interest_total,
+            "payment_source": payment.payment_source,
+            "financial_account_id": (
+                str(account.id) if account is not None else None
+            ),
             "journal_entry_id": str(journal.id),
         },
     ))
