@@ -2605,6 +2605,39 @@ def create_owner_platform_financial_account():
             is_active=True,
         )
         db.session.add(ledger)
+
+        # Investor contributions and withdrawals use one shared liability
+        # ledger per currency, separate from individual cash accounts.
+        capital_code = f"PL-INVESTOR-CAPITAL-{currency_code}"
+        capital_ledger = PlatformLedgerAccount.query.filter_by(
+            code=capital_code
+        ).one_or_none()
+
+        if capital_ledger is None:
+            capital_ledger = PlatformLedgerAccount(
+                financial_account_id=None,
+                code=capital_code,
+                name="External Investor Capital",
+                account_class="liability",
+                normal_balance="credit",
+                currency_code=currency_code,
+                is_system=True,
+                is_active=True,
+            )
+            db.session.add(capital_ledger)
+        elif not (
+            capital_ledger.financial_account_id is None
+            and capital_ledger.currency_code == currency_code
+            and capital_ledger.account_class == "liability"
+            and capital_ledger.normal_balance == "credit"
+            and capital_ledger.is_system is True
+            and capital_ledger.is_active is True
+        ):
+            raise ValueError(
+                f"Investor-capital ledger {capital_code} exists "
+                "but is incorrectly configured."
+            )
+
         db.session.commit()
 
         return jsonify({

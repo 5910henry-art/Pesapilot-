@@ -2445,13 +2445,22 @@ class PesaPilotTestCase(unittest.TestCase):
         ))
         db.session.commit()
 
+        # Use a separate currency to verify automatic capital-ledger creation.
+        db.session.add(Currency(
+            code="USD",
+            name="US Dollar",
+            minor_unit=2,
+            is_active=True,
+        ))
+        db.session.commit()
+
         response = self.client.post(
             "/api/v1/platform/owner/financial-accounts",
             headers=self.headers,
             json={
                 "name": "PesaPilot Main Account",
                 "account_type": "bank",
-                "currency_code": "KES",
+                "currency_code": "USD",
                 "institution_name": "Test Bank",
                 "display_reference": "MAIN-001",
             },
@@ -2468,7 +2477,7 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertIsNotNone(account)
         self.assertEqual(account.name, "PesaPilot Main Account")
         self.assertEqual(account.account_type, "bank")
-        self.assertEqual(account.currency_code, "KES")
+        self.assertEqual(account.currency_code, "USD")
         self.assertTrue(account.is_active)
 
         ledger = PlatformLedgerAccount.query.filter_by(
@@ -2478,10 +2487,20 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(account_data["ledger_account_id"], str(ledger.id))
         self.assertEqual(ledger.account_class, "asset")
         self.assertEqual(ledger.normal_balance, "debit")
-        self.assertEqual(ledger.currency_code, "KES")
+        self.assertEqual(ledger.currency_code, "USD")
         self.assertFalse(ledger.is_system)
         self.assertTrue(ledger.is_active)
         self.assertTrue(ledger.code.startswith("PL-BANK-"))
+
+        capital_ledger = PlatformLedgerAccount.query.filter_by(
+            code="PL-INVESTOR-CAPITAL-USD"
+        ).one()
+        self.assertIsNone(capital_ledger.financial_account_id)
+        self.assertEqual(capital_ledger.account_class, "liability")
+        self.assertEqual(capital_ledger.normal_balance, "credit")
+        self.assertEqual(capital_ledger.currency_code, "USD")
+        self.assertTrue(capital_ledger.is_system)
+        self.assertTrue(capital_ledger.is_active)
 
         listed = self.client.get(
             "/api/v1/platform/owner/financial-accounts",
