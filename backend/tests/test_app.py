@@ -437,7 +437,7 @@ class PesaPilotTestCase(unittest.TestCase):
         )
         self.platform_interest_income_ledger = (
             PlatformLedgerAccount.query.filter_by(
-                code="PL-LOANS-INTEREST-INCOME",
+                code="PL-LOANS-INTEREST-INCOME-KES",
                 currency_code="KES",
             ).one_or_none()
         )
@@ -445,7 +445,7 @@ class PesaPilotTestCase(unittest.TestCase):
         if self.platform_interest_income_ledger is None:
             self.platform_interest_income_ledger = PlatformLedgerAccount(
                 financial_account_id=None,
-                code="PL-LOANS-INTEREST-INCOME",
+                code="PL-LOANS-INTEREST-INCOME-KES",
                 name="Platform Loans Interest Income",
                 account_class="income",
                 normal_balance="credit",
@@ -456,7 +456,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
         self.platform_receivable_ledger = (
             PlatformLedgerAccount.query.filter_by(
-                code="PL-LOANS-RECEIVABLE",
+                code="PL-LOANS-RECEIVABLE-KES",
                 currency_code="KES",
             ).one_or_none()
         )
@@ -464,7 +464,7 @@ class PesaPilotTestCase(unittest.TestCase):
         if self.platform_receivable_ledger is None:
             self.platform_receivable_ledger = PlatformLedgerAccount(
                 financial_account_id=None,
-                code="PL-LOANS-RECEIVABLE",
+                code="PL-LOANS-RECEIVABLE-KES",
                 name="Platform Loans Receivable",
                 account_class="asset",
                 normal_balance="debit",

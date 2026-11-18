@@ -679,7 +679,7 @@ def disburse_platform_loan(
     receivable_ledger = db.session.execute(
         select(PlatformLedgerAccount)
         .where(
-            PlatformLedgerAccount.code == "PL-LOANS-RECEIVABLE",
+            PlatformLedgerAccount.code == f"PL-LOANS-RECEIVABLE-{loan.currency_code}",
             PlatformLedgerAccount.financial_account_id.is_(None),
             PlatformLedgerAccount.currency_code == loan.currency_code,
             PlatformLedgerAccount.account_class == "asset",
@@ -692,8 +692,8 @@ def disburse_platform_loan(
 
     if receivable_ledger is None:
         raise PlatformLendingValidationError(
-            "The active PL-LOANS-RECEIVABLE system ledger is not configured "
-            "for the loan currency."
+            f"The active PL-LOANS-RECEIVABLE-{loan.currency_code} system ledger "
+            "is not configured for the loan currency."
         )
 
     final_principal = loan.principal_minor + amount_minor
@@ -1532,7 +1532,7 @@ def confirm_platform_loan_payment(
     receivable_ledger = db.session.execute(
         select(PlatformLedgerAccount)
         .where(
-            PlatformLedgerAccount.code == "PL-LOANS-RECEIVABLE",
+            PlatformLedgerAccount.code == f"PL-LOANS-RECEIVABLE-{loan.currency_code}",
             PlatformLedgerAccount.financial_account_id.is_(None),
             PlatformLedgerAccount.currency_code == loan.currency_code,
             PlatformLedgerAccount.account_class == "asset",
@@ -1545,14 +1545,14 @@ def confirm_platform_loan_payment(
 
     if receivable_ledger is None:
         raise PlatformLendingValidationError(
-            "The active PL-LOANS-RECEIVABLE system ledger is not configured "
-            "for the loan currency."
+            f"The active PL-LOANS-RECEIVABLE-{loan.currency_code} system ledger "
+            "is not configured for the loan currency."
         )
 
     interest_ledger = db.session.execute(
         select(PlatformLedgerAccount)
         .where(
-            PlatformLedgerAccount.code == "PL-LOANS-INTEREST-INCOME",
+            PlatformLedgerAccount.code == f"PL-LOANS-INTEREST-INCOME-{loan.currency_code}",
             PlatformLedgerAccount.financial_account_id.is_(None),
             PlatformLedgerAccount.currency_code == loan.currency_code,
             PlatformLedgerAccount.account_class == "income",
@@ -1565,8 +1565,8 @@ def confirm_platform_loan_payment(
 
     if interest_ledger is None:
         raise PlatformLendingValidationError(
-            "The active PL-LOANS-INTEREST-INCOME system ledger is not "
-            "configured for the loan currency."
+            f"The active PL-LOANS-INTEREST-INCOME-{loan.currency_code} system "
+            "ledger is not configured for the loan currency."
         )
 
     installments = db.session.execute(
