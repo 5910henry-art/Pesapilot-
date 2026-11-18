@@ -18,12 +18,29 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [workspaces, setWorkspaces] = useState([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const applyUserData = useCallback((data) => {
     setUser(data.user);
     setProfile(data.profile);
-    setWorkspaces(data.workspaces || []);
+    const availableWorkspaces = data.workspaces || [];
+    setWorkspaces(availableWorkspaces);
+
+    const storageKey = `pesapilot.activeWorkspace.${data.user.id}`;
+    const savedWorkspaceId = localStorage.getItem(storageKey);
+    const selectedWorkspace = availableWorkspaces.find(
+      (workspace) => workspace.id === savedWorkspaceId
+    );
+
+    const nextWorkspace = selectedWorkspace || availableWorkspaces[0] || null;
+    setSelectedWorkspaceId(nextWorkspace?.id || null);
+
+    if (nextWorkspace) {
+      localStorage.setItem(storageKey, nextWorkspace.id);
+    } else {
+      localStorage.removeItem(storageKey);
+    }
   }, []);
 
   const loadCurrentUser = useCallback(async () => {
@@ -55,6 +72,7 @@ export function AuthProvider({ children }) {
           setUser(null);
           setProfile(null);
           setWorkspaces([]);
+          setSelectedWorkspaceId(null);
         }
       } finally {
         if (mounted) setLoading(false);
@@ -92,14 +110,38 @@ export function AuthProvider({ children }) {
       setUser(null);
       setProfile(null);
       setWorkspaces([]);
+      setSelectedWorkspaceId(null);
     }
   }, []);
+
+  const activeWorkspace =
+    workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ||
+    workspaces[0] ||
+    null;
+
+  const setActiveWorkspace = useCallback((workspaceId) => {
+    const selected = workspaces.find(
+      (workspace) => workspace.id === workspaceId
+    );
+
+    if (!selected) return;
+
+    setSelectedWorkspaceId(selected.id);
+
+    if (user?.id) {
+      localStorage.setItem(
+        `pesapilot.activeWorkspace.${user.id}`,
+        selected.id
+      );
+    }
+  }, [workspaces, user?.id]);
 
   const value = {
     user,
     profile,
     workspaces,
-    activeWorkspace: workspaces[0] || null,
+    activeWorkspace,
+    setActiveWorkspace,
     loading,
     isAuthenticated: Boolean(user),
     login,

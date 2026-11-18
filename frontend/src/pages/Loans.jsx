@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   HandCoins,
@@ -130,6 +130,7 @@ export default function Loans() {
     "KES";
 
   const [loans, setLoans] = useState([]);
+  const workspaceRequestRef = useRef(0);
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -179,9 +180,12 @@ export default function Loans() {
 
 
   const loadLoans = useCallback(async (quiet = false) => {
+    const requestId = ++workspaceRequestRef.current;
+
     if (!workspaceId) {
       setLoans([]);
       setLoading(false);
+      setRefreshing(false);
       return;
     }
 
@@ -192,18 +196,34 @@ export default function Loans() {
 
     try {
       const data = await loansApi.listLoans(workspaceId);
-      setLoans(data.loans || []);
+
+      if (requestId === workspaceRequestRef.current) {
+        setLoans(data.loans || []);
+      }
     } catch (err) {
-      setError(err.message || "Loans could not be loaded.");
+      if (requestId === workspaceRequestRef.current) {
+        setError(err.message || "Loans could not be loaded.");
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (requestId === workspaceRequestRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [workspaceId]);
 
   useEffect(() => {
+    setLoans([]);
+    setLoanDetails({});
+    setExpandedLoan(null);
+    setLoadingDetails(null);
+    setError("");
+    setNotice("");
+
     loadLoans();
   }, [loadLoans]);
+
+
 
   const visibleLoans = useMemo(() => {
     if (filter === "all") return loans;

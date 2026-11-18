@@ -26,7 +26,16 @@ export default function DashboardLayout() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [isPlatformOwner, setIsPlatformOwner] = useState(false);
   const [ownerCheckComplete, setOwnerCheckComplete] = useState(false);
-  const { user, profile, activeWorkspace, logout, loading, isAuthenticated } = useAuth();
+  const {
+    user,
+    profile,
+    workspaces,
+    activeWorkspace,
+    setActiveWorkspace,
+    logout,
+    loading,
+    isAuthenticated,
+  } = useAuth();
 
   useEffect(() => {
     let active = true;
@@ -126,8 +135,21 @@ export default function DashboardLayout() {
             <span>
               {activeWorkspace?.currency || profile?.preferred_currency || "KES"}
               {" · "}
-              {activeWorkspace?.type || "Personal"}
+              {activeWorkspace?.type === "business" ? "Business" : "Personal"}
             </span>
+            <select
+              className="workspace-select"
+              aria-label="Switch workspace"
+              value={activeWorkspace?.id || ""}
+              onChange={(event) => setActiveWorkspace(event.target.value)}
+              disabled={workspaces.length < 2}
+            >
+              {workspaces.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>
+                  {workspace.name} ({workspace.type === "business" ? "Business" : "Personal"})
+                </option>
+              ))}
+            </select>
           </div>
           <ChevronDown size={16} />
         </div>
