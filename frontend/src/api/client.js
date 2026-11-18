@@ -527,6 +527,17 @@ export const platformOwnerApi = {
     return apiRequest("/platform/owner/reports/portfolio");
   },
 
+  getAccountingSettings() {
+    return apiRequest("/platform/owner/accounting-settings");
+  },
+
+  updateAccountingSettings(payload) {
+    return apiRequest("/platform/owner/accounting-settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
   listFinancialAccounts(currencyCode = "") {
     const params = new URLSearchParams();
     if (currencyCode) params.set("currency_code", currencyCode);

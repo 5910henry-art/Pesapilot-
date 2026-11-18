@@ -2380,6 +2380,165 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+    def test_platform_owner_can_configure_functional_currency(self):
+        # The test database is shared across methods; reset this singleton
+        # so this test can verify the unconfigured state.
+        existing_settings = db.session.get(
+            PlatformAccountingSettings, 1
+        )
+        if existing_settings is not None:
+            db.session.delete(existing_settings)
+            db.session.commit()
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        before = self.client.get(
+            "/api/v1/platform/owner/accounting-settings",
+            headers=self.headers,
+        )
+        self.assertEqual(before.status_code, 200, before.json)
+        self.assertFalse(before.json["configured"])
+        self.assertIsNone(before.json["functional_currency"])
+
+        saved = self.client.put(
+            "/api/v1/platform/owner/accounting-settings",
+            headers=self.headers,
+            json={"functional_currency_code": "kes"},
+        )
+        self.assertEqual(saved.status_code, 200, saved.json)
+        self.assertTrue(saved.json["success"])
+        self.assertEqual(
+            saved.json["functional_currency"]["code"], "KES"
+        )
+
+        settings = db.session.get(PlatformAccountingSettings, 1)
+        self.assertIsNotNone(settings)
+        self.assertEqual(settings.functional_currency_code, "KES")
+        self.assertEqual(settings.updated_by, self.user.id)
+
+        after = self.client.get(
+            "/api/v1/platform/owner/accounting-settings",
+            headers=self.headers,
+        )
+        self.assertEqual(after.status_code, 200, after.json)
+        self.assertTrue(after.json["configured"])
+        self.assertEqual(
+            after.json["functional_currency"]["code"], "KES"
+        )
+
+    def test_platform_accounting_settings_reject_invalid_currency(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.add(Currency(
+            code="QXZ",
+            name="Inactive Test Currency",
+            minor_unit=2,
+            is_active=False,
+        ))
+        db.session.commit()
+
+        existing_settings = db.session.get(
+            PlatformAccountingSettings, 1
+        )
+        existing_currency = (
+            existing_settings.functional_currency_code
+            if existing_settings else None
+        )
+
+        for code in ("ZZZ", "QXZ", "KE"):
+            response = self.client.put(
+                "/api/v1/platform/owner/accounting-settings",
+                headers=self.headers,
+                json={"functional_currency_code": code},
+            )
+            self.assertEqual(response.status_code, 400, response.json)
+
+        current_settings = db.session.get(
+            PlatformAccountingSettings, 1
+        )
+        if existing_currency is None:
+            self.assertIsNone(current_settings)
+        else:
+            self.assertIsNotNone(current_settings)
+            self.assertEqual(
+                current_settings.functional_currency_code,
+                existing_currency,
+            )
+
+    def test_platform_accounting_settings_require_owner_access(self):
+        url = "/api/v1/platform/owner/accounting-settings"
+
+        for method in ("get", "put"):
+            unauthenticated = getattr(self.client, method)(url)
+            self.assertEqual(unauthenticated.status_code, 401)
+
+            non_owner = getattr(self.client, method)(
+                url,
+                headers=self.headers,
+                json={"functional_currency_code": "KES"},
+            ) if method == "put" else getattr(self.client, method)(
+                url,
+                headers=self.headers,
+            )
+            self.assertEqual(non_owner.status_code, 403)
+
+    def test_platform_functional_currency_is_locked_after_journal_history(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.add(Currency(
+            code="USD",
+            name="US Dollar",
+            minor_unit=2,
+            is_active=True,
+        ))
+        settings = db.session.get(PlatformAccountingSettings, 1)
+        if settings is None:
+            settings = PlatformAccountingSettings(
+                id=1,
+                functional_currency_code="KES",
+                updated_by=self.user.id,
+            )
+            db.session.add(settings)
+        else:
+            settings.functional_currency_code = "KES"
+            settings.updated_by = self.user.id
+
+        db.session.flush()
+
+        db.session.add(PlatformJournalEntry(
+            reference=f"PL-SETTINGS-LOCK-{uuid4().hex}",
+            description="Journal history for currency lock test",
+            transaction_date=datetime.now(timezone.utc),
+            functional_currency_code="KES",
+            created_by=self.user.id,
+        ))
+        db.session.commit()
+
+        response = self.client.put(
+            "/api/v1/platform/owner/accounting-settings",
+            headers=self.headers,
+            json={"functional_currency_code": "USD"},
+        )
+
+        self.assertEqual(response.status_code, 409, response.json)
+        self.assertEqual(
+            db.session.get(
+                PlatformAccountingSettings, 1
+            ).functional_currency_code,
+            "KES",
+        )
+
     def test_platform_owner_can_list_active_financial_accounts(self):
         db.session.add(PlatformAdmin(
             user_id=self.user.id,
@@ -2446,12 +2605,16 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.commit()
 
         # Use a separate currency to verify automatic capital-ledger creation.
-        db.session.add(Currency(
-            code="USD",
-            name="US Dollar",
-            minor_unit=2,
-            is_active=True,
-        ))
+        usd_currency = db.session.get(Currency, "USD")
+        if usd_currency is None:
+            db.session.add(Currency(
+                code="USD",
+                name="US Dollar",
+                minor_unit=2,
+                is_active=True,
+            ))
+        else:
+            usd_currency.is_active = True
         db.session.commit()
 
         response = self.client.post(

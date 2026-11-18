@@ -24,6 +24,8 @@ from app.models import (
     PlatformLoanFundingAllocation,
     PlatformFinancialAccount,
     PlatformLedgerAccount,
+    PlatformJournalEntry,
+    PlatformAccountingSettings,
 )
 from app.models.core import (
     Currency, User, utc_now, Workspace, WorkspaceMember, FinancialAccount
@@ -2496,6 +2498,132 @@ def _validate_owner_product_payload(data, existing=None):
 
     return values
 
+
+
+
+@platform_bp.get("/owner/accounting-settings")
+@platform_owner_required()
+def get_owner_accounting_settings():
+    """Return the platform's functional currency configuration."""
+
+    settings = db.session.get(PlatformAccountingSettings, 1)
+    currency = (
+        db.session.get(Currency, settings.functional_currency_code)
+        if settings else None
+    )
+
+    return jsonify({
+        "success": True,
+        "configured": bool(settings and currency and currency.is_active),
+        "functional_currency": (
+            {
+                "code": currency.code,
+                "name": currency.name,
+                "minor_unit": currency.minor_unit,
+            }
+            if settings and currency and currency.is_active else None
+        ),
+        "currencies": [
+            {
+                "code": item.code,
+                "name": item.name,
+                "minor_unit": item.minor_unit,
+            }
+            for item in Currency.query.filter_by(is_active=True)
+            .order_by(Currency.code.asc()).all()
+        ],
+    }), 200
+
+
+@platform_bp.put("/owner/accounting-settings")
+@platform_owner_required()
+def update_owner_accounting_settings():
+    """Set the platform's functional currency."""
+
+    owner_id = _customer_id()
+    if owner_id is None:
+        return jsonify({
+            "success": False,
+            "message": "A valid owner identity is required.",
+        }), 401
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON request body is required.",
+        }), 400
+
+    currency_code = data.get("functional_currency_code")
+    if not isinstance(currency_code, str):
+        return jsonify({
+            "success": False,
+            "message": "A valid functional currency code is required.",
+        }), 400
+
+    currency_code = currency_code.strip().upper()
+    if len(currency_code) != 3:
+        return jsonify({
+            "success": False,
+            "message": "Currency code must contain three letters.",
+        }), 400
+
+    try:
+        currency = db.session.get(Currency, currency_code)
+        if currency is None or not currency.is_active:
+            return jsonify({
+                "success": False,
+                "message": "The selected currency is unavailable.",
+            }), 400
+
+        settings = db.session.get(
+            PlatformAccountingSettings, 1
+        )
+
+        if settings is None:
+            settings = PlatformAccountingSettings(
+                id=1,
+                functional_currency_code=currency_code,
+                updated_by=owner_id,
+            )
+            db.session.add(settings)
+        else:
+            if (
+                settings.functional_currency_code != currency_code
+                and PlatformJournalEntry.query.limit(1).first() is not None
+            ):
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "The functional currency cannot be changed after "
+                        "platform journal entries have been created."
+                    ),
+                }), 409
+
+            settings.functional_currency_code = currency_code
+            settings.updated_by = owner_id
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Platform accounting settings saved.",
+            "functional_currency": {
+                "code": currency.code,
+                "name": currency.name,
+                "minor_unit": currency.minor_unit,
+            },
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Platform accounting settings update failed"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Platform accounting settings could not be saved.",
+        }), 500
 
 @platform_bp.post("/owner/financial-accounts")
 @platform_owner_required()
