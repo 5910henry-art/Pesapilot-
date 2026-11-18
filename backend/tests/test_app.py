@@ -55,6 +55,7 @@ from app.services.platform_lending import (
     disburse_platform_loan,
     record_platform_loan_payment,
     confirm_platform_loan_payment,
+    reject_platform_loan_payment,
     reverse_platform_loan_payment,
     record_platform_investor_contribution,
     record_platform_investor_withdrawal,
@@ -3924,6 +3925,108 @@ class PesaPilotTestCase(unittest.TestCase):
             0,
         )
 
+
+    def test_platform_owner_can_reject_pending_platform_loan_repayment(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        installments = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(PlatformLoanInstallment.installment_number).all()
+
+        original_outstanding = loan.outstanding_principal_minor
+        original_paid = [item.paid_minor for item in installments]
+        original_journal_count = PlatformJournalEntry.query.count()
+
+        payment = record_platform_loan_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"OWNER-REJECT-{uuid4().hex[:12]}",
+        )
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/collections/payments/{payment.id}/reject",
+            headers=self.headers,
+            json={"reason": "Test repayment report; no funds received."},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+
+        payment_data = response.json["payment"]
+        self.assertEqual(payment_data["id"], str(payment.id))
+        self.assertEqual(payment_data["loan_id"], str(loan.id))
+        self.assertEqual(payment_data["status"], "rejected")
+        self.assertEqual(
+            payment_data["rejected_by"],
+            str(self.user.id),
+        )
+        self.assertIsNotNone(payment_data["rejected_at"])
+        self.assertEqual(
+            payment_data["rejection_reason"],
+            "Test repayment report; no funds received.",
+        )
+
+        db.session.refresh(payment)
+        db.session.refresh(loan)
+
+        self.assertEqual(payment.status, "rejected")
+        self.assertEqual(payment.rejected_by, self.user.id)
+        self.assertIsNotNone(payment.rejected_at)
+        self.assertEqual(
+            payment.rejection_reason,
+            "Test repayment report; no funds received.",
+        )
+
+        self.assertIsNone(payment.financial_account_id)
+        self.assertIsNone(payment.journal_entry_id)
+        self.assertIsNone(payment.confirmed_by)
+        self.assertIsNone(payment.confirmed_at)
+        self.assertEqual(payment.principal_minor, 0)
+        self.assertEqual(payment.interest_minor, 0)
+
+        self.assertEqual(
+            loan.outstanding_principal_minor,
+            original_outstanding,
+        )
+
+        for installment in installments:
+            db.session.refresh(installment)
+
+        self.assertEqual(
+            [item.paid_minor for item in installments],
+            original_paid,
+        )
+
+        self.assertEqual(
+            PlatformLoanPaymentAllocation.query.filter_by(
+                payment_id=payment.id
+            ).count(),
+            0,
+        )
+        self.assertEqual(
+            PlatformJournalEntry.query.count(),
+            original_journal_count,
+        )
+
+    def test_customer_cannot_reject_platform_loan_repayment(self):
+        response = self.client.post(
+            f"/api/v1/platform/owner/collections/payments/{uuid4()}/reject",
+            headers=self.headers,
+            json={"reason": "Test rejection"},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
 
     def test_platform_owner_can_confirm_platform_loan_repayment(self):
         loan, account = self.create_funded_platform_loan_for_repayment()

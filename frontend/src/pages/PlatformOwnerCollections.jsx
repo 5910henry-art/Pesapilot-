@@ -35,6 +35,7 @@ function Notice({ type, children, onClose }) {
 function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
   const [accountId, setAccountId] = useState("");
   const [reference, setReference] = useState("");
+  const [reason, setReason] = useState("");
 
   const availableAccounts = accounts.filter(
     (account) => account.currency_code === payment.currency_code
@@ -47,6 +48,11 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
       if (!accountId) return;
       await onSubmit(payment.id, {
         financial_account_id: accountId,
+      });
+    } else if (mode === "reject") {
+      if (!reason.trim()) return;
+      await onSubmit(payment.id, {
+        reason: reason.trim(),
       });
     } else {
       if (!reference.trim()) return;
@@ -72,7 +78,11 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
         <div className="platform-owner-modal-header">
           <div>
             <h2 id="collection-action-title">
-              {mode === "confirm" ? "Confirm repayment" : "Reverse repayment"}
+              {mode === "confirm"
+                ? "Confirm repayment"
+                : mode === "reject"
+                  ? "Reject repayment report"
+                  : "Reverse repayment"}
             </h2>
             <p>{payment.customer_email}</p>
           </div>
@@ -128,6 +138,21 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
                 <small>No eligible receiving account was found for this currency.</small>
               )}
             </label>
+          ) : mode === "reject" ? (
+            <label>
+              Rejection reason
+              <textarea
+                required
+                maxLength={500}
+                rows={4}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="Explain why this reported repayment is being rejected"
+              />
+              <small>
+                This rejects the report only. No money or loan balance will be changed.
+              </small>
+            </label>
           ) : (
             <label>
               Reversal reference
@@ -156,13 +181,14 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
               disabled={
                 saving ||
                 (mode === "confirm" && availableAccounts.length === 0) ||
+                (mode === "reject" && !reason.trim()) ||
                 (mode === "reverse" && !reference.trim())
               }
             >
               {saving
                 ? "Processing..."
-                : mode === "confirm"
-                  ? "Confirm repayment"
+                : mode === "reject"
+                  ? "Reject reported repayment"
                   : "Reverse repayment"}
             </button>
           </div>
@@ -220,6 +246,9 @@ export default function PlatformOwnerCollections() {
       if (selected.mode === "confirm") {
         await platformOwnerApi.confirmPayment(paymentId, payload);
         setNotice("Repayment confirmed and posted successfully.");
+      } else if (selected.mode === "reject") {
+        await platformOwnerApi.rejectPayment(paymentId, payload);
+        setNotice("Reported repayment rejected. No accounting entry was created.");
       } else {
         await platformOwnerApi.reversePayment(paymentId, payload);
         setNotice("Repayment reversed successfully.");
@@ -327,13 +356,22 @@ export default function PlatformOwnerCollections() {
                     <td>{payment.payment_method || "—"}</td>
                     <td>{payment.reference || "—"}</td>
                     <td>
-                      <button
-                        type="button"
-                        className="platform-owner-button primary"
-                        onClick={() => setSelected({ payment, mode: "confirm" })}
-                      >
-                        <CheckCircle size={14} /> Confirm
-                      </button>
+                      <div className="platform-owner-inline-actions">
+                        <button
+                          type="button"
+                          className="platform-owner-button primary"
+                          onClick={() => setSelected({ payment, mode: "confirm" })}
+                        >
+                          <CheckCircle size={14} /> Confirm
+                        </button>
+                        <button
+                          type="button"
+                          className="platform-owner-button secondary"
+                          onClick={() => setSelected({ payment, mode: "reject" })}
+                        >
+                          <X size={14} /> Reject
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

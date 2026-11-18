@@ -650,6 +650,13 @@ export const platformOwnerApi = {
     );
   },
 
+  rejectPayment(paymentId, payload) {
+    return apiRequest(
+      `/platform/owner/collections/payments/${encodeURIComponent(paymentId)}/reject`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
   reversePayment(paymentId, payload) {
     return apiRequest(
       `/platform/owner/collections/payments/${encodeURIComponent(paymentId)}/reverse`,

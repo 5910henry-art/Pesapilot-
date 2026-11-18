@@ -2130,3 +2130,69 @@ def reverse_platform_loan_payment(
     db.session.flush()
     return reversal
 
+
+
+def reject_platform_loan_payment(
+    *,
+    payment_id,
+    rejected_by,
+    reason,
+):
+    """Reject a pending customer-reported platform loan repayment."""
+
+    if not isinstance(reason, str) or not reason.strip():
+        raise PlatformLendingValidationError(
+            "A rejection reason is required."
+        )
+
+    reason = reason.strip()
+    if len(reason) > 500:
+        raise PlatformLendingValidationError(
+            "Rejection reason cannot exceed 500 characters."
+        )
+
+    payment = db.session.execute(
+        select(PlatformLoanPayment)
+        .where(PlatformLoanPayment.id == payment_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if payment is None:
+        return None
+
+    if payment.status != "pending":
+        raise PlatformLendingValidationError(
+            "Only pending repayments can be rejected."
+        )
+
+    # A pending report must not already have accounting or allocation effects.
+    if (
+        payment.financial_account_id is not None
+        or payment.journal_entry_id is not None
+        or payment.confirmed_by is not None
+        or payment.confirmed_at is not None
+        or payment.principal_minor != 0
+        or payment.interest_minor != 0
+    ):
+        raise PlatformLendingValidationError(
+            "This pending repayment has accounting data and cannot be rejected."
+        )
+
+    existing_allocation = db.session.execute(
+        select(PlatformLoanPaymentAllocation.id)
+        .where(PlatformLoanPaymentAllocation.payment_id == payment.id)
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if existing_allocation is not None:
+        raise PlatformLendingValidationError(
+            "This pending repayment already has allocations and cannot be rejected."
+        )
+
+    payment.status = "rejected"
+    payment.rejected_by = rejected_by
+    payment.rejected_at = datetime.now(timezone.utc)
+    payment.rejection_reason = reason
+
+    db.session.flush()
+    return payment

@@ -12971,3 +12971,23 @@ button { font: inherit; cursor: pointer; }
     min-width: 0;
   }
 }
+
+/* Platform owner pending repayment actions */
+.platform-owner-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .platform-owner-inline-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .platform-owner-inline-actions .platform-owner-button {
+    justify-content: center;
+    width: 100%;
+  }
+}

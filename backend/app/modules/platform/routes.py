@@ -35,6 +35,7 @@ from app.services.platform_lending import (
     create_platform_loan_from_application,
     disburse_platform_loan,
     confirm_platform_loan_payment,
+    reject_platform_loan_payment,
     reverse_platform_loan_payment,
     review_loan_application,
     submit_loan_application,
@@ -1854,6 +1855,100 @@ def confirm_owner_platform_loan_payment(payment_id):
             "message": "Platform loan repayment could not be confirmed.",
         }), 500
 
+
+
+@platform_bp.post("/owner/collections/payments/<payment_id>/reject")
+@platform_owner_required()
+def reject_owner_platform_loan_payment(payment_id):
+    """Reject a pending customer-reported platform loan repayment."""
+
+    try:
+        payment_uuid = UUID(payment_id)
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid payment ID.",
+        }), 400
+
+    owner_id = _customer_id()
+    if owner_id is None:
+        return jsonify({
+            "success": False,
+            "message": "A valid owner identity is required.",
+        }), 401
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON request body is required.",
+        }), 400
+
+    reason = data.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return jsonify({
+            "success": False,
+            "message": "A rejection reason is required.",
+        }), 400
+
+    reason = reason.strip()
+    if len(reason) > 500:
+        return jsonify({
+            "success": False,
+            "message": "Rejection reason cannot exceed 500 characters.",
+        }), 400
+
+    try:
+        payment = reject_platform_loan_payment(
+            payment_id=payment_uuid,
+            rejected_by=owner_id,
+            reason=reason,
+        )
+
+        if payment is None:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": "Platform loan payment not found.",
+            }), 404
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Reported repayment rejected successfully.",
+            "payment": {
+                "id": str(payment.id),
+                "loan_id": str(payment.loan_id),
+                "amount_minor": payment.amount_minor,
+                "currency_code": payment.currency_code,
+                "reference": payment.reference,
+                "status": payment.status,
+                "rejected_by": str(payment.rejected_by),
+                "rejected_at": (
+                    payment.rejected_at.isoformat()
+                    if payment.rejected_at else None
+                ),
+                "rejection_reason": payment.rejection_reason,
+            },
+        }), 200
+
+    except (PlatformLendingValidationError, ValueError) as exc:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": str(exc),
+        }), 409
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Platform loan repayment rejection failed"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Platform loan repayment could not be rejected.",
+        }), 500
 
 
 @platform_bp.post("/owner/collections/payments/<payment_id>/reverse")

@@ -532,6 +532,21 @@ class PlatformLoanPayment(db.Model):
         nullable=True,
     )
 
+    rejected_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
+    rejected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    rejection_reason: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utc_now,
@@ -585,8 +600,15 @@ class PlatformLoanPayment(db.Model):
             name="ck_platform_payment_method",
         ),
         CheckConstraint(
-            "status IN ('pending', 'confirmed', 'failed', 'reversed')",
+            "status IN ('pending', 'confirmed', 'failed', 'reversed', 'rejected')",
             name="ck_platform_payment_status",
+        ),
+        CheckConstraint(
+            "status != 'rejected' OR "
+            "(rejected_by IS NOT NULL AND rejected_at IS NOT NULL "
+            "AND rejection_reason IS NOT NULL "
+            "AND length(trim(rejection_reason)) > 0)",
+            name="ck_platform_payment_rejection",
         ),
         CheckConstraint(
             "status NOT IN ('confirmed', 'reversed') OR "
