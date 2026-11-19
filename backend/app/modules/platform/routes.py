@@ -1731,9 +1731,18 @@ def get_owner_platform_loan_customer_accounts(loan_id):
             .all()
         )
 
+        details = PlatformLoanApplicationDetails.query.filter_by(
+            application_id=loan.application_id,
+            customer_id=loan.customer_id,
+        ).first()
+        saved_id = details.customer_financial_account_id if details else None
+        eligible_ids = {account.id for account in accounts}
+        selected_id = str(saved_id) if saved_id in eligible_ids else None
+
         return jsonify({
             "success": True,
             "currency_code": loan.currency_code,
+            "selected_account_id": selected_id,
             "accounts": [{
                 "id": str(account.id),
                 "name": account.name,
@@ -3344,6 +3353,65 @@ def list_customer_platform_loan_products():
         }), 500
 
 
+@platform_bp.get("/receiving-accounts/<product_id>")
+@jwt_required()
+def list_platform_customer_receiving_accounts(product_id):
+    customer_id = _customer_id()
+    try:
+        parsed_product_id = UUID(str(product_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"success": False, "message": "Invalid loan product."}), 400
+
+    product = PlatformLoanProduct.query.filter_by(
+        id=parsed_product_id,
+        is_active=True,
+    ).first()
+    if product is None:
+        return jsonify({"success": False, "message": "Loan product not found."}), 404
+
+    workspaces = (
+        Workspace.query
+        .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+        .filter(
+            WorkspaceMember.user_id == customer_id,
+            WorkspaceMember.role == "owner",
+            Workspace.workspace_type == "personal",
+        )
+        .all()
+    )
+    if len(workspaces) != 1:
+        return jsonify({
+            "success": False,
+            "message": "A single personal workspace is required to select a receiving account.",
+        }), 409
+
+    accounts = (
+        FinancialAccount.query
+        .filter(
+            FinancialAccount.workspace_id == workspaces[0].id,
+            FinancialAccount.is_active.is_(True),
+            FinancialAccount.account_type.in_(["cash", "bank", "mobile_money"]),
+            FinancialAccount.currency_code == product.currency_code,
+        )
+        .order_by(FinancialAccount.name.asc())
+        .all()
+    )
+
+    return jsonify({
+        "success": True,
+        "currency_code": product.currency_code,
+        "accounts": [
+            {
+                "id": str(account.id),
+                "name": account.name,
+                "account_type": account.account_type,
+                "currency_code": account.currency_code,
+            }
+            for account in accounts
+        ],
+    }), 200
+
+
 @platform_bp.post("/applications")
 @jwt_required()
 def submit_platform_application():
@@ -3525,6 +3593,41 @@ def submit_platform_application():
                 "A workspace cannot be selected without your consent."
             )
 
+        try:
+            customer_financial_account_id = UUID(
+                str(data.get("customer_financial_account_id"))
+            )
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("Select a valid account to receive the loan.") from None
+
+        personal_workspaces = (
+            Workspace.query
+            .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+            .filter(
+                WorkspaceMember.user_id == customer_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type == "personal",
+            )
+            .all()
+        )
+        if len(personal_workspaces) != 1:
+            raise ValueError(
+                "A single personal workspace is required for your receiving account."
+            )
+
+        receiving_account = FinancialAccount.query.filter(
+            FinancialAccount.id == customer_financial_account_id,
+            FinancialAccount.workspace_id == personal_workspaces[0].id,
+            FinancialAccount.is_active.is_(True),
+            FinancialAccount.account_type.in_(["cash", "bank", "mobile_money"]),
+            FinancialAccount.currency_code == product.currency_code,
+        ).first()
+
+        if receiving_account is None:
+            raise ValueError(
+                "The selected receiving account is unavailable or does not match the loan currency."
+            )
+
         encrypted_national_id = encrypt_national_id(national_id)
 
         application = submit_loan_application(
@@ -3538,6 +3641,7 @@ def submit_platform_application():
         details = PlatformLoanApplicationDetails(
             application_id=application.id,
             customer_id=customer_id,
+            customer_financial_account_id=customer_financial_account_id,
             full_name=full_name,
             national_id_encrypted=encrypted_national_id,
             phone=phone,

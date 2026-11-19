@@ -40,6 +40,11 @@ class PlatformLoanApplicationDetails(db.Model):
         index=True,
     )
 
+    customer_financial_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        db.Uuid(as_uuid=True),
+        ForeignKey("financial_accounts.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
     national_id_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     phone: Mapped[str] = mapped_column(String(30), nullable=False)
