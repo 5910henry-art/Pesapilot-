@@ -202,7 +202,14 @@ export default function PlatformOwnerLoans() {
           }),
         ]);
       setAccounts(accountResult.accounts || []);
-      setCustomerAccounts(customerAccountResult.accounts || []);
+      const borrowerAccounts = customerAccountResult.accounts || [];
+      setCustomerAccounts(borrowerAccounts);
+      const savedId = customerAccountResult.selected_account_id;
+      setCustomerAccountId(
+        savedId && borrowerAccounts.some((account) => account.id === savedId)
+          ? savedId
+          : borrowerAccounts.length === 1 ? borrowerAccounts[0].id : ""
+      );
       setInvestors(investorResult.investors || []);
     } catch (err) {
       setFormError(err.message || "Could not load platform accounts, borrower accounts and investors.");
