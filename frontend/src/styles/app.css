@@ -12560,25 +12560,48 @@ button { font: inherit; cursor: pointer; }
 
 
 
+
 /* ===== PESAPILOT LOAN APPLICATIONS REDESIGN ===== */
+
 .loan-applications-page {
   --loan-ink: #142b23;
-  --loan-muted: #75847d;
+  --loan-muted: #77877e;
   --loan-green: #087c55;
-  --loan-border: #e7eee9;
+  --loan-green-dark: #075b40;
+  --loan-border: #e5ede8;
+  --loan-surface: #ffffff;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 23px;
+  width: 100%;
+  min-width: 0;
   color: var(--loan-ink);
 }
 
-.loan-applications-page .loan-applications-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
+.loan-applications-page .platform-owner-eyebrow {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: var(--loan-green);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 1.5px;
 }
+
+.loan-applications-page .platform-owner-page-header {
+  padding: 4px 0 2px;
+}
+
+.loan-applications-page .platform-owner-page-header h1 {
+  font-size: clamp(25px, 3vw, 32px);
+  letter-spacing: -1px;
+}
+
+.loan-applications-page .platform-owner-page-header p {
+  max-width: 540px;
+  font-size: 13px;
+}
+
+/* Statistics */
 
 .loan-applications-page .loan-applications-stats {
   display: grid;
@@ -12587,218 +12610,692 @@ button { font: inherit; cursor: pointer; }
 }
 
 .loan-applications-page .loan-stat-card {
+  position: relative;
   min-width: 0;
-  padding: 20px;
-  background: #fff;
+  overflow: hidden;
+  padding: 19px;
   border: 1px solid var(--loan-border);
-  border-radius: 17px;
-  box-shadow: 0 4px 16px rgba(20, 43, 35, .035);
+  border-radius: 16px;
+  background: var(--loan-surface);
+  box-shadow: 0 3px 13px rgb(23 55 38 / 3%);
   transition: transform .2s ease, box-shadow .2s ease;
 }
 
+.loan-applications-page .loan-stat-card::after {
+  position: absolute;
+  right: -23px;
+  bottom: -38px;
+  width: 95px;
+  height: 95px;
+  border-radius: 50%;
+  background: rgb(8 124 85 / 4%);
+  content: "";
+  pointer-events: none;
+}
+
 .loan-applications-page .loan-stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 9px 24px rgba(20, 43, 35, .07);
+  transform: translateY(-3px);
+  box-shadow: 0 10px 25px rgb(23 55 38 / 7%);
 }
 
-.loan-applications-page .loan-stat-card .stat-label {
-  color: var(--loan-muted);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: .045em;
-  text-transform: uppercase;
-}
-
-.loan-applications-page .loan-stat-card .stat-value {
-  display: block;
-  margin-top: 10px;
-  color: var(--loan-ink);
-  font-size: clamp(23px, 3vw, 30px);
-  font-weight: 800;
-  letter-spacing: -.04em;
-  font-variant-numeric: tabular-nums;
-}
-
-.loan-applications-page .loan-applications-workspace {
-  overflow: hidden;
-  background: #fff;
-  border: 1px solid var(--loan-border);
-  border-radius: 19px;
-  box-shadow: 0 5px 22px rgba(20, 43, 35, .035);
-}
-
-.loan-applications-page .loan-application-toolbar {
+.loan-applications-page .loan-stat-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 15px;
-  padding: 20px;
-  border-bottom: 1px solid var(--loan-border);
+  gap: 9px;
+  color: var(--loan-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.loan-applications-page .loan-stat-icon {
+  display: grid;
+  flex: 0 0 39px;
+  width: 39px;
+  height: 39px;
+  place-items: center;
+  border-radius: 12px;
+}
+
+.loan-applications-page .loan-stat-icon.green {
+  color: #087c55;
+  background: #e7f5ed;
+}
+
+.loan-applications-page .loan-stat-icon.amber {
+  color: #ad741b;
+  background: #fff4df;
+}
+
+.loan-applications-page .loan-stat-icon.blue {
+  color: #3474b8;
+  background: #eaf2fc;
+}
+
+.loan-applications-page .loan-stat-icon.red {
+  color: #c44f55;
+  background: #fff0f0;
+}
+
+.loan-applications-page .loan-stat-card > strong {
+  display: block;
+  margin-top: 13px;
+  color: var(--loan-ink);
+  font-size: clamp(25px, 3vw, 31px);
+  font-weight: 850;
+  letter-spacing: -1px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.loan-applications-page .loan-stat-card > small {
+  display: block;
+  margin-top: 6px;
+  color: #91a097;
+  font-size: 10px;
+}
+
+/* Application workspace */
+
+.loan-applications-page .loan-applications-workspace {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--loan-border);
+  border-radius: 17px;
+  background: white;
+  box-shadow: 0 4px 18px rgb(20 43 35 / 3%);
+}
+
+.loan-applications-page .loan-applications-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 21px 22px 17px;
+}
+
+.loan-applications-page .loan-applications-section-heading h2 {
+  margin: 0;
+  color: var(--loan-ink);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -.3px;
+}
+
+.loan-applications-page .loan-applications-section-heading p {
+  margin: 5px 0 0;
+  color: var(--loan-muted);
+  font-size: 11px;
+}
+
+.loan-applications-page .loan-results-count {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  border: 1px solid #e1eee6;
+  border-radius: 20px;
+  background: #f0f8f3;
+  color: var(--loan-green);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+/* Search and filters */
+
+.loan-applications-page .loan-applications-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
   flex-wrap: wrap;
+  padding: 15px 21px;
+  border-top: 1px solid #f0f3f1;
+  border-bottom: 1px solid var(--loan-border);
+  background: #fcfdfc;
 }
 
 .loan-applications-page .loan-application-search {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: min(100%, 340px);
-  min-height: 43px;
-  padding: 0 13px;
-  background: #f7faf8;
-  border: 1px solid var(--loan-border);
-  border-radius: 11px;
+  width: min(100%, 330px);
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid #e3ebe6;
+  border-radius: 10px;
+  background: white;
+  color: #89988f;
+  transition: border-color .2s ease, box-shadow .2s ease;
 }
 
 .loan-applications-page .loan-application-search:focus-within {
   border-color: var(--loan-green);
-  box-shadow: 0 0 0 3px rgba(8, 124, 85, .09);
+  box-shadow: 0 0 0 3px rgb(8 124 85 / 8%);
 }
 
 .loan-applications-page .loan-application-search input {
   width: 100%;
   min-width: 0;
+  height: 39px;
+  padding: 0;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--loan-ink);
-  font-size: 13px;
+  font-size: 11px;
 }
 
-.loan-applications-page .loan-application-filters {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  overflow-x: auto;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--loan-border);
+.loan-applications-page .loan-application-search input::placeholder {
+  color: #a1ada5;
 }
 
-.loan-applications-page .loan-application-filters button {
-  flex: 0 0 auto;
-  padding: 8px 13px;
-  color: #64736c;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  font-size: 12px;
-  font-weight: 650;
+.loan-applications-page .loan-application-search button,
+.loan-applications-page .loan-applications-toolbar button {
   cursor: pointer;
 }
 
-.loan-applications-page .loan-application-filters button.active,
-.loan-applications-page .loan-application-filters button[aria-pressed="true"] {
-  color: var(--loan-green);
-  background: #eaf6f0;
-  border-color: #d6ecdf;
+.loan-applications-page .loan-application-search button {
+  display: grid;
+  flex: 0 0 25px;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: #f0f4f1;
+  color: #64756b;
 }
+
+.loan-applications-page .platform-owner-filter-tabs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 4px;
+  border: 1px solid #e9efeb;
+  border-radius: 11px;
+  background: #f3f7f4;
+  scrollbar-width: thin;
+}
+
+.loan-applications-page .platform-owner-filter-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-height: 31px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #718077;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: .18s ease;
+}
+
+.loan-applications-page .platform-owner-filter-tabs button span {
+  display: inline-grid;
+  min-width: 19px;
+  height: 19px;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 20px;
+  background: rgb(100 120 108 / 9%);
+  color: inherit;
+  font-size: 9px;
+}
+
+.loan-applications-page .platform-owner-filter-tabs button.active {
+  border-color: #e2eee6;
+  background: white;
+  color: var(--loan-green);
+  box-shadow: 0 2px 5px rgb(20 43 35 / 5%);
+}
+
+.loan-applications-page .platform-owner-filter-tabs button.active span {
+  background: #e7f5ed;
+}
+
+/* Applications table */
 
 .loan-applications-page .loan-applications-table-wrap {
   width: 100%;
   overflow-x: auto;
+  border: 0;
+  border-radius: 0;
+  background: white;
+  scrollbar-width: thin;
 }
 
-.loan-applications-page table {
+.loan-applications-page .loan-applications-table {
   width: 100%;
-  border-collapse: collapse;
+  min-width: 950px;
+  border-collapse: separate;
+  border-spacing: 0;
   white-space: nowrap;
 }
 
-.loan-applications-page th {
-  padding: 14px 16px;
-  color: #849189;
-  background: #f9fbfa;
-  border-bottom: 1px solid var(--loan-border);
-  font-size: 10px;
-  font-weight: 750;
-  letter-spacing: .07em;
+.loan-applications-page .loan-applications-table th {
+  padding: 14px 15px;
+  border-bottom: 1px solid #e9efeb;
+  background: #f7faf8;
+  color: #7d8b82;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .7px;
   text-align: left;
   text-transform: uppercase;
 }
 
-.loan-applications-page td {
-  padding: 16px;
-  color: #34483e;
-  border-bottom: 1px solid #edf2ee;
-  font-size: 12px;
+.loan-applications-page .loan-applications-table td {
+  padding: 14px 15px;
+  border-bottom: 1px solid #eef2ef;
+  color: #405248;
+  font-size: 11px;
   vertical-align: middle;
 }
 
-.loan-applications-page tbody tr {
+.loan-applications-page .loan-applications-table tbody tr {
   transition: background .15s ease;
 }
 
-.loan-applications-page tbody tr:hover {
-  background: #f9fcfa;
+.loan-applications-page .loan-applications-table tbody tr:hover {
+  background: #f8fbf9;
 }
 
-.loan-applications-page tbody tr:last-child td {
+.loan-applications-page .loan-applications-table tbody tr:last-child td {
   border-bottom: 0;
 }
 
 .loan-applications-page .loan-customer-cell {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 10px;
+  min-width: 180px;
 }
 
 .loan-applications-page .loan-customer-avatar {
   display: grid;
-  flex: 0 0 37px;
-  width: 37px;
-  height: 37px;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
   place-items: center;
+  border: 1px solid #dceee3;
+  border-radius: 11px;
+  background: linear-gradient(145deg, #eaf7ef, #dff0e6);
   color: var(--loan-green);
-  background: #eaf6f0;
-  border-radius: 12px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 850;
 }
 
-.loan-applications-page .loan-application-actions {
+.loan-applications-page .loan-customer-cell strong {
+  display: block;
+  max-width: 190px;
+  overflow: hidden;
+  color: #243b30;
+  font-size: 11px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+}
+
+.loan-applications-page .loan-customer-cell small,
+.loan-applications-page td > small {
+  display: block;
+  margin-top: 4px;
+  color: #91a097;
+  font-size: 9px;
+}
+
+.loan-applications-page .loan-amount-cell {
+  color: #203c2e;
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.loan-applications-page .platform-owner-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: 20px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.loan-applications-page .platform-owner-status-pending {
+  border-color: #f3e4c2;
+  background: #fff7e7;
+  color: #a66d13;
+}
+
+.loan-applications-page .platform-owner-status-approved {
+  border-color: #d2eadb;
+  background: #eaf7ef;
+  color: #147347;
+}
+
+.loan-applications-page .platform-owner-status-rejected {
+  border-color: #f2d9da;
+  background: #fff0f0;
+  color: #b44249;
+}
+
+.loan-applications-page .platform-owner-status-withdrawn {
+  border-color: #e4e8e5;
+  background: #f2f4f3;
+  color: #78857d;
+}
+
+.loan-applications-page .platform-owner-row-actions {
   display: flex;
   align-items: center;
   gap: 7px;
 }
 
-.loan-applications-page .loan-application-actions button {
-  min-height: 33px;
-  padding: 7px 11px;
+.loan-applications-page .platform-owner-row-actions .platform-owner-button {
+  min-height: 32px;
+  padding: 7px 10px;
   border-radius: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: .18s ease;
+  font-size: 10px;
 }
 
-.loan-applications-page .loan-application-actions button:hover {
-  transform: translateY(-1px);
+.loan-applications-page .platform-owner-muted {
+  color: #9aa69e;
+  font-size: 10px;
 }
 
-.loan-applications-page .loan-application-empty {
-  padding: 48px 20px;
-  color: var(--loan-muted);
-  text-align: center;
+.loan-applications-page .platform-owner-button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
 }
+
+/* Table footer and empty states */
 
 .loan-applications-page .loan-applications-footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 15px 20px;
-  color: var(--loan-muted);
+  padding: 14px 20px;
   border-top: 1px solid var(--loan-border);
-  font-size: 11px;
+  background: #fcfdfc;
+  color: #849289;
+  font-size: 10px;
   flex-wrap: wrap;
 }
 
-/* Modal polish */
-.loan-applications-page .loan-decision-modal {
-  border: 1px solid var(--loan-border);
-  border-radius: 20px;
-  box-shadow: 0 24px 80px rgba(10, 30, 20, .2);
+.loan-applications-page .loan-applications-footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid #e2ebe5;
+  border-radius: 8px;
+  background: white;
+  color: var(--loan-green);
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
 }
 
-@media (max-width: 900px) {
+.loan-applications-page .platform-owner-empty {
+  margin: 17px;
+  padding: 45px 20px;
+  border: 1px dashed #d7e4db;
+  border-radius: 13px;
+  background: #fbfdfb;
+  color: #819087;
+  text-align: center;
+}
+
+.loan-applications-page .platform-owner-empty h3 {
+  margin: 12px 0 5px;
+  color: var(--loan-ink);
+  font-size: 15px;
+}
+
+.loan-applications-page .platform-owner-empty p {
+  margin: 0 0 15px;
+  font-size: 11px;
+}
+
+/* Alerts */
+
+.loan-applications-page .platform-owner-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.loan-applications-page .platform-owner-notice.success {
+  border: 1px solid #d2eadb;
+  background: #edf8f1;
+  color: #176c45;
+}
+
+.loan-applications-page .platform-owner-notice.error {
+  border: 1px solid #f0d7d8;
+  background: #fff1f1;
+  color: #ae3d45;
+}
+
+.loan-applications-page .platform-owner-notice span {
+  flex: 1;
+}
+
+.loan-applications-page .platform-owner-notice button {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Review modal */
+
+.loan-applications-page .platform-owner-modal-backdrop {
+  z-index: 1000;
+  padding: 22px;
+  background: rgb(9 25 17 / 62%);
+  backdrop-filter: blur(5px);
+}
+
+.loan-applications-page .loan-review-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: min(100%, 760px);
+  max-height: min(90dvh, 900px);
+  overflow-y: auto;
+  padding: 25px;
+  border: 1px solid #e2ebe5;
+  border-radius: 19px;
+  background: #fff;
+  box-shadow: 0 25px 90px rgb(0 0 0 / 24%);
+  scrollbar-width: thin;
+}
+
+.loan-applications-page .platform-owner-modal-header {
+  position: sticky;
+  top: -25px;
+  z-index: 3;
+  margin: -25px -25px 0;
+  padding: 22px 25px 17px;
+  border-bottom: 1px solid var(--loan-border);
+  background: white;
+}
+
+.loan-applications-page .platform-owner-modal-header h2 {
+  margin: 0;
+  color: var(--loan-ink);
+  font-size: 20px;
+  font-weight: 850;
+  letter-spacing: -.5px;
+}
+
+.loan-applications-page .platform-owner-modal-header p {
+  margin: 5px 0 0;
+  color: var(--loan-muted);
+  font-size: 11px;
+}
+
+.loan-applications-page .platform-owner-review-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid #e5ede8;
+  border-radius: 12px;
+  background: #f7faf8;
+}
+
+.loan-applications-page .platform-owner-review-summary > div {
+  min-width: 0;
+}
+
+.loan-applications-page .platform-owner-review-summary span {
+  display: block;
+  margin-bottom: 5px;
+  color: #849289;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+}
+
+.loan-applications-page .platform-owner-review-summary strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #263d31;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.loan-applications-page .platform-owner-purpose {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 15px;
+  border: 1px solid var(--loan-border);
+  border-radius: 12px;
+  background: white;
+}
+
+.loan-applications-page .platform-owner-purpose > span {
+  color: var(--loan-green);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+}
+
+.loan-applications-page .platform-owner-purpose p {
+  margin: 0;
+  color: #586a60;
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.loan-applications-page .platform-owner-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding-top: 17px;
+  border-top: 1px solid var(--loan-border);
+}
+
+.loan-applications-page .platform-owner-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #40564a;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.loan-applications-page .platform-owner-form input,
+.loan-applications-page .platform-owner-form select,
+.loan-applications-page .platform-owner-form textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #dfe9e2;
+  border-radius: 9px;
+  outline: none;
+  background: #fbfdfb;
+  color: #20392c;
+  font: inherit;
+  font-size: 12px;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.loan-applications-page .platform-owner-form input:focus,
+.loan-applications-page .platform-owner-form select:focus,
+.loan-applications-page .platform-owner-form textarea:focus {
+  border-color: var(--loan-green);
+  box-shadow: 0 0 0 3px rgb(8 124 85 / 8%);
+}
+
+.loan-applications-page .platform-owner-form textarea {
+  min-height: 95px;
+  resize: vertical;
+}
+
+.loan-applications-page .platform-owner-form small {
+  color: #819087;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.loan-applications-page .platform-owner-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding-top: 15px;
+  border-top: 1px solid var(--loan-border);
+}
+
+.loan-applications-page .platform-owner-modal-actions .platform-owner-button {
+  min-width: 115px;
+}
+
+/* Responsive layout */
+
+@media (max-width: 1050px) {
+  .loan-applications-page .loan-applications-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .loan-applications-page .loan-application-search {
+    width: 100%;
+    max-width: 450px;
+  }
+
+  .loan-applications-page .platform-owner-filter-tabs {
+    width: 100%;
+  }
+}
+
+@media (max-width: 850px) {
   .loan-applications-page .loan-applications-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -12806,7 +13303,15 @@ button { font: inherit; cursor: pointer; }
 
 @media (max-width: 600px) {
   .loan-applications-page {
-    gap: 15px;
+    gap: 16px;
+  }
+
+  .loan-applications-page .platform-owner-page-header {
+    align-items: flex-start;
+  }
+
+  .loan-applications-page .platform-owner-page-header > button {
+    width: 100%;
   }
 
   .loan-applications-page .loan-applications-stats {
@@ -12814,29 +13319,115 @@ button { font: inherit; cursor: pointer; }
   }
 
   .loan-applications-page .loan-stat-card {
-    padding: 15px;
+    padding: 14px;
     border-radius: 13px;
   }
 
-  .loan-applications-page .loan-application-toolbar {
-    align-items: stretch;
-    padding: 14px;
+  .loan-applications-page .loan-stat-top {
+    align-items: flex-start;
+    font-size: 10px;
   }
 
-  .loan-applications-page .loan-application-search {
+  .loan-applications-page .loan-stat-icon {
+    flex-basis: 33px;
+    width: 33px;
+    height: 33px;
+  }
+
+  .loan-applications-page .loan-stat-card > strong {
+    margin-top: 10px;
+    font-size: 25px;
+  }
+
+  .loan-applications-page .loan-applications-section-heading {
+    align-items: flex-start;
+    padding: 17px 14px 13px;
+  }
+
+  .loan-applications-page .loan-applications-toolbar {
+    padding: 13px;
+  }
+
+  .loan-applications-page .platform-owner-filter-tabs {
+    padding: 3px;
+  }
+
+  .loan-applications-page .platform-owner-filter-tabs button {
+    padding: 6px 8px;
+    font-size: 9px;
+  }
+
+  .loan-applications-page .loan-applications-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 13px;
+  }
+
+  .loan-applications-page .platform-owner-modal-backdrop {
+    align-items: flex-start;
+    padding: 8px;
+  }
+
+  .loan-applications-page .loan-review-modal {
     width: 100%;
+    max-height: calc(100dvh - 16px);
+    padding: 17px;
+    border-radius: 15px;
   }
 
-  .loan-applications-page .loan-application-filters {
-    padding: 10px 14px;
+  .loan-applications-page .platform-owner-modal-header {
+    top: -17px;
+    margin: -17px -17px 0;
+    padding: 17px;
   }
 
-  .loan-applications-page th,
-  .loan-applications-page td {
+  .loan-applications-page .platform-owner-review-summary {
+    gap: 11px;
     padding: 12px;
   }
+
+  .loan-applications-page .platform-owner-purpose {
+    padding: 12px;
+  }
+
+  .loan-applications-page .platform-owner-modal-actions {
+    position: sticky;
+    bottom: -17px;
+    margin: 0 -17px -17px;
+    padding: 12px 17px;
+    background: white;
+  }
+
+  .loan-applications-page .platform-owner-modal-actions .platform-owner-button {
+    flex: 1;
+    min-width: 0;
+  }
 }
+
+@media (max-width: 370px) {
+  .loan-applications-page .loan-applications-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .loan-applications-page .loan-stat-card {
+    padding: 15px;
+  }
+
+  .loan-applications-page .platform-owner-review-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .loan-applications-page .platform-owner-modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .loan-applications-page .platform-owner-modal-actions .platform-owner-button {
+    width: 100%;
+  }
+}
+
 /* ===== END PESAPILOT LOAN APPLICATIONS REDESIGN ===== */
+
 
 
 
@@ -13191,4 +13782,6573 @@ button { font: inherit; cursor: pointer; }
     justify-content: center;
     width: 100%;
   }
+}
+
+
+/* PesaPilot customer loan application form polish */
+.lending-modal {
+  width: min(100%, 760px);
+  max-height: calc(100dvh - 32px);
+  padding: 28px;
+  border: 1px solid #e5eee8;
+  border-radius: 18px;
+}
+
+.lending-modal > h3 {
+  margin: 27px 0 5px;
+  padding: 13px 14px;
+  border-left: 3px solid #23966b;
+  border-radius: 5px;
+  background: #f2f8f4;
+  color: #244b37;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .02em;
+}
+
+.lending-modal > .lending-muted {
+  line-height: 1.65;
+}
+
+.lending-modal .lending-field {
+  margin-top: 13px;
+}
+
+.lending-modal .lending-field > span {
+  font-size: 12px;
+  color: #43594c;
+}
+
+.lending-modal .lending-field input,
+.lending-modal .lending-field select,
+.lending-modal .lending-field textarea {
+  min-height: 45px;
+  padding: 11px 13px;
+  border-color: #dce8df;
+  border-radius: 10px;
+  font-size: 13px;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.lending-modal .lending-field textarea {
+  min-height: 90px;
+}
+
+.lending-modal .lending-field input:focus,
+.lending-modal .lending-field select:focus,
+.lending-modal .lending-field textarea:focus {
+  border-color: #26966b;
+  box-shadow: 0 0 0 3px #26966b18;
+}
+
+.lending-modal-actions {
+  position: sticky;
+  bottom: -28px;
+  margin: 25px -28px -28px;
+  padding: 16px 28px;
+  border-top: 1px solid #e7eee9;
+  background: #fff;
+}
+
+@media (max-width: 600px) {
+  .lending-modal {
+    width: 100%;
+    max-height: calc(100dvh - 20px);
+    padding: 18px;
+    border-radius: 14px;
+  }
+
+  .lending-modal > h3 {
+    margin-top: 22px;
+  }
+
+  .lending-modal-actions {
+    bottom: -18px;
+    margin: 22px -18px -18px;
+    padding: 13px 18px;
+    flex-wrap: wrap;
+  }
+
+  .lending-modal-actions button {
+    flex: 1;
+  }
+}
+
+/* =========================================================
+   PESAPILOT LENDING — MODERN FINTECH REDESIGN
+   ========================================================= */
+
+.lending-page {
+  --lend-green: #087c55;
+  --lend-dark: #103d2e;
+  --lend-mint: #e8f5ee;
+  --lend-text: #172f25;
+  --lend-muted: #788a80;
+  --lend-border: #e5ede8;
+  --lend-surface: #ffffff;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 26px;
+  color: var(--lend-text);
+  background: #f5f8f6;
+  border-radius: 20px;
+}
+
+.lending-page * {
+  box-sizing: border-box;
+}
+
+.lending-page button {
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .2s ease, color .2s ease,
+    border-color .2s ease, box-shadow .2s ease,
+    transform .2s ease;
+}
+
+/* Header / hero */
+.lending-header {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 190px;
+  padding: 34px 38px;
+  overflow: hidden;
+  border: 1px solid #1d654b;
+  border-radius: 22px;
+  color: #fff;
+  background:
+    radial-gradient(circle at 85% 15%, #4ac28a44 0, transparent 30%),
+    radial-gradient(circle at 72% 100%, #0d9c6844 0, transparent 35%),
+    linear-gradient(120deg, #103d2e 0%, #075b40 55%, #087c55 100%);
+  box-shadow: 0 14px 35px #123e2c20;
+}
+
+.lending-header::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 260px;
+  height: 260px;
+  right: 9%;
+  top: -115px;
+  border: 1px solid #ffffff20;
+  border-radius: 50%;
+  box-shadow: 0 0 0 28px #ffffff08, 0 0 0 58px #ffffff06;
+}
+
+.lending-header > div {
+  position: relative;
+  z-index: 1;
+}
+
+.lending-header .lending-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #b9efd2;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .16em;
+}
+
+.lending-header h1 {
+  margin: 13px 0 8px;
+  color: #fff;
+  font-size: clamp(26px, 3vw, 36px);
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: -.04em;
+}
+
+.lending-header p {
+  max-width: 540px;
+  margin: 0;
+  color: #d0e8dc;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.lending-header .lending-button {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  min-height: 42px;
+  padding: 0 17px;
+  border: 1px solid #ffffff40;
+  border-radius: 11px;
+  color: #fff;
+  background: #ffffff14;
+  backdrop-filter: blur(8px);
+}
+
+.lending-header .lending-button:hover {
+  border-color: #ffffff80;
+  background: #ffffff25;
+}
+
+/* Alerts */
+.lending-alert {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.lending-alert button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.lending-alert-info {
+  color: #285d48;
+  border-color: #d5eadc;
+  background: #edf7f0;
+}
+
+.lending-alert-success {
+  color: #17633e;
+  border-color: #ccebd8;
+  background: #eaf8ef;
+}
+
+.lending-alert-error {
+  color: #a33d3d;
+  border-color: #f0d4d4;
+  background: #fff1f1;
+}
+
+/* Navigation */
+.lending-tabs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 25px 0 24px;
+  padding: 6px;
+  overflow-x: auto;
+  border: 1px solid var(--lend-border);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 3px 12px #163b2910;
+}
+
+.lending-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 43px;
+  padding: 0 18px;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 10px;
+  color: #718278;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lending-tabs button:hover {
+  color: var(--lend-green);
+  background: #f2f8f4;
+}
+
+.lending-tabs button.active {
+  color: #fff;
+  background: linear-gradient(135deg, #087c55, #0c9869);
+  box-shadow: 0 4px 12px #087c5530;
+}
+
+.lending-tabs button > span {
+  display: grid;
+  place-items: center;
+  min-width: 21px;
+  height: 21px;
+  padding: 0 5px;
+  border-radius: 20px;
+  color: #527064;
+  background: #eaf2ed;
+  font-size: 10px;
+}
+
+.lending-tabs button.active > span {
+  color: #087c55;
+  background: #fff;
+}
+
+/* Section headings */
+.lending-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 15px;
+  margin: 28px 0 18px;
+}
+
+.lending-section-heading h2 {
+  margin: 0 0 6px;
+  color: #183a2b;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -.035em;
+}
+
+.lending-section-heading p {
+  margin: 0;
+  color: var(--lend-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Loan product cards */
+.lending-product-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 19px;
+  align-items: stretch;
+}
+
+.lending-product-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 23px;
+  overflow: hidden;
+  border: 1px solid #e3ece6;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 5px 18px #173c2910;
+  transition: transform .22s ease, box-shadow .22s ease,
+    border-color .22s ease;
+}
+
+.lending-product-card:hover {
+  transform: translateY(-5px);
+  border-color: #b8d9c5;
+  box-shadow: 0 15px 32px #173c2919;
+}
+
+.lending-product-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 17px;
+  border: 1px solid #d8eee1;
+  border-radius: 14px;
+  color: #087c55;
+  background: linear-gradient(145deg, #eaf8ef, #dff2e7);
+}
+
+.lending-product-code {
+  margin-bottom: 7px;
+  color: #81948a;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.lending-product-card h3 {
+  margin: 0 0 9px;
+  color: #173b2b;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -.025em;
+}
+
+.lending-product-card > p {
+  min-height: 40px;
+  margin: 0 0 17px;
+  color: #77887e;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.lending-product-amount {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 17px;
+  padding: 15px;
+  border: 1px solid #dcefe3;
+  border-radius: 12px;
+  background: linear-gradient(120deg, #f0f9f3, #f8fcf9);
+}
+
+.lending-product-amount span,
+.lending-product-meta span {
+  color: #819087;
+  font-size: 10px;
+}
+
+.lending-product-amount strong {
+  color: #087c55;
+  font-size: clamp(15px, 1.4vw, 19px);
+  font-weight: 800;
+  letter-spacing: -.035em;
+  overflow-wrap: anywhere;
+}
+
+.lending-product-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin-bottom: 19px;
+  border-top: 1px solid #edf1ee;
+}
+
+.lending-product-meta > div {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 13px 8px 11px 0;
+  border-bottom: 1px solid #edf1ee;
+}
+
+.lending-product-meta > div:nth-child(even) {
+  padding-left: 12px;
+  border-left: 1px solid #edf1ee;
+}
+
+.lending-product-meta strong {
+  color: #294b39;
+  font-size: 11px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.lending-full-button {
+  width: 100%;
+  min-height: 45px;
+  margin-top: auto;
+  justify-content: center;
+  border-radius: 11px;
+}
+
+/* Buttons */
+.lending-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 15px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.lending-button-primary {
+  color: #fff;
+  background: linear-gradient(135deg, #087c55, #0b9868);
+  box-shadow: 0 4px 11px #087c5524;
+}
+
+.lending-button-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, #066b49, #087e58);
+  box-shadow: 0 7px 16px #087c5533;
+}
+
+.lending-button-secondary {
+  color: #365d48;
+  border-color: #dce8df;
+  background: #fff;
+}
+
+.lending-button-secondary:hover:not(:disabled) {
+  border-color: #a9cfb7;
+  background: #f1f8f3;
+}
+
+.lending-button-danger {
+  color: #a74747;
+  border-color: #f0dada;
+  background: #fff5f5;
+}
+
+.lending-button-danger:hover:not(:disabled) {
+  background: #ffeaea;
+}
+
+.lending-button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+  box-shadow: none;
+}
+
+/* Status badges */
+.lending-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 25px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 30px;
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .025em;
+}
+
+.lending-status-success {
+  color: #147347;
+  border-color: #ccebd9;
+  background: #eaf8ef;
+}
+
+.lending-status-warning {
+  color: #936313;
+  border-color: #f2e2b9;
+  background: #fff8e8;
+}
+
+.lending-status-danger {
+  color: #a13e3e;
+  border-color: #f2d4d4;
+  background: #fff0f0;
+}
+
+.lending-status-neutral {
+  color: #65756b;
+  border-color: #e1e8e3;
+  background: #f2f5f3;
+}
+
+/* Application and loan records */
+.lending-record-list {
+  display: grid;
+  gap: 13px;
+}
+
+.lending-record-card,
+.lending-loan-row {
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  min-width: 0;
+  padding: 19px 21px;
+  border: 1px solid #e4ece6;
+  border-radius: 15px;
+  background: #fff;
+  box-shadow: 0 3px 12px #173c2909;
+}
+
+.lending-record-card {
+  flex-wrap: wrap;
+}
+
+.lending-record-main {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  flex: 1 1 210px;
+  min-width: 0;
+}
+
+.lending-record-icon {
+  display: grid;
+  place-items: center;
+  width: 43px;
+  height: 43px;
+  flex-shrink: 0;
+  border: 1px solid #dceee2;
+  border-radius: 12px;
+  color: #087c55;
+  background: #eff8f2;
+}
+
+.lending-record-main h3 {
+  margin: 0 0 5px;
+  color: #234332;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.lending-record-main span,
+.lending-record-amount span {
+  color: #89978e;
+  font-size: 10px;
+}
+
+.lending-record-amount {
+  display: grid;
+  gap: 5px;
+  min-width: 120px;
+  text-align: right;
+}
+
+.lending-record-amount strong {
+  color: #173e2c;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.lending-approved,
+.lending-decision-note {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 9px;
+  color: #36664d;
+  background: #f1f8f3;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.lending-decision-note {
+  color: #6c6853;
+  background: #fbf8ef;
+}
+
+/* Loan list rows */
+.lending-loan-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lending-loan-row:hover {
+  transform: translateY(-2px);
+  border-color: #b8d9c5;
+  box-shadow: 0 9px 22px #173c2912;
+}
+
+.lending-loan-info {
+  display: grid;
+  flex: 1;
+  gap: 5px;
+  min-width: 0;
+}
+
+.lending-loan-info strong {
+  color: #234332;
+  font-size: 13px;
+}
+
+.lending-loan-info span,
+.lending-loan-balance span {
+  color: #8a988f;
+  font-size: 10px;
+}
+
+.lending-loan-balance {
+  display: grid;
+  gap: 5px;
+  text-align: right;
+}
+
+.lending-loan-balance strong {
+  color: #087c55;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+/* Empty states and panels */
+.lending-empty,
+.lending-panel {
+  border: 1px solid #e4ece6;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 4px 15px #173c2909;
+}
+
+.lending-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 245px;
+  padding: 30px;
+  text-align: center;
+}
+
+.lending-empty > svg {
+  display: grid;
+  box-sizing: content-box;
+  margin-bottom: 13px;
+  padding: 14px;
+  border-radius: 16px;
+  color: #087c55;
+  background: #eaf6ee;
+}
+
+.lending-empty h3 {
+  margin: 0 0 7px;
+  color: #254433;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.lending-empty p {
+  max-width: 390px;
+  margin: 0 0 17px;
+  color: #819087;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.lending-panel {
+  margin-top: 17px;
+  padding: 22px;
+}
+
+.lending-panel > h3 {
+  margin: 0 0 17px;
+  color: #254433;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+/* Loan details */
+.lending-detail {
+  margin-top: 23px;
+}
+
+.lending-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 19px;
+  padding: 9px 12px;
+  border: 1px solid #dfe9e2;
+  border-radius: 9px;
+  color: #41614e;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lending-back:hover {
+  color: #087c55;
+  border-color: #b8d9c5;
+  background: #f2f8f4;
+}
+
+.lending-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 20px;
+  padding: 23px;
+  border: 1px solid #dcebe1;
+  border-radius: 16px;
+  background: linear-gradient(120deg, #fff, #f0f8f2);
+}
+
+.lending-detail-heading h2 {
+  margin: 7px 0;
+  color: #173e2c;
+  font-size: 23px;
+  font-weight: 800;
+  letter-spacing: -.035em;
+}
+
+.lending-muted {
+  color: #839188;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.lending-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 13px;
+  margin: 18px 0;
+}
+
+.lending-summary-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #e3ece6;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 3px 12px #173c2908;
+}
+
+.lending-summary-card span {
+  color: #829188;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.lending-summary-card strong {
+  color: #087c55;
+  font-size: clamp(15px, 1.5vw, 21px);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.lending-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0;
+  padding: 19px 21px;
+  border: 1px solid #dcebe1;
+  border-radius: 14px;
+  background: #f0f8f3;
+}
+
+.lending-detail-actions h3 {
+  margin: 0 0 5px;
+  color: #244633;
+  font-size: 14px;
+}
+
+.lending-detail-actions p {
+  margin: 0;
+  color: #7b8e82;
+  font-size: 11px;
+}
+
+/* Tables */
+.lending-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e7eee9;
+  border-radius: 11px;
+}
+
+.lending-table {
+  width: 100%;
+  min-width: 650px;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+.lending-table th {
+  padding: 13px 14px;
+  color: #71847a;
+  background: #f4f8f5;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.lending-table td {
+  padding: 14px;
+  border-top: 1px solid #edf1ee;
+  color: #52675b;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.lending-table tbody tr:hover {
+  background: #f8fbf9;
+}
+
+/* Application / repayment modals */
+.lending-modal-backdrop {
+  padding: 16px;
+  background: #071c1399;
+  backdrop-filter: blur(5px);
+}
+
+.lending-modal {
+  width: min(100%, 720px);
+  max-height: calc(100dvh - 32px);
+  padding: 27px;
+  border: 1px solid #e2ebe5;
+  border-radius: 19px;
+  background: #fff;
+  box-shadow: 0 24px 80px #00190f40;
+}
+
+.lending-modal-heading {
+  align-items: center;
+  padding-bottom: 17px;
+  border-bottom: 1px solid #edf1ee;
+}
+
+.lending-modal-heading h2 {
+  color: #173e2c;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -.035em;
+}
+
+.lending-modal-heading > button {
+  width: 37px;
+  height: 37px;
+  border: 1px solid #e6ede8;
+  border-radius: 10px;
+  color: #587164;
+  background: #f5f8f6;
+}
+
+.lending-modal-heading > button:hover {
+  color: #a43d3d;
+  background: #fff0f0;
+}
+
+.lending-modal > h3 {
+  margin: 27px 0 7px;
+  padding: 13px 14px;
+  border-left: 3px solid #159568;
+  border-radius: 5px;
+  color: #24513a;
+  background: linear-gradient(90deg, #edf7f0, #f8fbf9);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: .035em;
+}
+
+.lending-modal .lending-field {
+  margin-top: 14px;
+  gap: 7px;
+}
+
+.lending-modal .lending-field > span {
+  color: #536b5d;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.lending-modal .lending-field input,
+.lending-modal .lending-field select,
+.lending-modal .lending-field textarea {
+  min-height: 45px;
+  padding: 11px 13px;
+  border: 1px solid #dce7df;
+  border-radius: 10px;
+  outline: none;
+  color: #203d2d;
+  background: #fbfdfb;
+  font-size: 12px;
+}
+
+.lending-modal .lending-field textarea {
+  min-height: 88px;
+}
+
+.lending-modal .lending-field input:focus,
+.lending-modal .lending-field select:focus,
+.lending-modal .lending-field textarea:focus {
+  border-color: #159568;
+  background: #fff;
+  box-shadow: 0 0 0 3px #15956818;
+}
+
+.lending-modal .lending-field input::placeholder,
+.lending-modal .lending-field textarea::placeholder {
+  color: #a2afa7;
+}
+
+.lending-modal .lending-field small {
+  color: #829188;
+  font-size: 10px;
+}
+
+.lending-modal-actions {
+  position: sticky;
+  bottom: -27px;
+  margin: 26px -27px -27px;
+  padding: 16px 27px;
+  border-top: 1px solid #e7eee9;
+  background: #fff;
+}
+
+.lending-modal-actions .lending-button {
+  min-height: 43px;
+}
+
+/* Refresh animation */
+.lending-spin {
+  animation: lending-rotate .9s linear infinite;
+}
+
+@keyframes lending-rotate {
+  to { transform: rotate(360deg); }
+}
+
+/* Tablet */
+@media (max-width: 1050px) {
+  .lending-page {
+    padding: 20px;
+  }
+
+  .lending-product-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .lending-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Mobile */
+@media (max-width: 650px) {
+  .lending-page {
+    padding: 12px;
+    border-radius: 13px;
+  }
+
+  .lending-header {
+    align-items: flex-start;
+    flex-direction: column;
+    min-height: 0;
+    gap: 18px;
+    padding: 25px 21px;
+    border-radius: 17px;
+  }
+
+  .lending-header h1 {
+    font-size: 27px;
+  }
+
+  .lending-header p {
+    font-size: 11px;
+  }
+
+  .lending-header .lending-button {
+    min-height: 39px;
+  }
+
+  .lending-tabs {
+    gap: 3px;
+    margin: 17px 0;
+    padding: 4px;
+    border-radius: 11px;
+  }
+
+  .lending-tabs button {
+    flex: 1 0 auto;
+    min-height: 40px;
+    gap: 6px;
+    padding: 0 11px;
+    font-size: 10px;
+  }
+
+  .lending-section-heading h2 {
+    font-size: 18px;
+  }
+
+  .lending-product-grid {
+    grid-template-columns: 1fr;
+    gap: 13px;
+  }
+
+  .lending-product-card {
+    padding: 19px;
+  }
+
+  .lending-product-card > p {
+    min-height: 0;
+  }
+
+  .lending-product-amount strong {
+    font-size: 18px;
+  }
+
+  .lending-record-card {
+    align-items: flex-start;
+    gap: 12px;
+    padding: 15px;
+  }
+
+  .lending-record-main {
+    flex-basis: 100%;
+  }
+
+  .lending-record-amount {
+    margin-right: auto;
+    text-align: left;
+  }
+
+  .lending-record-card > .lending-button {
+    width: 100%;
+  }
+
+  .lending-loan-row {
+    flex-wrap: wrap;
+    gap: 11px;
+    padding: 14px;
+  }
+
+  .lending-loan-info {
+    flex-basis: calc(100% - 65px);
+  }
+
+  .lending-loan-balance {
+    margin-left: 54px;
+    text-align: left;
+  }
+
+  .lending-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+  }
+
+  .lending-summary-card {
+    padding: 14px;
+  }
+
+  .lending-detail-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 18px;
+  }
+
+  .lending-detail-heading h2 {
+    font-size: 20px;
+  }
+
+  .lending-detail-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 16px;
+  }
+
+  .lending-detail-actions .lending-button {
+    width: 100%;
+  }
+
+  .lending-panel {
+    padding: 15px;
+  }
+
+  .lending-modal-backdrop {
+    align-items: flex-start;
+    padding: 8px;
+  }
+
+  .lending-modal {
+    width: 100%;
+    max-height: calc(100dvh - 16px);
+    padding: 18px;
+    border-radius: 15px;
+  }
+
+  .lending-modal-heading h2 {
+    font-size: 19px;
+  }
+
+  .lending-modal-actions {
+    bottom: -18px;
+    margin: 22px -18px -18px;
+    padding: 13px 18px;
+    gap: 8px;
+  }
+
+  .lending-modal-actions .lending-button {
+    flex: 1;
+    padding: 0 9px;
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 370px) {
+  .lending-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lending-tabs button {
+    padding: 0 8px;
+    font-size: 9px;
+  }
+
+  .lending-modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .lending-modal-actions .lending-button {
+    width: 100%;
+  }
+}
+
+
+/* =========================================================
+   PESAPILOT — MODERN PLATFORM OWNER OVERVIEW
+   Compact fintech dashboard
+========================================================= */
+
+.po-modern-overview {
+  --po-ink: #172b22;
+  --po-muted: #78877e;
+  --po-border: #e7eee9;
+  --po-green: #087c55;
+  --po-surface: #f7faf8;
+  gap: 20px;
+  color: var(--po-ink);
+}
+
+/* Header */
+
+.po-overview-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 23px 25px;
+  border: 1px solid #e2ece5;
+  border-radius: 17px;
+  background:
+    radial-gradient(circle at 88% 10%, rgb(17 139 91 / 9%), transparent 30%),
+    linear-gradient(120deg, #ffffff 0%, #f5faf6 100%);
+}
+
+.po-overview-hero-copy {
+  min-width: 0;
+}
+
+.po-overview-eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: #07805a;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 1.15px;
+}
+
+.po-overview-hero h1 {
+  margin: 0;
+  color: #172b22;
+  font-size: clamp(21px, 3vw, 27px);
+  font-weight: 850;
+  letter-spacing: -.8px;
+}
+
+.po-overview-hero p {
+  margin: 6px 0 0;
+  color: #78877e;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.po-overview-refresh {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 37px;
+  padding: 0 13px;
+  border: 1px solid #dce9e0;
+  border-radius: 9px;
+  background: #fff;
+  color: #087c55;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: background .2s ease, border-color .2s ease, transform .2s ease;
+}
+
+.po-overview-refresh:hover:not(:disabled) {
+  border-color: #a9d4ba;
+  background: #f0f8f2;
+  transform: translateY(-1px);
+}
+
+.po-overview-refresh:disabled {
+  cursor: not-allowed;
+  opacity: .65;
+}
+
+/* Currency section */
+
+.po-overview-currency-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.po-overview-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.po-overview-section-heading h2 {
+  margin: 0;
+  color: #1c3327;
+  font-size: 17px;
+  font-weight: 820;
+  letter-spacing: -.35px;
+}
+
+.po-overview-section-heading .po-overview-eyebrow {
+  margin-bottom: 3px;
+  font-size: 8px;
+}
+
+.po-overview-currency-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid #dcebe1;
+  border-radius: 30px;
+  background: #f2f8f4;
+  color: #087c55;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+/* Small metric cards */
+
+.po-overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.po-overview-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 105px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 13px 11px;
+  overflow: hidden;
+  border: 1px solid #e8eee9;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(25 55 38 / 3%);
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.po-overview-card:hover {
+  transform: translateY(-2px);
+  border-color: #cbded1;
+  box-shadow: 0 7px 17px rgb(25 55 38 / 6%);
+}
+
+.po-overview-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.po-overview-card-label {
+  overflow: hidden;
+  color: #77867d;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.po-overview-card-icon {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 29px;
+  height: 29px;
+  border-radius: 9px;
+}
+
+.po-overview-card-value {
+  display: block;
+  color: #1a3025;
+  font-size: clamp(14px, 1.65vw, 19px);
+  font-weight: 850;
+  line-height: 1.25;
+  letter-spacing: -.45px;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.po-overview-card-detail {
+  color: #929d96;
+  font-size: 9px;
+  font-weight: 550;
+  line-height: 1.35;
+}
+
+.po-overview-card.tone-green .po-overview-card-icon {
+  color: #07805a;
+  background: #eaf6ef;
+}
+
+.po-overview-card.tone-blue .po-overview-card-icon {
+  color: #3475b8;
+  background: #edf4fc;
+}
+
+.po-overview-card.tone-purple .po-overview-card-icon {
+  color: #7957a6;
+  background: #f3effa;
+}
+
+.po-overview-card.tone-amber .po-overview-card-icon {
+  color: #aa741c;
+  background: #fff6e7;
+}
+
+.po-overview-card.tone-red .po-overview-card-icon {
+  color: #c24c48;
+  background: #fff0ef;
+}
+
+/* Performance and funding panels */
+
+.po-overview-insight-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.po-overview-panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #e7eee9;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 2px 9px rgb(25 55 38 / 3%);
+}
+
+.po-overview-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.po-overview-panel-heading h3 {
+  margin: 0;
+  color: #1b3226;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.po-overview-panel-heading .po-overview-eyebrow {
+  margin-bottom: 3px;
+  font-size: 8px;
+}
+
+.po-overview-panel-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: #edf7f0;
+  color: #087c55;
+}
+
+.po-recovery-value-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 17px;
+}
+
+.po-recovery-value-row strong {
+  color: #087c55;
+  font-size: 27px;
+  font-weight: 850;
+  letter-spacing: -1px;
+}
+
+.po-recovery-value-row span {
+  color: #829087;
+  font-size: 10px;
+}
+
+.po-recovery-track,
+.po-funding-track {
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 20px;
+  background: #edf2ee;
+}
+
+.po-recovery-track {
+  margin-top: 10px;
+}
+
+.po-recovery-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #07805a, #39b77d);
+  transition: width .35s ease;
+}
+
+.po-recovery-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 15px;
+}
+
+.po-recovery-breakdown > div {
+  display: grid;
+  grid-template-columns: 7px auto;
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 4px;
+  color: #829087;
+  font-size: 9px;
+}
+
+.po-recovery-breakdown strong {
+  grid-column: 2;
+  color: #263b30;
+  font-size: 11px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.po-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.po-dot.green {
+  background: #0a9665;
+}
+
+.po-dot.blue {
+  background: #4b8bc6;
+}
+
+/* Funding */
+
+.po-funding-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 15px 0 12px;
+}
+
+.po-funding-total span {
+  color: #829087;
+  font-size: 10px;
+}
+
+.po-funding-total strong {
+  color: #20372a;
+  font-size: 15px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.po-funding-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.po-funding-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #edf1ee;
+  border-radius: 10px;
+  background: #fbfdfb;
+}
+
+.po-funding-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #77867d;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.po-funding-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 7px;
+}
+
+.po-funding-card > strong {
+  display: block;
+  margin: 9px 0;
+  color: #20372a;
+  font-size: 13px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.po-funding-track {
+  height: 5px;
+}
+
+.po-funding-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #0b9667;
+}
+
+.po-funding-card.investor .po-funding-track span {
+  background: #5687c3;
+}
+
+.po-funding-card small {
+  display: block;
+  margin-top: 6px;
+  color: #8a978f;
+  font-size: 8px;
+}
+
+.po-funding-card.capital .po-funding-icon {
+  color: #087c55;
+  background: #eaf6ef;
+}
+
+.po-funding-card.investor .po-funding-icon {
+  color: #3475b8;
+  background: #edf4fc;
+}
+
+/* Loading, error and empty states */
+
+.po-overview-loading,
+.po-overview-empty {
+  padding: 30px 20px;
+  border: 1px solid #e7eee9;
+  border-radius: 14px;
+  background: #fff;
+  text-align: center;
+}
+
+.po-overview-loading-icon,
+.po-overview-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px;
+  border-radius: 14px;
+  background: #eaf6ef;
+  color: #087c55;
+}
+
+.po-overview-loading > strong,
+.po-overview-empty h2 {
+  display: block;
+  margin: 0;
+  color: #20372a;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.po-overview-loading > span,
+.po-overview-empty p {
+  display: block;
+  margin: 6px 0 0;
+  color: #849188;
+  font-size: 11px;
+}
+
+.po-overview-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.po-overview-skeleton {
+  height: 95px;
+  border-radius: 11px;
+  background: linear-gradient(100deg, #f0f4f1 25%, #f8faf8 45%, #f0f4f1 65%);
+  background-size: 200% 100%;
+  animation: po-overview-shimmer 1.5s infinite linear;
+}
+
+@keyframes po-overview-shimmer {
+  to {
+    background-position-x: -200%;
+  }
+}
+
+.po-overview-empty .po-overview-refresh {
+  margin-top: 16px;
+}
+
+.po-overview-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding: 12px 14px;
+  border: 1px solid #f1d4d1;
+  border-radius: 10px;
+  background: #fff5f4;
+  color: #a33e39;
+  font-size: 11px;
+}
+
+.po-overview-error span {
+  flex: 1;
+}
+
+.po-overview-error button {
+  padding: 5px 9px;
+  border: 1px solid #ecc6c2;
+  border-radius: 7px;
+  background: #fff;
+  color: #a33e39;
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+/* Footer */
+
+.po-overview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 9px 15px;
+  padding: 12px 2px 3px;
+  border-top: 1px solid #e9efeb;
+  color: #89968e;
+  font-size: 9px;
+}
+
+.po-overview-footer > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.po-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #16a36c;
+  box-shadow: 0 0 0 3px #e5f5eb;
+}
+
+.po-overview-footer-brand {
+  color: #087c55;
+  font-weight: 800;
+}
+
+/* Responsive layouts */
+
+@media (max-width: 1050px) {
+  .po-overview-metrics,
+  .po-overview-skeleton-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .po-modern-overview {
+    gap: 15px;
+  }
+
+  .po-overview-hero {
+    align-items: flex-start;
+    padding: 17px;
+  }
+
+  .po-overview-insight-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .po-overview-metrics,
+  .po-overview-skeleton-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .po-overview-card {
+    min-height: 99px;
+    padding: 11px;
+  }
+
+  .po-overview-card-value {
+    font-size: clamp(13px, 3.5vw, 17px);
+  }
+
+  .po-overview-panel {
+    padding: 14px;
+  }
+}
+
+@media (max-width: 420px) {
+  .po-overview-hero {
+    flex-direction: column;
+  }
+
+  .po-overview-refresh {
+    min-height: 35px;
+  }
+
+  .po-overview-card {
+    min-height: 94px;
+    padding: 10px;
+  }
+
+  .po-overview-card-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .po-overview-card-label {
+    font-size: 9px;
+  }
+
+  .po-overview-card-value {
+    font-size: 13px;
+  }
+
+  .po-funding-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .po-overview-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* ===== PESAPILOT FUNDING & CAPITAL REDESIGN ===== */
+
+.funding-page {
+  --funding-ink: #172a22;
+  --funding-muted: #748279;
+  --funding-border: #e4ece7;
+  --funding-green: #087c55;
+  --funding-surface: #f7faf8;
+  gap: 20px;
+}
+
+.funding-page .funding-header {
+  padding-bottom: 4px;
+}
+
+.funding-eyebrow {
+  display: inline-block;
+  margin-bottom: 7px;
+  color: #087c55;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 1.5px;
+}
+
+.funding-page .platform-owner-finance-title {
+  font-size: clamp(22px, 3vw, 27px);
+  letter-spacing: -.7px;
+}
+
+.funding-page .platform-owner-finance-subtitle {
+  max-width: 650px;
+  line-height: 1.55;
+}
+
+.funding-page .platform-owner-finance-refresh {
+  min-height: 37px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  transition: background .18s ease, border-color .18s ease;
+}
+
+.funding-page .platform-owner-finance-refresh:hover {
+  border-color: #b8d4c4;
+  background: #f0f7f2;
+}
+
+.funding-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.funding-section-heading h2 {
+  margin: 0;
+  color: var(--funding-ink);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -.25px;
+}
+
+.funding-section-heading p {
+  margin: 4px 0 0;
+  color: var(--funding-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.funding-section-tag {
+  padding: 5px 8px;
+  border: 1px solid #dcebe1;
+  border-radius: 6px;
+  background: #f0f7f2;
+  color: #28724f;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .6px;
+}
+
+.funding-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.funding-stat-card {
+  position: relative;
+  min-width: 0;
+  min-height: 112px;
+  padding: 13px 14px;
+  overflow: hidden;
+  border: 1px solid var(--funding-border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(25 55 38 / 3%);
+}
+
+.funding-stat-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.funding-stat-label {
+  color: var(--funding-muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.funding-stat-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  background: #eaf5ee;
+  color: #087c55;
+}
+
+.funding-stat-card.blue .funding-stat-icon {
+  background: #eaf2fc;
+  color: #3474b8;
+}
+
+.funding-stat-card.purple .funding-stat-icon {
+  background: #f2edfb;
+  color: #805bb0;
+}
+
+.funding-stat-card.amber .funding-stat-icon {
+  background: #fff4e2;
+  color: #ad741d;
+}
+
+.funding-stat-value {
+  display: block;
+  margin-top: 12px;
+  color: var(--funding-ink);
+  font-size: clamp(20px, 2.2vw, 25px);
+  font-weight: 850;
+  line-height: 1.15;
+  letter-spacing: -.7px;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.funding-stat-detail {
+  display: block;
+  margin-top: 5px;
+  color: #89968e;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.funding-page .funding-panel {
+  padding: 17px;
+  border-radius: 13px;
+}
+
+.funding-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.funding-heading-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 37px;
+  height: 37px;
+  place-items: center;
+  border: 1px solid #dceee3;
+  border-radius: 10px;
+  background: #eff8f2;
+  color: #087c55;
+}
+
+.funding-panel-heading > div:last-child {
+  min-width: 0;
+}
+
+.funding-panel-heading .platform-owner-finance-panel-title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.funding-panel-heading .platform-owner-finance-subtitle {
+  margin-top: 4px;
+  font-size: 10px;
+}
+
+.funding-page .platform-owner-finance-account-count {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border: 1px solid #dcebe1;
+  background: #eff7f1;
+  color: #28724f;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.funding-page .funding-account-form {
+  gap: 13px;
+  padding: 15px;
+  margin: 16px 0;
+  border: 1px solid #e5eee8;
+  border-radius: 11px;
+  background: #f8fbf9;
+}
+
+.funding-form-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.funding-form-heading h3 {
+  margin: 0;
+  color: var(--funding-ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.funding-form-heading p {
+  margin: 4px 0 0;
+  color: var(--funding-muted);
+  font-size: 10px;
+}
+
+.funding-form-plus {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border-radius: 8px;
+  background: #e5f3e9;
+  color: #087c55;
+}
+
+.funding-page .funding-form-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.funding-page .platform-owner-finance-field {
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.funding-page .platform-owner-finance-field input,
+.funding-page .platform-owner-finance-field select {
+  min-height: 39px;
+  padding: 8px 10px;
+  border-color: #dfe9e3;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.funding-optional {
+  color: #97a39b;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.funding-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.funding-form-actions > span {
+  color: #89968e;
+  font-size: 9px;
+}
+
+.funding-page .platform-owner-finance-submit {
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.funding-account-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.funding-account-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--funding-border);
+  border-radius: 11px;
+  background: #fff;
+  transition: border-color .18s ease, transform .18s ease;
+}
+
+.funding-account-card:hover {
+  transform: translateY(-2px);
+  border-color: #bfd9c8;
+}
+
+.funding-account-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.funding-account-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 9px;
+  background: #eaf5ee;
+  color: #087c55;
+}
+
+.funding-account-type {
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: #f0f5f2;
+  color: #617269;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.funding-account-card h3 {
+  margin: 12px 0 5px;
+  color: var(--funding-ink);
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.funding-account-currency {
+  display: inline-block;
+  margin-bottom: 12px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: #eaf5ee;
+  color: #087c55;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.funding-account-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 8px;
+  margin-top: 7px;
+  border-top: 1px solid #eff3f0;
+  font-size: 10px;
+}
+
+.funding-account-meta span {
+  color: #89968e;
+}
+
+.funding-account-meta strong {
+  color: #34483d;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.funding-currency-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.funding-currency-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.funding-currency-card {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--funding-border);
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 2px 8px rgb(25 55 38 / 3%);
+}
+
+.funding-currency-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #edf2ee;
+}
+
+.funding-currency-symbol {
+  display: grid;
+  width: 35px;
+  height: 35px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: #eaf5ee;
+  color: #087c55;
+}
+
+.funding-currency-heading h3 {
+  margin: 0;
+  color: var(--funding-ink);
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.funding-currency-heading span {
+  display: block;
+  margin-top: 3px;
+  color: #89968e;
+  font-size: 9px;
+}
+
+.funding-currency-primary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 13px 0;
+}
+
+.funding-currency-primary > div,
+.funding-capital-breakdown > div {
+  min-width: 0;
+}
+
+.funding-currency-primary span,
+.funding-capital-breakdown span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #829087;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.funding-currency-primary strong {
+  display: block;
+  margin-top: 5px;
+  color: #24392e;
+  font-size: 15px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.funding-currency-primary .funding-currency-total {
+  grid-column: 1 / -1;
+  padding: 10px;
+  border-radius: 8px;
+  background: #eff7f1;
+}
+
+.funding-currency-primary .funding-currency-total strong {
+  color: #087c55;
+  font-size: 18px;
+}
+
+.funding-capital-breakdown {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #edf2ee;
+}
+
+.funding-capital-breakdown strong {
+  display: block;
+  margin-top: 4px;
+  color: #34483d;
+  font-size: 11px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.funding-investor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.funding-investor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 15px 0;
+}
+
+.funding-investor-toolbar > span {
+  flex: 0 0 auto;
+  color: #89968e;
+  font-size: 10px;
+}
+
+.funding-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(100%, 390px);
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid #e1eae4;
+  border-radius: 8px;
+  background: #fbfdfb;
+  color: #87958c;
+}
+
+.funding-search:focus-within {
+  border-color: #83b99a;
+  box-shadow: 0 0 0 3px rgb(8 124 85 / 8%);
+}
+
+.funding-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--funding-ink);
+  font: inherit;
+  font-size: 11px;
+}
+
+.funding-investor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.funding-investor-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--funding-border);
+  border-radius: 11px;
+  background: #fff;
+}
+
+.funding-investor-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.funding-investor-avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #e8f4ec;
+  color: #087c55;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.funding-investor-identity {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+
+.funding-investor-identity strong {
+  color: #24392e;
+  font-size: 11px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.funding-investor-identity span {
+  color: #89968e;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.funding-investor-status {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 20px;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.funding-investor-status.active {
+  background: #eaf6ed;
+  color: #237348;
+}
+
+.funding-investor-status.inactive {
+  background: #f2f3f3;
+  color: #7d8881;
+}
+
+.funding-investor-currency {
+  display: inline-block;
+  margin: 11px 0 9px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: #f0f6f2;
+  color: #28724f;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.funding-investor-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.funding-investor-values > div {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 7px;
+  background: #f8faf8;
+}
+
+.funding-investor-values span {
+  display: block;
+  color: #89968e;
+  font-size: 9px;
+}
+
+.funding-investor-values strong {
+  display: block;
+  margin-top: 4px;
+  color: #34483d;
+  font-size: 11px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.funding-investor-values .available {
+  background: #edf7f0;
+}
+
+.funding-investor-values .available strong {
+  color: #087c55;
+}
+
+.funding-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 145px;
+  padding: 20px;
+  border: 1px dashed #d4e2d8;
+  border-radius: 10px;
+  background: #fbfdfb;
+  color: #7d8b82;
+  text-align: center;
+}
+
+.funding-empty svg {
+  color: #80a991;
+}
+
+.funding-empty strong {
+  color: #34483d;
+  font-size: 12px;
+}
+
+.funding-empty span {
+  font-size: 10px;
+}
+
+.funding-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #718078;
+  font-size: 12px;
+}
+
+.funding-footnote {
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px solid #e4ece7;
+  border-radius: 9px;
+  background: #f7faf8;
+  color: #78877e;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .funding-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .funding-page .funding-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .funding-account-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .funding-page {
+    gap: 16px;
+  }
+
+  .funding-page .funding-panel {
+    padding: 13px;
+  }
+
+  .funding-stat-grid {
+    gap: 8px;
+  }
+
+  .funding-stat-card {
+    min-height: 104px;
+    padding: 11px;
+  }
+
+  .funding-stat-value {
+    margin-top: 10px;
+    font-size: 21px;
+  }
+
+  .funding-stat-label {
+    font-size: 9px;
+  }
+
+  .funding-stat-icon {
+    width: 27px;
+    height: 27px;
+  }
+
+  .funding-page .funding-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .funding-form-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .funding-form-actions .platform-owner-finance-submit {
+    width: 100%;
+  }
+
+  .funding-account-grid,
+  .funding-currency-list,
+  .funding-investor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .funding-investor-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .funding-search {
+    width: 100%;
+  }
+
+  .funding-page .platform-owner-finance-header {
+    align-items: flex-start;
+  }
+
+  .funding-page .platform-owner-finance-refresh {
+    min-height: 35px;
+  }
+
+  .funding-panel-heading {
+    align-items: flex-start;
+  }
+
+  .funding-page .platform-owner-finance-account-count {
+    font-size: 9px;
+  }
+
+  .funding-currency-card {
+    padding: 13px;
+  }
+}
+
+@media (max-width: 360px) {
+  .funding-stat-card {
+    padding: 9px;
+  }
+
+  .funding-stat-value {
+    font-size: 18px;
+  }
+
+  .funding-stat-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .funding-investor-card-heading {
+    flex-wrap: wrap;
+  }
+
+  .funding-investor-status {
+    margin-left: auto;
+  }
+}
+
+/* =========================================================
+   PESAPILOT — PLATFORM OWNER ACCOUNTING REDESIGN
+   Page-scoped styles; does not change other finance pages.
+   ========================================================= */
+
+.platform-owner-finance-page .platform-owner-finance-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.platform-owner-finance-page .platform-owner-finance-grid.two-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.platform-owner-finance-page .platform-owner-finance-grid.three-columns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.platform-owner-finance-page .platform-owner-finance-card {
+  padding: 13px;
+  border-radius: 13px;
+  box-shadow: 0 3px 12px rgb(24 54 38 / 4%);
+  transition: border-color .18s ease, transform .18s ease,
+    box-shadow .18s ease;
+}
+
+.platform-owner-finance-page .platform-owner-finance-card:hover {
+  border-color: #b9d8c5;
+  box-shadow: 0 7px 18px rgb(24 54 38 / 7%);
+  transform: translateY(-2px);
+}
+
+.platform-owner-finance-page .platform-owner-finance-card-content {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.platform-owner-finance-page .platform-owner-finance-label {
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.platform-owner-finance-page .platform-owner-finance-value.large {
+  margin-top: 8px;
+  font-size: clamp(16px, 1.5vw, 21px);
+  line-height: 1.25;
+  letter-spacing: -.45px;
+}
+
+.platform-owner-finance-page .platform-owner-finance-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.platform-owner-finance-page .platform-owner-finance-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.platform-owner-finance-page .platform-owner-finance-muted.small {
+  margin-top: 5px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.platform-owner-finance-page .platform-owner-finance-section {
+  gap: 12px;
+}
+
+.platform-owner-finance-page .platform-owner-finance-section-title {
+  font-size: 16px;
+  letter-spacing: -.25px;
+}
+
+.platform-owner-finance-page .platform-owner-finance-panel {
+  padding: 17px;
+  border-radius: 14px;
+  box-shadow: 0 3px 12px rgb(24 54 38 / 4%);
+}
+
+.platform-owner-finance-page .platform-owner-finance-panel-title {
+  margin-bottom: 13px;
+  font-size: 14px;
+}
+
+/* Functional currency settings */
+.platform-owner-finance-page .platform-owner-accounting-settings {
+  gap: 15px;
+  margin-bottom: 15px;
+  padding: 17px;
+  border: 1px solid var(--owner-border, #dce5df);
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ffffff 0%, #f7fbf8 100%);
+  box-shadow: 0 4px 15px rgb(24 54 38 / 4%);
+}
+
+.platform-owner-finance-page .platform-owner-accounting-settings-heading {
+  gap: 11px;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-settings-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-settings-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-settings-body {
+  align-items: center;
+  gap: 16px;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-current strong {
+  font-size: 16px;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-form {
+  gap: 9px;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-form select {
+  min-width: 190px;
+  min-height: 39px;
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-save {
+  min-height: 39px;
+  padding: 8px 13px;
+  border-radius: 9px;
+  font-size: 12px;
+  transition: background .18s ease, transform .18s ease;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-save:not(:disabled):hover {
+  background: #066b49;
+  transform: translateY(-1px);
+}
+
+.platform-owner-finance-page .platform-owner-accounting-note {
+  max-width: 850px;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.platform-owner-finance-page .platform-owner-accounting-success {
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+/* Notice and error presentation */
+.platform-owner-finance-page .platform-owner-notice {
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.platform-owner-finance-page .platform-owner-finance-error {
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+/* Accounting report footer */
+.platform-owner-finance-page .platform-owner-finance-muted {
+  line-height: 1.5;
+}
+
+/* Tablet */
+@media (max-width: 900px) {
+  .platform-owner-finance-page .platform-owner-finance-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Mobile */
+@media (max-width: 600px) {
+  .platform-owner-finance-page .platform-owner-finance-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+  }
+
+  .platform-owner-finance-page .platform-owner-finance-grid.two-columns,
+  .platform-owner-finance-page .platform-owner-finance-grid.three-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .platform-owner-finance-page .platform-owner-finance-card {
+    padding: 11px;
+  }
+
+  .platform-owner-finance-page .platform-owner-finance-card-content {
+    gap: 5px;
+  }
+
+  .platform-owner-finance-page .platform-owner-finance-value.large {
+    font-size: 16px;
+  }
+
+  .platform-owner-finance-page .platform-owner-finance-icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .platform-owner-finance-page .platform-owner-accounting-settings {
+    padding: 13px;
+  }
+
+  .platform-owner-finance-page .platform-owner-accounting-settings-body {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .platform-owner-finance-page .platform-owner-accounting-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+  }
+
+  .platform-owner-finance-page .platform-owner-accounting-form label {
+    grid-column: 1 / -1;
+  }
+
+  .platform-owner-finance-page .platform-owner-accounting-form select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .platform-owner-finance-page .platform-owner-accounting-save {
+    white-space: nowrap;
+  }
+
+  .platform-owner-finance-page .platform-owner-finance-panel {
+    padding: 13px;
+  }
+}
+
+/* Very narrow phones */
+@media (max-width: 360px) {
+  .platform-owner-finance-page .platform-owner-finance-grid,
+  .platform-owner-finance-page .platform-owner-finance-grid.two-columns,
+  .platform-owner-finance-page .platform-owner-finance-grid.three-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   END ACCOUNTING REDESIGN
+   ========================================================= */
+
+/* =========================================================
+   PesaPilot Platform Owner — Dark Command Centre
+   Scoped exclusively to the Platform Owner layout
+   ========================================================= */
+
+.platform-owner-shell {
+  --po-bg: #0b1020;
+  --po-surface: #111a2d;
+  --po-surface-raised: #162238;
+  --po-border: rgba(148, 163, 184, .14);
+  --po-text: #e8eef9;
+  --po-muted: #8c9bb4;
+  --po-cyan: #36c8e8;
+  --po-indigo: #7885ff;
+  min-height: 100vh;
+  color: var(--po-text);
+  background:
+    radial-gradient(ellipse at 75% 0%, rgba(58, 91, 190, .13), transparent 38%),
+    var(--po-bg);
+}
+
+.platform-owner-shell .sidebar {
+  width: 255px;
+  padding: 23px 16px 17px;
+  color: #e7edfa;
+  background: linear-gradient(180deg, #111a2d 0%, #0d1526 100%);
+  border-right: 1px solid var(--po-border);
+  box-shadow: 12px 0 35px rgba(0, 0, 0, .12);
+  scrollbar-color: #34435f #111a2d;
+}
+
+.platform-owner-shell .brand {
+  gap: 12px;
+  padding: 2px 7px 29px;
+}
+
+.platform-owner-shell .brand-icon {
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(54, 200, 232, .35);
+  border-radius: 12px;
+  color: #071522;
+  background: linear-gradient(135deg, #43d4e9, #7785ff);
+  box-shadow: 0 5px 18px rgba(54, 200, 232, .2);
+}
+
+.platform-owner-shell .brand strong {
+  color: #f4f7ff;
+  font-size: 18px;
+  letter-spacing: -.55px;
+}
+
+.platform-owner-shell .brand span {
+  color: #8192ad;
+  font-size: 9px;
+  letter-spacing: 1.35px;
+}
+
+.platform-owner-shell .workspace-label,
+.platform-owner-shell .nav-label {
+  color: #71819d;
+  font-size: 9px;
+  letter-spacing: 1.45px;
+}
+
+.platform-owner-shell .workspace-switcher {
+  padding: 11px 10px;
+  margin-bottom: 27px;
+  border: 1px solid var(--po-border);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .025);
+}
+
+.platform-owner-shell .workspace-avatar {
+  color: #55cde5;
+  background: rgba(54, 200, 232, .12);
+  border: 1px solid rgba(54, 200, 232, .15);
+}
+
+.platform-owner-shell .workspace-info strong,
+.platform-owner-shell .profile-info strong {
+  color: #e5ecf9;
+  font-size: 11px;
+}
+
+.platform-owner-shell .workspace-info span,
+.platform-owner-shell .profile-info span {
+  color: #8190aa;
+  font-size: 9px;
+}
+
+.platform-owner-shell .navigation {
+  gap: 6px;
+}
+
+.platform-owner-shell .nav-link {
+  min-height: 42px;
+  padding: 10px 12px;
+  gap: 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #9baac1;
+  font-size: 12px;
+  transition: background .18s ease, color .18s ease, border-color .18s ease;
+}
+
+.platform-owner-shell .nav-link:hover {
+  color: #edf6ff;
+  background: rgba(255, 255, 255, .055);
+  border-color: rgba(148, 163, 184, .1);
+}
+
+.platform-owner-shell .nav-link.active {
+  color: #e9faff;
+  font-weight: 700;
+  background: linear-gradient(100deg, rgba(39, 174, 210, .2), rgba(103, 112, 245, .17));
+  border-color: rgba(72, 195, 226, .24);
+  box-shadow: inset 3px 0 0 #42c9e6, 0 5px 16px rgba(0, 0, 0, .12);
+}
+
+.platform-owner-shell .sidebar-profile {
+  border-top-color: var(--po-border);
+}
+
+.platform-owner-shell .profile-avatar {
+  color: #dffaff;
+  background: linear-gradient(135deg, #176d91, #514fa5);
+}
+
+.platform-owner-shell .profile-logout {
+  color: #8c9bb4;
+}
+
+.platform-owner-shell .profile-logout:hover {
+  color: #ff929e;
+  background: rgba(239, 68, 68, .12);
+}
+
+.platform-owner-shell .sidebar-collapse-button {
+  color: #9aabc4;
+  border-color: var(--po-border);
+  background: rgba(255, 255, 255, .025);
+}
+
+.platform-owner-shell .sidebar-collapse-button:hover {
+  color: #fff;
+  background: rgba(54, 200, 232, .1);
+  border-color: rgba(54, 200, 232, .28);
+}
+
+.platform-owner-shell .main-area {
+  min-height: 100vh;
+  background: transparent;
+}
+
+.platform-owner-shell .topbar {
+  height: 70px;
+  padding: 0 34px;
+  color: var(--po-text);
+  background: rgba(13, 21, 38, .88);
+  border-bottom: 1px solid var(--po-border);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.platform-owner-shell .breadcrumb {
+  color: #8191aa;
+  font-size: 11px;
+}
+
+.platform-owner-shell .breadcrumb strong {
+  color: #e4ecf9;
+}
+
+.platform-owner-shell .breadcrumb-separator {
+  color: #52627c;
+}
+
+.platform-owner-shell .topbar-user {
+  color: #aab8ce;
+}
+
+.platform-owner-shell .topbar-user svg {
+  color: #55cde5;
+}
+
+.platform-owner-shell .page-content {
+  max-width: 1600px;
+  padding: 31px 34px 36px;
+}
+
+.platform-owner-shell .page-content:has(.platform-owner-page) {
+  background: transparent;
+}
+
+.platform-owner-shell .platform-owner-page {
+  --owner-green: #36c8e8;
+  --owner-green-dark: #1b9fca;
+  --owner-ink: #e8eef9;
+  --owner-muted: #91a0b8;
+  --owner-border: rgba(148, 163, 184, .16);
+  color: var(--po-text);
+}
+
+.platform-owner-shell .platform-owner-page-title,
+.platform-owner-shell .platform-owner-page-header h1,
+.platform-owner-shell .platform-owner-page-heading h1,
+.platform-owner-shell .platform-owner-page .lending-header h1 {
+  color: #edf3ff;
+}
+
+.platform-owner-shell .platform-owner-page-subtitle,
+.platform-owner-shell .platform-owner-page-header p,
+.platform-owner-shell .platform-owner-page-heading p,
+.platform-owner-shell .platform-owner-page .lending-header p {
+  color: #91a0b8;
+}
+
+.platform-owner-shell .mobile-menu {
+  color: #a9bad3;
+}
+
+.platform-owner-shell .mobile-overlay {
+  background: rgba(3, 8, 19, .76);
+  backdrop-filter: blur(3px);
+}
+
+@media (min-width: 701px) {
+  .platform-owner-shell.sidebar-is-collapsed .sidebar {
+    width: 78px;
+  }
+
+  .platform-owner-shell.sidebar-is-collapsed .main-area {
+    margin-left: 78px;
+  }
+}
+
+@media (max-width: 1050px) {
+  .platform-owner-shell .page-content {
+    padding: 27px 24px;
+  }
+
+  .platform-owner-shell .topbar {
+    padding: 0 24px;
+  }
+}
+
+@media (max-width: 700px) {
+  .platform-owner-shell .sidebar {
+    width: min(290px, 86vw);
+  }
+
+  .platform-owner-shell .main-area {
+    margin-left: 0;
+  }
+
+  .platform-owner-shell .topbar {
+    height: 62px;
+    padding: 0 15px;
+  }
+
+  .platform-owner-shell .page-content {
+    padding: 23px 15px 30px;
+  }
+}
+
+
+/* =========================================================
+   PESAPILOT — PLATFORM OWNER OVERVIEW
+   Lilymac-inspired dark command-centre theme
+   Scoped to the Platform Owner shell only
+========================================================= */
+
+.platform-owner-shell .po-modern-overview {
+  --po-ink: #e8eef9;
+  --po-muted: #91a0b8;
+  --po-border: rgba(148, 163, 184, .16);
+  --po-green: #36c8e8;
+  --po-surface: #111c2d;
+  color: var(--po-ink);
+}
+
+/* Hero */
+
+.platform-owner-shell .po-overview-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(74, 144, 226, .2);
+  border-radius: 18px;
+  background:
+    radial-gradient(ellipse at 90% 0%, rgba(39, 133, 220, .2), transparent 42%),
+    radial-gradient(ellipse at 10% 100%, rgba(35, 199, 210, .09), transparent 40%),
+    linear-gradient(125deg, #14243a, #101a2b 65%, #142238);
+  box-shadow: 0 12px 35px rgba(0, 0, 0, .15);
+}
+
+.platform-owner-shell .po-overview-eyebrow {
+  color: #55c9e9;
+  letter-spacing: 1.35px;
+}
+
+.platform-owner-shell .po-overview-hero h1 {
+  color: #f1f6ff;
+  font-size: clamp(23px, 3vw, 30px);
+  letter-spacing: -.9px;
+}
+
+.platform-owner-shell .po-overview-hero p {
+  color: #9aabc4;
+}
+
+.platform-owner-shell .po-overview-refresh {
+  border: 1px solid rgba(75, 190, 224, .3);
+  border-radius: 10px;
+  background: rgba(48, 128, 180, .13);
+  color: #78d9f2;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+}
+
+.platform-owner-shell .po-overview-refresh:hover:not(:disabled) {
+  border-color: rgba(75, 190, 224, .65);
+  background: rgba(48, 128, 180, .24);
+}
+
+/* Currency heading */
+
+.platform-owner-shell .po-overview-section-heading h2 {
+  color: #e8eef9;
+}
+
+.platform-owner-shell .po-overview-currency-badge {
+  border: 1px solid rgba(75, 190, 224, .23);
+  background: rgba(39, 148, 190, .1);
+  color: #75d8ed;
+}
+
+/* Metric cards */
+
+.platform-owner-shell .po-overview-card {
+  min-height: 112px;
+  border: 1px solid rgba(148, 163, 184, .15);
+  border-radius: 14px;
+  background:
+    linear-gradient(145deg, rgba(27, 43, 65, .98), rgba(17, 29, 46, .98));
+  box-shadow:
+    0 5px 18px rgba(0, 0, 0, .12),
+    inset 0 1px 0 rgba(255, 255, 255, .025);
+}
+
+.platform-owner-shell .po-overview-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(75, 190, 224, .38);
+  box-shadow: 0 12px 25px rgba(0, 0, 0, .2);
+}
+
+.platform-owner-shell .po-overview-card-label {
+  color: #9eacc2;
+}
+
+.platform-owner-shell .po-overview-card-value {
+  color: #f0f5ff;
+  font-size: clamp(15px, 1.7vw, 20px);
+  letter-spacing: -.55px;
+}
+
+.platform-owner-shell .po-overview-card-detail {
+  color: #7f90aa;
+}
+
+/* Metric icon colour treatments */
+
+.platform-owner-shell .po-overview-card.tone-green .po-overview-card-icon {
+  color: #43d6b0;
+  background: rgba(27, 190, 143, .13);
+}
+
+.platform-owner-shell .po-overview-card.tone-blue .po-overview-card-icon {
+  color: #65b9ff;
+  background: rgba(59, 145, 232, .15);
+}
+
+.platform-owner-shell .po-overview-card.tone-purple .po-overview-card-icon {
+  color: #bd9aff;
+  background: rgba(147, 105, 226, .16);
+}
+
+.platform-owner-shell .po-overview-card.tone-amber .po-overview-card-icon {
+  color: #ffc36b;
+  background: rgba(228, 158, 54, .15);
+}
+
+.platform-owner-shell .po-overview-card.tone-red .po-overview-card-icon {
+  color: #ff858c;
+  background: rgba(231, 83, 100, .15);
+}
+
+/* Insight panels */
+
+.platform-owner-shell .po-overview-panel {
+  border: 1px solid rgba(148, 163, 184, .15);
+  border-radius: 15px;
+  background:
+    linear-gradient(145deg, rgba(26, 42, 64, .97), rgba(17, 29, 46, .98));
+  box-shadow:
+    0 7px 22px rgba(0, 0, 0, .13),
+    inset 0 1px 0 rgba(255, 255, 255, .025);
+}
+
+.platform-owner-shell .po-overview-panel-heading h3 {
+  color: #e8eef9;
+  font-size: 14px;
+}
+
+.platform-owner-shell .po-overview-panel-icon {
+  border: 1px solid rgba(75, 190, 224, .17);
+  background: rgba(39, 148, 190, .12);
+  color: #6bd5ed;
+}
+
+.platform-owner-shell .po-recovery-value-row strong {
+  color: #45d4c0;
+}
+
+.platform-owner-shell .po-recovery-value-row span {
+  color: #8fa1ba;
+}
+
+.platform-owner-shell .po-recovery-track,
+.platform-owner-shell .po-funding-track {
+  background: rgba(148, 163, 184, .15);
+}
+
+.platform-owner-shell .po-recovery-track span {
+  background: linear-gradient(90deg, #248fd8, #45d4c0);
+}
+
+.platform-owner-shell .po-recovery-breakdown > div {
+  color: #8fa1ba;
+}
+
+.platform-owner-shell .po-recovery-breakdown strong {
+  color: #e4ecf9;
+}
+
+.platform-owner-shell .po-dot.green {
+  background: #42d5b0;
+  box-shadow: 0 0 9px rgba(66, 213, 176, .35);
+}
+
+.platform-owner-shell .po-dot.blue {
+  background: #58aaff;
+  box-shadow: 0 0 9px rgba(88, 170, 255, .3);
+}
+
+/* Funding breakdown */
+
+.platform-owner-shell .po-funding-total span {
+  color: #91a2ba;
+}
+
+.platform-owner-shell .po-funding-total strong {
+  color: #f0f5ff;
+}
+
+.platform-owner-shell .po-funding-card {
+  border: 1px solid rgba(148, 163, 184, .13);
+  border-radius: 11px;
+  background: rgba(11, 23, 39, .58);
+}
+
+.platform-owner-shell .po-funding-card-heading {
+  color: #a0aec3;
+}
+
+.platform-owner-shell .po-funding-card > strong {
+  color: #edf4ff;
+}
+
+.platform-owner-shell .po-funding-card small {
+  color: #8294ad;
+}
+
+.platform-owner-shell .po-funding-card.capital .po-funding-icon {
+  color: #45d5b1;
+  background: rgba(27, 190, 143, .13);
+}
+
+.platform-owner-shell .po-funding-card.investor .po-funding-icon {
+  color: #70baff;
+  background: rgba(59, 145, 232, .15);
+}
+
+.platform-owner-shell .po-funding-card .po-funding-track span {
+  background: linear-gradient(90deg, #168cce, #43d1bc);
+}
+
+.platform-owner-shell .po-funding-card.investor .po-funding-track span {
+  background: linear-gradient(90deg, #6d65d9, #9c8bff);
+}
+
+/* Loading and empty states */
+
+.platform-owner-shell .po-overview-loading,
+.platform-owner-shell .po-overview-empty {
+  border: 1px solid rgba(148, 163, 184, .16);
+  border-radius: 15px;
+  background: linear-gradient(145deg, #1a2a40, #111d2e);
+}
+
+.platform-owner-shell .po-overview-loading-icon,
+.platform-owner-shell .po-overview-empty-icon {
+  border: 1px solid rgba(75, 190, 224, .18);
+  background: rgba(39, 148, 190, .12);
+  color: #69d5ed;
+}
+
+.platform-owner-shell .po-overview-loading > strong,
+.platform-owner-shell .po-overview-empty h2 {
+  color: #edf4ff;
+}
+
+.platform-owner-shell .po-overview-loading > span,
+.platform-owner-shell .po-overview-empty p {
+  color: #91a2ba;
+}
+
+.platform-owner-shell .po-overview-skeleton {
+  background: linear-gradient(
+    100deg,
+    #1b2b40 25%,
+    #263b55 45%,
+    #1b2b40 65%
+  );
+  background-size: 200% 100%;
+}
+
+.platform-owner-shell .po-overview-error {
+  border: 1px solid rgba(248, 113, 113, .25);
+  border-radius: 11px;
+  background: rgba(127, 29, 29, .18);
+  color: #ff9b9b;
+}
+
+.platform-owner-shell .po-overview-error button {
+  border: 1px solid rgba(248, 113, 113, .3);
+  background: rgba(127, 29, 29, .2);
+  color: #ffaaaa;
+}
+
+/* Footer */
+
+.platform-owner-shell .po-overview-footer {
+  border-color: rgba(148, 163, 184, .15);
+  color: #8293aa;
+}
+
+.platform-owner-shell .po-live-dot {
+  background: #42d5b0;
+  box-shadow: 0 0 0 3px rgba(66, 213, 176, .13);
+}
+
+.platform-owner-shell .po-overview-footer-brand {
+  color: #62cde9;
+}
+
+/* Responsive refinements */
+
+@media (max-width: 760px) {
+  .platform-owner-shell .po-overview-hero {
+    border-radius: 15px;
+  }
+
+  .platform-owner-shell .po-overview-card {
+    min-height: 101px;
+  }
+
+  .platform-owner-shell .po-overview-insight-grid {
+    gap: 10px;
+  }
+
+  .platform-owner-shell .po-overview-panel {
+    border-radius: 13px;
+  }
+}
+
+@media (max-width: 420px) {
+  .platform-owner-shell .po-overview-card-value {
+    font-size: 13px;
+  }
+
+  .platform-owner-shell .po-overview-hero h1 {
+    font-size: 23px;
+  }
+}
+
+
+/* =========================================================
+   PLATFORM OWNER — PRODUCTS DARK COMMAND CENTRE
+   Scoped to the Platform Owner workspace only.
+   ========================================================= */
+
+.platform-owner-shell .platform-owner-page.lending-page {
+  color: #e5edf7;
+}
+
+/* Page heading */
+.platform-owner-shell .platform-owner-page.lending-page .lending-header {
+  align-items: center;
+  margin-bottom: 22px;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-header h1 {
+  color: #f1f5fb;
+  letter-spacing: -0.035em;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-header p {
+  color: #91a2b8;
+}
+
+/* Toolbar and filters */
+.platform-owner-shell .platform-owner-toolbar {
+  padding: 12px;
+  border: 1px solid #26364b;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #111e30, #101a2a);
+  box-shadow: 0 8px 25px rgb(0 0 0 / 12%);
+}
+
+.platform-owner-shell .platform-owner-filter-tabs {
+  padding: 4px;
+  border: 1px solid #29394f;
+  border-radius: 9px;
+  background: #0b1626;
+}
+
+.platform-owner-shell .platform-owner-filter-tabs button {
+  color: #91a2b8;
+  transition: .2s ease;
+}
+
+.platform-owner-shell .platform-owner-filter-tabs button:hover {
+  color: #e5edf7;
+  background: #1a2a40;
+}
+
+.platform-owner-shell .platform-owner-filter-tabs button.active {
+  color: #071827;
+  background: linear-gradient(135deg, #67e8f9, #60a5fa);
+  box-shadow: 0 3px 12px rgb(34 211 238 / 16%);
+}
+
+/* Product cards */
+.platform-owner-shell .platform-owner-product-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.platform-owner-shell .platform-owner-product-card {
+  position: relative;
+  overflow: hidden;
+  padding: 21px;
+  border: 1px solid #29394f;
+  border-radius: 16px;
+  background:
+    radial-gradient(ellipse at top right, rgb(34 211 238 / 7%), transparent 48%),
+    linear-gradient(145deg, #142237, #101b2c 75%);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 13%);
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+
+.platform-owner-shell .platform-owner-product-card:hover {
+  transform: translateY(-3px);
+  border-color: #3c6680;
+  box-shadow: 0 15px 32px rgb(0 0 0 / 23%);
+}
+
+.platform-owner-shell .platform-owner-product-icon {
+  width: 45px;
+  height: 45px;
+  border: 1px solid rgb(34 211 238 / 20%);
+  border-radius: 13px;
+  background: linear-gradient(145deg, #123d50, #172c4c);
+  color: #67e8f9;
+}
+
+.platform-owner-shell .platform-owner-status {
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  font-size: 10px;
+  letter-spacing: .035em;
+}
+
+.platform-owner-shell .platform-owner-status.is-active {
+  border-color: rgb(52 211 153 / 22%);
+  background: rgb(16 185 129 / 12%);
+  color: #6ee7b7;
+}
+
+.platform-owner-shell .platform-owner-status.is-inactive {
+  border-color: rgb(248 113 113 / 20%);
+  background: rgb(239 68 68 / 11%);
+  color: #fca5a5;
+}
+
+.platform-owner-shell .platform-owner-product-title {
+  margin-top: 17px;
+}
+
+.platform-owner-shell .platform-owner-product-title h3 {
+  color: #f1f5fb;
+  font-size: 18px;
+  letter-spacing: -.025em;
+}
+
+.platform-owner-shell .platform-owner-product-title span {
+  color: #67c9e7;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .09em;
+}
+
+.platform-owner-shell .platform-owner-product-description {
+  min-height: 38px;
+  color: #91a2b8;
+  line-height: 1.65;
+}
+
+.platform-owner-shell .platform-owner-product-details {
+  gap: 0;
+  padding: 5px 0;
+  border-top-color: #29394f;
+  border-bottom-color: #29394f;
+}
+
+.platform-owner-shell .platform-owner-product-details div {
+  padding: 11px 0;
+  border-bottom: 1px solid rgb(41 57 79 / 65%);
+}
+
+.platform-owner-shell .platform-owner-product-details div:last-child {
+  border-bottom: 0;
+}
+
+.platform-owner-shell .platform-owner-product-details span {
+  color: #879ab2;
+  font-size: 11px;
+}
+
+.platform-owner-shell .platform-owner-product-details strong {
+  color: #e2eaf5;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.platform-owner-shell .platform-owner-product-actions {
+  align-items: center;
+  margin-top: 17px;
+}
+
+.platform-owner-shell .platform-owner-product-actions .lending-button {
+  min-height: 36px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+/* Product action buttons */
+.platform-owner-shell .platform-owner-page.lending-page .lending-button-primary {
+  border: 1px solid #22b8d2;
+  background: linear-gradient(135deg, #0891b2, #2563eb);
+  color: #fff;
+  box-shadow: 0 5px 15px rgb(8 145 178 / 18%);
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-button-primary:hover {
+  filter: brightness(1.12);
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-button-secondary {
+  border: 1px solid #344860;
+  background: #1b2b40;
+  color: #c7d5e7;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-button-secondary:hover {
+  border-color: #4b718e;
+  background: #243951;
+  color: #fff;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-button-danger {
+  border: 1px solid rgb(248 113 113 / 25%);
+  background: rgb(239 68 68 / 12%);
+  color: #fca5a5;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-button-danger:hover {
+  background: rgb(239 68 68 / 21%);
+}
+
+/* Empty and loading states */
+.platform-owner-shell .platform-owner-empty {
+  border: 1px dashed #354962;
+  border-radius: 15px;
+  background: #111e30;
+  color: #91a2b8;
+}
+
+.platform-owner-shell .platform-owner-empty > svg {
+  color: #67c9e7;
+}
+
+.platform-owner-shell .platform-owner-empty h3 {
+  color: #e5edf7;
+}
+
+.platform-owner-shell .platform-owner-empty p {
+  color: #91a2b8;
+}
+
+/* Alerts */
+.platform-owner-shell .platform-owner-page.lending-page .lending-alert {
+  border-radius: 11px;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-alert-error {
+  border: 1px solid rgb(248 113 113 / 25%);
+  background: rgb(127 29 29 / 18%);
+  color: #fca5a5;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-alert-success {
+  border: 1px solid rgb(52 211 153 / 25%);
+  background: rgb(6 95 70 / 18%);
+  color: #6ee7b7;
+}
+
+/* Create / edit product modal */
+.platform-owner-shell .platform-owner-modal-backdrop {
+  background: rgb(3 9 19 / 78%);
+  backdrop-filter: blur(9px);
+}
+
+.platform-owner-shell .platform-owner-modal {
+  width: min(760px, 100%);
+  padding: 26px;
+  border: 1px solid #354b65;
+  border-radius: 17px;
+  background:
+    radial-gradient(ellipse at top right, rgb(34 211 238 / 7%), transparent 42%),
+    #111e30;
+  color: #e5edf7;
+  box-shadow: 0 28px 90px rgb(0 0 0 / 55%);
+}
+
+.platform-owner-shell .platform-owner-modal-header {
+  padding-bottom: 18px;
+  border-bottom: 1px solid #29394f;
+}
+
+.platform-owner-shell .platform-owner-modal-header h2 {
+  color: #f1f5fb;
+  font-size: 22px;
+  letter-spacing: -.03em;
+}
+
+.platform-owner-shell .platform-owner-modal-header .lending-eyebrow {
+  color: #67c9e7;
+}
+
+.platform-owner-shell .platform-owner-icon-button {
+  border: 1px solid #344860;
+  background: #1b2b40;
+  color: #c7d5e7;
+  cursor: pointer;
+  transition: .2s ease;
+}
+
+.platform-owner-shell .platform-owner-icon-button:hover {
+  border-color: #67c9e7;
+  color: #67e8f9;
+}
+
+/* Form fields */
+.platform-owner-shell .platform-owner-form-grid {
+  gap: 17px;
+}
+
+.platform-owner-shell .platform-owner-field {
+  color: #a9bad0;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.platform-owner-shell .platform-owner-field input,
+.platform-owner-shell .platform-owner-field select,
+.platform-owner-shell .platform-owner-field textarea {
+  min-height: 43px;
+  border: 1px solid #344860;
+  border-radius: 9px;
+  outline: none;
+  background: #0b1728;
+  color: #e5edf7;
+  color-scheme: dark;
+  font-size: 13px;
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.platform-owner-shell .platform-owner-field input::placeholder,
+.platform-owner-shell .platform-owner-field textarea::placeholder {
+  color: #647991;
+}
+
+.platform-owner-shell .platform-owner-field input:focus,
+.platform-owner-shell .platform-owner-field select:focus,
+.platform-owner-shell .platform-owner-field textarea:focus {
+  border-color: #22b8d2;
+  box-shadow: 0 0 0 3px rgb(34 211 238 / 11%);
+}
+
+.platform-owner-shell .platform-owner-form-options {
+  padding: 15px;
+  border: 1px solid #29394f;
+  border-radius: 11px;
+  background: #0d192a;
+}
+
+.platform-owner-shell .platform-owner-form-options label {
+  color: #c0cede;
+  font-size: 12px;
+}
+
+.platform-owner-shell .platform-owner-form-options input {
+  accent-color: #22b8d2;
+  width: 16px;
+  height: 16px;
+}
+
+.platform-owner-shell .platform-owner-form-hint {
+  padding: 11px 13px;
+  border-left: 3px solid #22b8d2;
+  border-radius: 0 8px 8px 0;
+  background: rgb(34 211 238 / 7%);
+  color: #91b5c9;
+  line-height: 1.6;
+}
+
+.platform-owner-shell .platform-owner-modal-actions {
+  border-top-color: #29394f;
+}
+
+.platform-owner-shell .platform-owner-modal-actions .lending-button {
+  min-height: 40px;
+  border-radius: 9px;
+}
+
+/* Responsive refinements */
+@media (max-width: 760px) {
+  .platform-owner-shell .platform-owner-product-grid {
+    grid-template-columns: 1fr;
+    gap: 13px;
+  }
+
+  .platform-owner-shell .platform-owner-product-card {
+    padding: 18px;
+  }
+
+  .platform-owner-shell .platform-owner-modal {
+    padding: 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .platform-owner-shell .platform-owner-page.lending-page .lending-header {
+    align-items: stretch;
+  }
+
+  .platform-owner-shell .platform-owner-page.lending-page .lending-header > button {
+    justify-content: center;
+  }
+
+  .platform-owner-shell .platform-owner-toolbar {
+    gap: 11px;
+  }
+
+  .platform-owner-shell .platform-owner-product-actions {
+    flex-wrap: wrap;
+  }
+
+  .platform-owner-shell .platform-owner-product-actions .lending-button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .platform-owner-shell .platform-owner-modal {
+    padding: 17px;
+  }
+}
+
+
+/* =========================================================
+   PLATFORM OWNER — FINAL PRODUCTS DARK THEME OVERRIDES
+   Remove inherited green and light lending-page surfaces.
+   ========================================================= */
+
+.platform-owner-shell .platform-owner-page.lending-page {
+  background: #0b1422 !important;
+  background-color: #0b1422 !important;
+  color: #e5edf7 !important;
+  border: 0;
+  box-shadow: none;
+}
+
+/* Replace the inherited green hero/header */
+.platform-owner-shell .platform-owner-page.lending-page .lending-header {
+  background:
+    radial-gradient(ellipse at 85% 10%, rgb(34 211 238 / 13%), transparent 34%),
+    radial-gradient(ellipse at 10% 100%, rgb(59 130 246 / 10%), transparent 40%),
+    linear-gradient(120deg, #14243a 0%, #101d30 55%, #13243a 100%) !important;
+  background-color: #14243a !important;
+  border: 1px solid #30445f !important;
+  color: #f1f5fb !important;
+  box-shadow: 0 14px 35px rgb(0 0 0 / 20%);
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-header::after {
+  border-color: rgb(103 232 249 / 12%);
+  box-shadow:
+    0 0 0 28px rgb(103 232 249 / 4%),
+    0 0 0 58px rgb(96 165 250 / 3%);
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-header .lending-eyebrow {
+  color: #67e8f9 !important;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-header h1 {
+  color: #f1f5fb !important;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-header p {
+  color: #a8bad0 !important;
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-header .lending-button {
+  border: 1px solid rgb(103 232 249 / 35%) !important;
+  background: linear-gradient(135deg, #0e7490, #1d4ed8) !important;
+  color: #fff !important;
+  box-shadow: 0 5px 18px rgb(8 145 178 / 20%);
+}
+
+.platform-owner-shell .platform-owner-page.lending-page .lending-header .lending-button:hover {
+  filter: brightness(1.15);
+}
+
+/* Ensure product content surfaces remain dark */
+.platform-owner-shell .platform-owner-page.lending-page .platform-owner-toolbar,
+.platform-owner-shell .platform-owner-page.lending-page .platform-owner-product-card,
+.platform-owner-shell .platform-owner-page.lending-page .platform-owner-empty {
+  color: #e5edf7;
+}
+
+/* Modal and form surfaces */
+.platform-owner-shell .platform-owner-modal {
+  background:
+    radial-gradient(ellipse at top right, rgb(34 211 238 / 7%), transparent 42%),
+    #111e30 !important;
+  color: #e5edf7 !important;
+}
+
+.platform-owner-shell .platform-owner-field input,
+.platform-owner-shell .platform-owner-field select,
+.platform-owner-shell .platform-owner-field textarea {
+  background: #0b1728 !important;
+  color: #e5edf7 !important;
+  border-color: #344860 !important;
+}
+
+.platform-owner-shell .platform-owner-form-options {
+  background: #0d192a !important;
+}
+
+.platform-owner-shell .platform-owner-modal-header h2,
+.platform-owner-shell .platform-owner-field,
+.platform-owner-shell .platform-owner-form-options label {
+  color: #d5e1ef !important;
+}
+
+
+/* =========================================================
+   PESAPILOT — PLATFORM OWNER APPLICATIONS DARK THEME
+   Scoped to Applications. No component or API logic changed.
+   ========================================================= */
+
+.platform-owner-shell .loan-applications-page {
+  color: #e5edf7;
+  background: transparent;
+}
+
+/* Page heading */
+.platform-owner-shell .loan-applications-page .platform-owner-page-header h1 {
+  color: #f1f5fb;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-page-header p {
+  color: #91a2b8;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-eyebrow {
+  color: #67dff3;
+}
+
+/* Summary cards */
+.platform-owner-shell .loan-applications-page .loan-stat-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #29394f;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #142238, #101b2c);
+  box-shadow: 0 8px 25px rgb(0 0 0 / 12%);
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-card::before {
+  background: radial-gradient(circle, rgb(56 189 248 / 9%), transparent 70%);
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-top {
+  color: #9aabc0;
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-card > strong {
+  color: #f1f6fc;
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-card > small {
+  color: #788ba4;
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-icon.green {
+  color: #67e8f9;
+  background: rgb(34 211 238 / 12%);
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-icon.amber {
+  color: #fbbf65;
+  background: rgb(245 158 11 / 12%);
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-icon.blue {
+  color: #93c5fd;
+  background: rgb(59 130 246 / 13%);
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-icon.red {
+  color: #fda4af;
+  background: rgb(244 63 94 / 12%);
+}
+
+.platform-owner-shell .loan-applications-page .loan-stat-card:hover {
+  border-color: #3b5877;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 20%);
+}
+
+/* Main applications workspace */
+.platform-owner-shell .loan-applications-page .loan-applications-workspace {
+  border: 1px solid #29394f;
+  border-radius: 16px;
+  background: #111e30;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 12%);
+}
+
+.platform-owner-shell .loan-applications-page .loan-applications-section-heading h2 {
+  color: #edf4fc;
+}
+
+.platform-owner-shell .loan-applications-page .loan-applications-section-heading p {
+  color: #879ab2;
+}
+
+.platform-owner-shell .loan-applications-page .loan-results-count {
+  border-color: #28516a;
+  background: rgb(34 211 238 / 9%);
+  color: #67e8f9;
+}
+
+/* Search and filter toolbar */
+.platform-owner-shell .loan-applications-page .loan-applications-toolbar {
+  border-top-color: #25364b;
+  border-bottom-color: #29394f;
+  background: #0e1929;
+}
+
+.platform-owner-shell .loan-applications-page .loan-application-search {
+  border-color: #304158;
+  background: #111e30;
+  color: #8298b2;
+}
+
+.platform-owner-shell .loan-applications-page .loan-application-search:focus-within {
+  border-color: #22c7e8;
+  box-shadow: 0 0 0 3px rgb(34 211 238 / 10%);
+}
+
+.platform-owner-shell .loan-applications-page .loan-application-search input {
+  color: #e5edf7;
+  background: transparent;
+}
+
+.platform-owner-shell .loan-applications-page .loan-application-search input::placeholder {
+  color: #71839b;
+}
+
+.platform-owner-shell .loan-applications-page .loan-application-search button {
+  background: #23344a;
+  color: #a9bbd0;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-filter-tabs {
+  border-color: #29394f;
+  background: #0b1626;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-filter-tabs button {
+  color: #91a2b8;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-filter-tabs button:hover {
+  color: #e5edf7;
+  background: #1a2a40;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-filter-tabs button span {
+  background: #24364c;
+  color: #b5c5d8;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-filter-tabs button.active {
+  border-color: #39859b;
+  background: linear-gradient(135deg, #67e8f9, #60a5fa);
+  color: #071827;
+  box-shadow: 0 3px 12px rgb(34 211 238 / 16%);
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-filter-tabs button.active span {
+  background: rgb(7 24 39 / 12%);
+  color: #071827;
+}
+
+/* Applications table */
+.platform-owner-shell .loan-applications-page .loan-applications-table-wrap {
+  background: #111e30;
+}
+
+.platform-owner-shell .loan-applications-page .loan-applications-table {
+  background: #111e30;
+}
+
+.platform-owner-shell .loan-applications-page .loan-applications-table th {
+  border-bottom-color: #2a3b51;
+  background: #17263a;
+  color: #91a5bd;
+}
+
+.platform-owner-shell .loan-applications-page .loan-applications-table td {
+  border-bottom-color: #24344a;
+  color: #c5d1df;
+}
+
+.platform-owner-shell .loan-applications-page .loan-applications-table tbody tr:hover {
+  background: #192a40;
+}
+
+.platform-owner-shell .loan-applications-page .loan-customer-avatar {
+  border-color: #28516a;
+  background: linear-gradient(145deg, #17364a, #172a42);
+  color: #67e8f9;
+}
+
+.platform-owner-shell .loan-applications-page .loan-customer-cell strong {
+  color: #edf4fc;
+}
+
+.platform-owner-shell .loan-applications-page .loan-customer-cell small,
+.platform-owner-shell .loan-applications-page .loan-applications-table td > small {
+  color: #8194ac;
+}
+
+.platform-owner-shell .loan-applications-page .loan-amount-cell {
+  color: #e6f1fc;
+}
+
+/* Application statuses */
+.platform-owner-shell .loan-applications-page .platform-owner-status-pending {
+  border-color: rgb(245 158 11 / 25%);
+  background: rgb(245 158 11 / 12%);
+  color: #fbbf65;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-status-approved {
+  border-color: rgb(52 211 153 / 25%);
+  background: rgb(52 211 153 / 11%);
+  color: #6ee7b7;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-status-rejected {
+  border-color: rgb(251 113 133 / 25%);
+  background: rgb(251 113 133 / 11%);
+  color: #fda4af;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-status-withdrawn {
+  border-color: #3b4a5e;
+  background: #253247;
+  color: #a8b6c8;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-muted {
+  color: #8194ac;
+}
+
+/* Row action buttons */
+.platform-owner-shell .loan-applications-page .platform-owner-row-actions .platform-owner-button {
+  border-color: #31516c;
+  background: #18354a;
+  color: #8ceafa;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-row-actions .platform-owner-button:hover:not(:disabled) {
+  border-color: #22c7e8;
+  background: #20475d;
+  color: #c5f7ff;
+}
+
+/* Table footer and empty/loading states */
+.platform-owner-shell .loan-applications-page .loan-applications-footer {
+  border-top-color: #29394f;
+  background: #0e1929;
+  color: #879ab2;
+}
+
+.platform-owner-shell .loan-applications-page .loan-applications-footer button {
+  border-color: #30465e;
+  background: #17263a;
+  color: #67dff3;
+}
+
+.platform-owner-shell .loan-applications-page .loan-applications-footer button:hover {
+  border-color: #22c7e8;
+  background: #1b344b;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-empty {
+  border-color: #344960;
+  background: #142238;
+  color: #91a2b8;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-empty h3 {
+  color: #edf4fc;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-empty p {
+  color: #91a2b8;
+}
+
+/* Success and error notifications */
+.platform-owner-shell .loan-applications-page .platform-owner-notice.success {
+  border-color: rgb(52 211 153 / 25%);
+  background: rgb(16 185 129 / 10%);
+  color: #6ee7b7;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-notice.error {
+  border-color: rgb(251 113 133 / 25%);
+  background: rgb(244 63 94 / 10%);
+  color: #fda4af;
+}
+
+/* Review modal */
+.platform-owner-shell .loan-applications-page .platform-owner-modal-backdrop {
+  background: rgb(2 8 18 / 78%);
+  backdrop-filter: blur(9px);
+}
+
+.platform-owner-shell .loan-applications-page .loan-review-modal {
+  border-color: #34465e;
+  background: linear-gradient(155deg, #15243a, #0e1929);
+  color: #dce7f4;
+  box-shadow: 0 28px 90px rgb(0 0 0 / 48%);
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-modal-header {
+  border-bottom-color: #304158;
+  background: #15243a;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-modal-header h2 {
+  color: #f1f6fc;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-modal-header p {
+  color: #91a2b8;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-review-summary {
+  border-color: #304158;
+  background: #101e31;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-review-summary span {
+  color: #8ea2ba;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-review-summary strong {
+  color: #e4edf8;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-purpose {
+  border-color: #304158;
+  background: #111f32;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-purpose > span {
+  color: #67dff3;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-purpose p {
+  color: #b5c4d6;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-purpose p strong {
+  color: #edf4fc;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-form {
+  border-top-color: #304158;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-form label {
+  color: #c7d4e3;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-form input,
+.platform-owner-shell .loan-applications-page .platform-owner-form select,
+.platform-owner-shell .loan-applications-page .platform-owner-form textarea {
+  border-color: #354a63;
+  background: #0c1829;
+  color: #edf4fc;
+  color-scheme: dark;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-form input::placeholder,
+.platform-owner-shell .loan-applications-page .platform-owner-form textarea::placeholder {
+  color: #71849c;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-form input:focus,
+.platform-owner-shell .loan-applications-page .platform-owner-form select:focus,
+.platform-owner-shell .loan-applications-page .platform-owner-form textarea:focus {
+  border-color: #22c7e8;
+  box-shadow: 0 0 0 3px rgb(34 211 238 / 11%);
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-form small {
+  color: #91a2b8;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-modal-actions {
+  border-top-color: #304158;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-modal-actions .platform-owner-button.secondary {
+  border-color: #40536b;
+  background: #1a2a40;
+  color: #c5d2e1;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-modal-actions .platform-owner-button.secondary:hover {
+  background: #263a53;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-modal-actions .platform-owner-button.primary {
+  border-color: #269bb5;
+  background: linear-gradient(135deg, #0891b2, #2563eb);
+  color: #ffffff;
+}
+
+.platform-owner-shell .loan-applications-page .platform-owner-modal-actions .platform-owner-button.primary:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+/* Keep sticky mobile modal actions dark */
+@media (max-width: 600px) {
+  .platform-owner-shell .loan-applications-page .platform-owner-modal-actions {
+    border-top-color: #304158;
+    background: #15243a;
+  }
+}
+
+
+/* Applications — dark refresh button */
+.platform-owner-shell .loan-applications-page
+.platform-owner-button.secondary {
+  background: rgba(48, 128, 180, 0.13) !important;
+  background-color: rgba(48, 128, 180, 0.13) !important;
+  color: #78d9f2 !important;
+  border: 1px solid rgba(75, 190, 224, 0.32) !important;
+  border-radius: 10px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+
+.platform-owner-shell .loan-applications-page
+.platform-owner-button.secondary:hover:not(:disabled) {
+  background: rgba(48, 128, 180, 0.25) !important;
+  background-color: rgba(48, 128, 180, 0.25) !important;
+  color: #b5efff !important;
+  border-color: rgba(75, 190, 224, 0.65) !important;
+}
+
+.platform-owner-shell .loan-applications-page
+.platform-owner-button.secondary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+
+/* =========================================================
+   PESAPILOT — PLATFORM OWNER COLLECTIONS DARK THEME
+   ========================================================= */
+
+.platform-owner-shell .platform-owner-collections-page {
+  --col-text: #e5edf8;
+  --col-muted: #92a4bb;
+  --col-border: rgba(148, 163, 184, .16);
+  --col-panel: #111d30;
+  --col-panel-soft: #17263c;
+  display: flex;
+  flex-direction: column;
+  gap: 21px;
+  min-width: 0;
+  color: var(--col-text);
+}
+
+/* Heading */
+
+.platform-owner-shell .platform-owner-collections-page h1,
+.platform-owner-shell .platform-owner-collections-page h2,
+.platform-owner-shell .platform-owner-collections-page h3 {
+  color: #e6effb !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page p {
+  color: var(--col-muted);
+}
+
+.platform-owner-shell .platform-owner-collections-page .platform-owner-eyebrow {
+  color: #61cbe8 !important;
+  letter-spacing: 1.3px;
+  font-weight: 800;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-page-header {
+  gap: 16px;
+}
+
+/* Refresh */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-button.secondary {
+  color: #80d9f1 !important;
+  background: rgba(45, 137, 180, .13) !important;
+  border: 1px solid rgba(85, 201, 232, .30) !important;
+  border-radius: 10px;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-button.secondary:hover:not(:disabled) {
+  background: rgba(45, 137, 180, .24) !important;
+  border-color: rgba(85, 201, 232, .60) !important;
+}
+
+/* Metrics */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-card {
+  position: relative;
+  overflow: hidden;
+  padding: 20px;
+  border: 1px solid var(--col-border) !important;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #15243a, #111b2d) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .14) !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: #4fc3e3;
+  content: "";
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-card:nth-child(2)::before {
+  background: #f3b64d;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-card:nth-child(3)::before {
+  background: #8c9dff;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-card span {
+  color: #94a9c2 !important;
+  font-size: 12px;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-card strong {
+  display: block;
+  margin-top: 10px;
+  color: #eaf3ff !important;
+  font-size: 26px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+/* Tab workspace */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-toolbar {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--col-border) !important;
+  border-radius: 13px;
+  background: #111d30 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid rgba(148, 163, 184, .10);
+  border-radius: 11px;
+  background: #0b1627 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-filter-tabs button {
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent !important;
+  color: #92a6bf !important;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: .18s ease;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-filter-tabs button:hover {
+  background: rgba(66, 126, 174, .13) !important;
+  color: #d9eaff !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-filter-tabs button.active {
+  border-color: rgba(85, 201, 232, .24);
+  background: linear-gradient(135deg, rgba(44, 143, 187, .23), rgba(73, 93, 180, .19)) !important;
+  color: #79d9f1 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+
+/* Table containers */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--col-border) !important;
+  border-radius: 14px;
+  background: #111d30 !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .13);
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: transparent !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-table th {
+  padding: 14px 15px;
+  border-bottom: 1px solid var(--col-border);
+  background: #192a40 !important;
+  color: #91a8c3 !important;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .5px;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-table td {
+  padding: 14px 15px;
+  border-top: 1px solid rgba(148, 163, 184, .10);
+  color: #d3dfed !important;
+  background: transparent !important;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-table tbody tr {
+  background: transparent !important;
+  transition: background .18s ease;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-table tbody tr:hover {
+  background: rgba(74, 130, 180, .10) !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-table td strong {
+  color: #e6f1ff !important;
+}
+
+/* Inline action buttons */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-inline-actions .platform-owner-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-inline-actions .platform-owner-button.primary {
+  border: 1px solid rgba(52, 211, 153, .26) !important;
+  background: rgba(16, 185, 129, .13) !important;
+  color: #79e5b7 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-inline-actions .platform-owner-button.primary:hover {
+  background: rgba(16, 185, 129, .24) !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-inline-actions .platform-owner-button.secondary {
+  border: 1px solid rgba(248, 113, 113, .23) !important;
+  background: rgba(239, 68, 68, .10) !important;
+  color: #f5a3a3 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-inline-actions .platform-owner-button.secondary:hover {
+  background: rgba(239, 68, 68, .20) !important;
+}
+
+/* Empty and loading states */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 42px 22px;
+  border: 1px dashed rgba(125, 153, 185, .28) !important;
+  border-radius: 14px;
+  background: #111d30 !important;
+  color: #93a8c0 !important;
+  text-align: center;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-empty svg {
+  color: #57c6e4;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-empty h3 {
+  margin: 0;
+  color: #e2edf9 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-empty p {
+  margin: 0;
+  color: #8fa4bc !important;
+  font-size: 12px;
+}
+
+/* Notifications */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid rgba(85, 201, 232, .23) !important;
+  border-radius: 11px;
+  background: rgba(35, 105, 145, .13) !important;
+  color: #b0e7f6 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-notice.success {
+  border-color: rgba(52, 211, 153, .24) !important;
+  background: rgba(16, 185, 129, .11) !important;
+  color: #86efac !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-notice.error {
+  border-color: rgba(248, 113, 113, .24) !important;
+  background: rgba(239, 68, 68, .11) !important;
+  color: #fca5a5 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-notice button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border: 1px solid rgba(148, 163, 184, .16);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, .35);
+  color: inherit;
+}
+
+/* Action modal */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal-backdrop {
+  background: rgba(2, 8, 18, .82) !important;
+  backdrop-filter: blur(8px);
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal {
+  width: min(100%, 540px);
+  border: 1px solid rgba(125, 153, 185, .23) !important;
+  border-radius: 18px;
+  background: linear-gradient(150deg, #142238, #0e192a) !important;
+  color: #e5edf8 !important;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .52) !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal h2 {
+  color: #e6f1ff !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal-header {
+  border-bottom: 1px solid var(--col-border);
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal-header p {
+  margin-top: 5px;
+  color: #91a4bb !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-icon-button {
+  border: 1px solid var(--col-border) !important;
+  border-radius: 9px;
+  background: #1b2b42 !important;
+  color: #cbd8e8 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-icon-button:hover {
+  background: #263a54 !important;
+  color: #f0f7ff !important;
+}
+
+/* Payment review summary */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-review-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+  padding: 15px;
+  border: 1px solid rgba(125, 153, 185, .16) !important;
+  border-radius: 12px;
+  background: #101c2e !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-review-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, .09);
+  border-radius: 9px;
+  background: rgba(24, 40, 61, .55);
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-review-summary span {
+  color: #91a5be !important;
+  font-size: 11px;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-review-summary strong {
+  color: #e4efff !important;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* Modal form */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form {
+  display: grid;
+  gap: 15px;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form label {
+  display: grid;
+  gap: 8px;
+  color: #cbd9e9 !important;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form input,
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form select,
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 43px;
+  padding: 11px 12px;
+  border: 1px solid rgba(125, 153, 185, .25) !important;
+  border-radius: 9px;
+  background: #0b1627 !important;
+  color: #e5edf8 !important;
+  color-scheme: dark;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form input:focus,
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form select:focus,
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form textarea:focus {
+  border-color: rgba(85, 201, 232, .70) !important;
+  box-shadow: 0 0 0 3px rgba(85, 201, 232, .11);
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form small {
+  color: #91a4bb !important;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-form textarea {
+  resize: vertical;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding-top: 15px;
+  border-top: 1px solid var(--col-border);
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal-actions button {
+  min-height: 40px;
+  border-radius: 9px;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal-actions .platform-owner-button.secondary {
+  border: 1px solid rgba(148, 163, 184, .22) !important;
+  background: #1a2a40 !important;
+  color: #cbd8e8 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal-actions .platform-owner-button.primary {
+  border: 1px solid rgba(85, 201, 232, .26) !important;
+  background: linear-gradient(135deg, #176b91, #4355a3) !important;
+  color: #f0f9ff !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-modal-actions button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/* Responsive */
+
+@media (max-width: 760px) {
+  .platform-owner-shell .platform-owner-collections-page {
+    gap: 16px;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-stat-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-stat-card:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-page-header {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-page-header {
+    flex-direction: column;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-page-header > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-filter-tabs {
+    flex-direction: column;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-filter-tabs button {
+    width: 100%;
+    text-align: center;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-review-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-modal {
+    padding: 16px;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .platform-owner-shell .platform-owner-collections-page
+  .platform-owner-modal-actions button {
+    width: 100%;
+  }
+}
+
+
+/* COLLECTIONS — FORCE DARK METRIC CARDS + REFRESH BUTTON */
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-row .platform-owner-stat-card {
+  background: linear-gradient(145deg, #17263c, #101b2d) !important;
+  background-color: #132137 !important;
+  border: 1px solid rgba(108, 145, 185, 0.22) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22) !important;
+  color: #e5edf8 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-row .platform-owner-stat-card span {
+  color: #93a9c2 !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-stat-row .platform-owner-stat-card strong {
+  color: #e6f1ff !important;
+}
+
+/* Force refresh button dark/cyan */
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-page-header button.platform-owner-button.secondary,
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-page-header button.platform-owner-button {
+  background: rgba(36, 117, 159, 0.16) !important;
+  background-color: #14283e !important;
+  color: #80d9f1 !important;
+  border: 1px solid rgba(85, 201, 232, 0.35) !important;
+  box-shadow: none !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-page-header button.platform-owner-button:hover:not(:disabled) {
+  background: #1b3851 !important;
+  background-color: #1b3851 !important;
+  color: #b5efff !important;
+  border-color: rgba(85, 201, 232, 0.65) !important;
+}
+
+.platform-owner-shell .platform-owner-collections-page
+.platform-owner-page-header button.platform-owner-button:disabled {
+  opacity: 0.55 !important;
+}
+
+/* =========================================================
+   PLATFORM OWNER — INVESTORS DARK COMMAND CENTRE
+   ========================================================= */
+
+.platform-owner-shell .platform-owner-investors-page {
+  color: #e5edf8 !important;
+}
+
+/* Page heading */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  margin-bottom: 26px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header h1 {
+  color: #f1f6ff !important;
+  font-size: clamp(25px, 3vw, 32px);
+  font-weight: 750;
+  letter-spacing: -0.8px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header p {
+  color: #91a5bd !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-eyebrow {
+  color: #55c9e8 !important;
+  letter-spacing: 1.8px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+/* Toolbars and filters */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+> .platform-owner-toolbar {
+  padding: 16px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(108, 145, 185, 0.18);
+  border-radius: 15px;
+  background: linear-gradient(145deg, #142238, #101b2d) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar input,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar select {
+  min-height: 43px;
+  color: #e5edf8 !important;
+  background: #0c1728 !important;
+  border: 1px solid rgba(117, 151, 190, 0.25) !important;
+  border-radius: 10px;
+  padding: 10px 13px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar input::placeholder {
+  color: #71869f !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar input:focus,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar select:focus {
+  outline: none;
+  border-color: #36b9df !important;
+  box-shadow: 0 0 0 3px rgba(54, 185, 223, 0.12);
+}
+
+/* Buttons */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button {
+  min-height: 39px;
+  border-radius: 10px !important;
+  font-weight: 700;
+  transition: 0.2s ease;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button.primary {
+  color: #e8faff !important;
+  background: linear-gradient(135deg, #087fa8, #2563a6) !important;
+  border: 1px solid rgba(74, 196, 235, 0.4) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0b9ac4, #3478c0) !important;
+  transform: translateY(-1px);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button.secondary {
+  color: #a9dff1 !important;
+  background: #172b42 !important;
+  border: 1px solid rgba(85, 181, 220, 0.3) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button.secondary:hover:not(:disabled) {
+  color: #e4f8ff !important;
+  background: #203d59 !important;
+  border-color: rgba(85, 201, 232, 0.65) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Investor table panel */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(108, 145, 185, 0.2) !important;
+  border-radius: 16px !important;
+  background: #111e31 !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: #cbd8e8 !important;
+  background: transparent !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table thead th {
+  padding: 15px 16px;
+  color: #91a9c4 !important;
+  background: #182940 !important;
+  border-bottom: 1px solid rgba(108, 145, 185, 0.2) !important;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  white-space: nowrap;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table tbody td {
+  padding: 15px 16px;
+  color: #c5d3e4 !important;
+  background: transparent !important;
+  border-bottom: 1px solid rgba(108, 145, 185, 0.12) !important;
+  font-size: 13px;
+  vertical-align: middle;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table tbody tr:hover td {
+  background: rgba(47, 105, 153, 0.12) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table td strong {
+  color: #edf5ff !important;
+  font-weight: 750;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-muted {
+  color: #8298b2 !important;
+}
+
+/* Status badges */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 30px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  background: #26364b !important;
+  color: #cbd8e8 !important;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status-active,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status-posted {
+  color: #6ee7b7 !important;
+  background: rgba(16, 185, 129, 0.12) !important;
+  border-color: rgba(16, 185, 129, 0.25);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status-inactive,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status-reversed {
+  color: #fca5a5 !important;
+  background: rgba(239, 68, 68, 0.12) !important;
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+/* Empty state */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-empty {
+  padding: 48px 22px;
+  text-align: center;
+  color: #8da3bd !important;
+  background: linear-gradient(145deg, #142238, #101b2d) !important;
+  border: 1px solid rgba(108, 145, 185, 0.2) !important;
+  border-radius: 16px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-empty h3 {
+  color: #e5edf8 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-empty p {
+  color: #8da3bd !important;
+}
+
+/* Notices */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-notice {
+  padding: 13px 16px;
+  margin: 12px 0;
+  border-radius: 11px;
+  color: #c8d8eb !important;
+  background: #172b42 !important;
+  border: 1px solid rgba(85, 181, 220, 0.2) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-notice.error {
+  color: #fecaca !important;
+  background: rgba(127, 29, 29, 0.2) !important;
+  border-color: rgba(248, 113, 113, 0.3) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-notice.success {
+  color: #a7f3d0 !important;
+  background: rgba(6, 95, 70, 0.2) !important;
+  border-color: rgba(52, 211, 153, 0.3) !important;
+}
+
+/* Modals */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-backdrop {
+  background: rgba(2, 8, 19, 0.82) !important;
+  backdrop-filter: blur(8px);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal {
+  color: #dce8f7 !important;
+  background: linear-gradient(155deg, #192b43, #101b2d) !important;
+  border: 1px solid rgba(119, 160, 204, 0.25) !important;
+  border-radius: 19px !important;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-header {
+  padding-bottom: 17px;
+  border-bottom: 1px solid rgba(108, 145, 185, 0.18);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-header h2 {
+  color: #f0f6ff !important;
+  font-size: 21px;
+  font-weight: 750;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-header p {
+  color: #91a9c4 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal h3 {
+  margin: 23px 0 12px;
+  color: #dcecff !important;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-icon-button {
+  color: #a9c1da !important;
+  background: #20354e !important;
+  border: 1px solid rgba(108, 145, 185, 0.22) !important;
+  border-radius: 9px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-icon-button:hover {
+  color: #ffffff !important;
+  background: #2a4967 !important;
+}
+
+/* Modal forms */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form {
+  gap: 16px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form label {
+  color: #b8c9dc !important;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 8px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form input,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form select,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form textarea {
+  width: 100%;
+  color: #e5edf8 !important;
+  background: #0b1728 !important;
+  border: 1px solid rgba(117, 151, 190, 0.28) !important;
+  border-radius: 10px !important;
+  padding: 12px 13px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form input:focus,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form select:focus,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form textarea:focus {
+  outline: none;
+  border-color: #39bde3 !important;
+  box-shadow: 0 0 0 3px rgba(57, 189, 227, 0.12);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form small {
+  color: #8198b2 !important;
+  font-size: 11px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-notice:not(.error):not(.success) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Detail modal transaction toolbar */
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal > .platform-owner-toolbar {
+  margin: 18px 0;
+}
+
+/* Responsive layout */
+@media (max-width: 760px) {
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-page-header > .platform-owner-toolbar {
+    width: 100%;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-page-header > .platform-owner-toolbar button {
+    flex: 1;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  > .platform-owner-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-toolbar input,
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-toolbar select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-modal {
+    width: calc(100% - 20px) !important;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-table-wrap {
+    border-radius: 12px !important;
+  }
+}
+
+
+/* =========================================================
+   PLATFORM OWNER — INVESTORS COMMAND CENTRE
+   ========================================================= */
+
+.platform-owner-shell .platform-owner-investors-page {
+  color: #e5edf8 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page .platform-owner-page-header {
+  padding: 25px;
+  margin-bottom: 22px;
+  border: 1px solid rgba(104, 153, 198, .2);
+  border-radius: 19px;
+  background:
+    radial-gradient(ellipse at 90% 0%, rgba(35, 155, 190, .13), transparent 42%),
+    linear-gradient(135deg, #172941, #101b2d 75%);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .2);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header h1 {
+  color: #f1f7ff !important;
+  font-size: 27px;
+  font-weight: 800;
+  letter-spacing: -.6px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-eyebrow {
+  color: #55c9e8 !important;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.7px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header p {
+  color: #9db2ca !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar {
+  gap: 12px;
+  align-items: center;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar input,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar select {
+  min-height: 45px;
+  color: #e5edf8 !important;
+  background: #111f32 !important;
+  border: 1px solid rgba(120, 157, 194, .24) !important;
+  border-radius: 11px !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar input::placeholder {
+  color: #71869f !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar input:focus,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-toolbar select:focus {
+  border-color: #36b9df !important;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(54, 185, 223, .1);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header button.platform-owner-button,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header button.platform-owner-button.secondary {
+  color: #83ddf4 !important;
+  background: #142b42 !important;
+  border: 1px solid rgba(72, 193, 225, .3) !important;
+  border-radius: 10px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header button.platform-owner-button.primary {
+  color: #071827 !important;
+  background: linear-gradient(135deg, #5ad5ec, #65aef5) !important;
+  border: 0 !important;
+  font-weight: 800;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-page-header button:hover:not(:disabled) {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table-wrap {
+  overflow-x: auto;
+  background: linear-gradient(145deg, #17263a, #111d2e) !important;
+  border: 1px solid rgba(112, 151, 190, .2) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .18) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: #dce8f6 !important;
+  background: transparent !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table thead th {
+  padding: 16px 17px;
+  color: #8da9c6 !important;
+  background: #1b2d43 !important;
+  border-bottom: 1px solid rgba(112, 151, 190, .2) !important;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table tbody td {
+  padding: 16px 17px;
+  color: #cbd9e9 !important;
+  background: transparent !important;
+  border-bottom: 1px solid rgba(112, 151, 190, .12) !important;
+  font-size: 13px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table tbody tr:hover td {
+  background: rgba(67, 142, 190, .075) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-table td strong {
+  color: #f0f6ff !important;
+  font-weight: 750;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-muted {
+  color: #8299b3 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border: 1px solid rgba(112, 151, 190, .2);
+  border-radius: 30px;
+  background: #1b3046 !important;
+  color: #a9c3df !important;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status-active,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status-posted {
+  color: #62dfb0 !important;
+  background: rgba(30, 157, 111, .13) !important;
+  border-color: rgba(63, 211, 157, .23) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status-inactive,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-status-reversed {
+  color: #f0a0a9 !important;
+  background: rgba(190, 65, 83, .13) !important;
+  border-color: rgba(225, 100, 116, .24) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button.secondary {
+  color: #8bdcf1 !important;
+  background: #1a3047 !important;
+  border: 1px solid rgba(85, 190, 222, .25) !important;
+  border-radius: 9px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button.primary {
+  color: #071827 !important;
+  background: linear-gradient(135deg, #5ad5ec, #65aef5) !important;
+  border: 0 !important;
+  border-radius: 9px;
+  font-weight: 800;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-empty {
+  padding: 42px 20px;
+  color: #a5b9cf !important;
+  background: linear-gradient(145deg, #17263a, #111d2e) !important;
+  border: 1px solid rgba(112, 151, 190, .2) !important;
+  border-radius: 16px;
+  text-align: center;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-empty h3 {
+  color: #e8f2ff !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-notice {
+  border-radius: 11px;
+  border: 1px solid rgba(112, 151, 190, .2);
+  background: #172a40 !important;
+  color: #dce8f6 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-notice.error {
+  color: #ffabb5 !important;
+  background: rgba(171, 49, 69, .14) !important;
+  border-color: rgba(225, 100, 116, .3) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-notice.success {
+  color: #7be3b8 !important;
+  background: rgba(30, 157, 111, .13) !important;
+  border-color: rgba(63, 211, 157, .25) !important;
+}
+
+/* Investor detail and transaction modals */
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal {
+  color: #e5edf8 !important;
+  background: linear-gradient(145deg, #192a40, #101c2e) !important;
+  border: 1px solid rgba(112, 157, 200, .25) !important;
+  border-radius: 19px !important;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, .5) !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-header {
+  border-bottom: 1px solid rgba(112, 151, 190, .17);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-header h2 {
+  color: #f0f6ff !important;
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-header p {
+  color: #94abc5 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal h3 {
+  margin: 22px 0 12px;
+  color: #dcecff !important;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form label {
+  color: #b8cce1 !important;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form input,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form select,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form textarea {
+  color: #e5edf8 !important;
+  background: #101e30 !important;
+  border: 1px solid rgba(120, 157, 194, .25) !important;
+  border-radius: 9px !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form input:focus,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form select:focus,
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form textarea:focus {
+  border-color: #45c4e5 !important;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(69, 196, 229, .1);
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-form small {
+  color: #829ab5 !important;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-modal-actions {
+  border-top: 1px solid rgba(112, 151, 190, .14);
+  padding-top: 15px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-icon-button {
+  color: #a9c5df !important;
+  background: #21364e !important;
+  border: 1px solid rgba(112, 151, 190, .22) !important;
+  border-radius: 9px;
+}
+
+.platform-owner-shell .platform-owner-investors-page
+.platform-owner-notice:not(.error):not(.success) {
+  color: #a9dff0 !important;
+  background: rgba(43, 133, 168, .12) !important;
+  border-color: rgba(72, 193, 225, .2) !important;
+}
+
+@media (max-width: 760px) {
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-page-header {
+    padding: 19px;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-page-header,
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-page-header > .platform-owner-toolbar {
+    align-items: stretch;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-page-header > .platform-owner-toolbar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-page-header > .platform-owner-toolbar button {
+    justify-content: center;
+    padding: 10px 8px;
+    font-size: 11px;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  > .platform-owner-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .platform-owner-shell .platform-owner-investors-page
+  .platform-owner-table {
+    min-width: 720px;
+  }
+}
+
+
+/* =========================================================
+   PESAPILOT — PLATFORM OWNER FUNDING DARK COMMAND CENTRE
+   Scoped to Funding page. Preserves all existing functionality.
+   ========================================================= */
+
+.platform-owner-shell .funding-page {
+  color: #e5edf8;
+  gap: 20px;
+}
+
+/* Main panels */
+.platform-owner-shell .funding-page .funding-panel,
+.platform-owner-shell .funding-page .platform-owner-finance-panel,
+.platform-owner-shell .funding-page .funding-currency-card {
+  background: linear-gradient(145deg, #111d30, #0d1728) !important;
+  border: 1px solid #253750 !important;
+  border-radius: 15px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
+}
+
+/* Section headings */
+.platform-owner-shell .funding-page h2,
+.platform-owner-shell .funding-page h3,
+.platform-owner-shell .funding-page .funding-form-heading h3,
+.platform-owner-shell .funding-page .funding-account-card h3 {
+  color: #edf4ff !important;
+}
+
+.platform-owner-shell .funding-page p,
+.platform-owner-shell .funding-page .funding-section-heading p,
+.platform-owner-shell .funding-page .funding-form-heading p,
+.platform-owner-shell .funding-page .funding-panel-heading .platform-owner-finance-subtitle {
+  color: #91a4bd !important;
+}
+
+/* Metric cards */
+.platform-owner-shell .funding-page .funding-stat-card {
+  background: linear-gradient(145deg, #14243a, #101b2e) !important;
+  border: 1px solid #2a405c !important;
+  border-radius: 13px;
+  box-shadow: 0 7px 20px rgb(0 0 0 / 16%);
+}
+
+.platform-owner-shell .funding-page .funding-stat-label,
+.platform-owner-shell .funding-page .funding-stat-detail {
+  color: #9aadc5 !important;
+}
+
+.platform-owner-shell .funding-page .funding-stat-value {
+  color: #f0f6ff !important;
+}
+
+.platform-owner-shell .funding-page .funding-stat-icon,
+.platform-owner-shell .funding-page .funding-heading-icon,
+.platform-owner-shell .funding-page .funding-form-plus,
+.platform-owner-shell .funding-page .funding-account-icon,
+.platform-owner-shell .funding-page .funding-currency-symbol,
+.platform-owner-shell .funding-page .funding-investor-avatar {
+  background: rgb(34 211 238 / 11%) !important;
+  border: 1px solid rgb(34 211 238 / 20%);
+  color: #55d9f2 !important;
+}
+
+/* Account creation form */
+.platform-owner-shell .funding-page .funding-account-form {
+  background: #0b1729 !important;
+  border: 1px solid #2a405c !important;
+  border-radius: 12px;
+}
+
+.platform-owner-shell .funding-page .platform-owner-finance-field {
+  color: #b9c9dc !important;
+}
+
+.platform-owner-shell .funding-page .platform-owner-finance-field input,
+.platform-owner-shell .funding-page .platform-owner-finance-field select,
+.platform-owner-shell .funding-page .funding-search {
+  background: #0b1729 !important;
+  color: #edf4ff !important;
+  border: 1px solid #30445f !important;
+  border-radius: 9px;
+}
+
+.platform-owner-shell .funding-page .platform-owner-finance-field input::placeholder,
+.platform-owner-shell .funding-page .funding-search input::placeholder {
+  color: #71859f !important;
+}
+
+.platform-owner-shell .funding-page .platform-owner-finance-field select option {
+  background: #101d30;
+  color: #edf4ff;
+}
+
+.platform-owner-shell .funding-page .platform-owner-finance-field input:focus,
+.platform-owner-shell .funding-page .platform-owner-finance-field select:focus,
+.platform-owner-shell .funding-page .funding-search:focus-within {
+  border-color: #28c6e5 !important;
+  box-shadow: 0 0 0 3px rgb(40 198 229 / 12%);
+  outline: none;
+}
+
+/* Buttons */
+.platform-owner-shell .funding-page .platform-owner-finance-refresh {
+  background: #14263c !important;
+  color: #b9d8f4 !important;
+  border: 1px solid #304b69 !important;
+}
+
+.platform-owner-shell .funding-page .platform-owner-finance-refresh:hover {
+  background: #1b3551 !important;
+  border-color: #35c8e5 !important;
+  color: #ffffff !important;
+}
+
+.platform-owner-shell .funding-page .platform-owner-finance-submit {
+  background: linear-gradient(135deg, #087eaa, #1764bd) !important;
+  color: #ffffff !important;
+  border: 1px solid #2499ce !important;
+  box-shadow: 0 5px 15px rgb(8 126 170 / 20%);
+}
+
+.platform-owner-shell .funding-page .platform-owner-finance-submit:hover {
+  filter: brightness(1.13);
+}
+
+/* Platform account cards */
+.platform-owner-shell .funding-page .funding-account-card {
+  background: #101d30 !important;
+  border: 1px solid #293e58 !important;
+  border-radius: 12px;
+}
+
+.platform-owner-shell .funding-page .funding-account-card:hover {
+  border-color: #28b9dc !important;
+  transform: translateY(-2px);
+}
+
+.platform-owner-shell .funding-page .funding-account-type {
+  background: #1c3048 !important;
+  color: #a9bfd8 !important;
+}
+
+.platform-owner-shell .funding-page .funding-account-currency {
+  background: rgb(34 211 238 / 12%) !important;
+  color: #55d9f2 !important;
+}
+
+.platform-owner-shell .funding-page .funding-account-meta {
+  border-color: #263951 !important;
+}
+
+.platform-owner-shell .funding-page .funding-account-meta span {
+  color: #8298b2 !important;
+}
+
+.platform-owner-shell .funding-page .funding-account-meta strong {
+  color: #dce8f7 !important;
+}
+
+/* Currency summaries */
+.platform-owner-shell .funding-page .funding-currency-heading {
+  border-color: #293d56 !important;
+}
+
+.platform-owner-shell .funding-page .funding-currency-heading span,
+.platform-owner-shell .funding-page .funding-currency-primary span,
+.platform-owner-shell .funding-page .funding-capital-breakdown span {
+  color: #91a5bf !important;
+}
+
+.platform-owner-shell .funding-page .funding-currency-primary strong,
+.platform-owner-shell .funding-page .funding-capital-breakdown strong {
+  color: #e2edf9 !important;
+}
+
+.platform-owner-shell .funding-page .funding-currency-primary .funding-currency-total {
+  background: linear-gradient(135deg, #12304a, #142b45) !important;
+  border: 1px solid #24516c;
+}
+
+.platform-owner-shell .funding-page .funding-currency-primary .funding-currency-total strong {
+  color: #55d9f2 !important;
+}
+
+.platform-owner-shell .funding-page .funding-capital-breakdown {
+  border-color: #293d56 !important;
+}
+
+/* Investor positions */
+.platform-owner-shell .funding-page .funding-investor-card {
+  background: #101d30 !important;
+  border: 1px solid #293e58 !important;
+  border-radius: 12px;
+  transition: border-color .18s ease, transform .18s ease;
+}
+
+.platform-owner-shell .funding-page .funding-investor-card:hover {
+  border-color: #28b9dc !important;
+  transform: translateY(-2px);
+}
+
+.platform-owner-shell .funding-page .funding-investor-identity strong {
+  color: #edf4ff !important;
+}
+
+.platform-owner-shell .funding-page .funding-investor-identity span,
+.platform-owner-shell .funding-page .funding-investor-toolbar > span {
+  color: #91a5bf !important;
+}
+
+.platform-owner-shell .funding-page .funding-investor-currency {
+  background: rgb(34 211 238 / 11%) !important;
+  color: #55d9f2 !important;
+}
+
+.platform-owner-shell .funding-page .funding-investor-values > div {
+  background: #0b1729 !important;
+  border: 1px solid #263951;
+}
+
+.platform-owner-shell .funding-page .funding-investor-values span {
+  color: #91a5bf !important;
+}
+
+.platform-owner-shell .funding-page .funding-investor-values strong {
+  color: #e3edf9 !important;
+}
+
+.platform-owner-shell .funding-page .funding-investor-values .available {
+  background: #103047 !important;
+  border-color: #1c6074;
+}
+
+.platform-owner-shell .funding-page .funding-investor-values .available strong {
+  color: #55d9f2 !important;
+}
+
+.platform-owner-shell .funding-page .funding-investor-status.active {
+  background: rgb(34 197 94 / 13%) !important;
+  color: #6ee7a0 !important;
+}
+
+.platform-owner-shell .funding-page .funding-investor-status.inactive {
+  background: #293447 !important;
+  color: #a5b2c4 !important;
+}
+
+/* Empty states, loading and notes */
+.platform-owner-shell .funding-page .funding-empty {
+  background: #0b1729 !important;
+  border: 1px dashed #344b68 !important;
+  color: #91a5bf !important;
+}
+
+.platform-owner-shell .funding-page .funding-empty strong {
+  color: #e5eefb !important;
+}
+
+.platform-owner-shell .funding-page .funding-empty svg {
+  color: #55d9f2 !important;
+}
+
+.platform-owner-shell .funding-page .funding-loading {
+  color: #a9bad0 !important;
+}
+
+.platform-owner-shell .funding-page .funding-footnote {
+  background: #101d30 !important;
+  border: 1px solid #293e58 !important;
+  color: #9aadc5 !important;
+}
+
+/* Counts and small labels */
+.platform-owner-shell .funding-page .platform-owner-finance-account-count {
+  background: #142b42 !important;
+  border: 1px solid #28516c !important;
+  color: #55d9f2 !important;
+}
+
+@media (max-width: 600px) {
+  .platform-owner-shell .funding-page .funding-panel {
+    padding: 13px !important;
+  }
+
+  .platform-owner-shell .funding-page .funding-stat-card {
+    min-width: 0;
+  }
+}
+
+
+/* FUNDING PAGE — FINAL OVERVIEW AND HEADING FIX */
+
+.platform-owner-shell .funding-page .funding-header {
+  background: transparent !important;
+}
+
+.platform-owner-shell .funding-page .funding-header .platform-owner-finance-title {
+  color: #f4f8ff !important;
+  opacity: 1 !important;
+  font-weight: 850 !important;
+  text-shadow: 0 1px 12px rgb(34 211 238 / 9%);
+}
+
+.platform-owner-shell .funding-page .funding-header .platform-owner-finance-subtitle {
+  color: #a9bad0 !important;
+  opacity: 1 !important;
+}
+
+.platform-owner-shell .funding-page .funding-eyebrow {
+  color: #55d9f2 !important;
+  opacity: 1 !important;
+  font-weight: 800 !important;
+  letter-spacing: 1.5px;
+}
+
+/* Overview section */
+.platform-owner-shell .funding-page .funding-overview {
+  background: linear-gradient(145deg, #111e32, #0c1728) !important;
+  border: 1px solid #293d58 !important;
+  border-radius: 15px !important;
+  padding: 18px !important;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 16%) !important;
+}
+
+/* Overview heading */
+.platform-owner-shell .funding-page .funding-overview .funding-section-heading h2 {
+  color: #f0f6ff !important;
+}
+
+.platform-owner-shell .funding-page .funding-overview .funding-section-heading p {
+  color: #9aadc5 !important;
+}
+
+/* Overview badge */
+.platform-owner-shell .funding-page .funding-overview .funding-section-tag {
+  background: #17334a !important;
+  border: 1px solid #285a72 !important;
+  color: #55d9f2 !important;
+}
+
+/* Four overview metric cards */
+.platform-owner-shell .funding-page .funding-overview .funding-stat-card {
+  background: linear-gradient(145deg, #172940, #101c30) !important;
+  border: 1px solid #30445f !important;
+  border-radius: 12px !important;
+  box-shadow: 0 5px 16px rgb(0 0 0 / 15%) !important;
+}
+
+.platform-owner-shell .funding-page .funding-overview .funding-stat-label {
+  color: #b2c2d7 !important;
+}
+
+.platform-owner-shell .funding-page .funding-overview .funding-stat-value {
+  color: #f4f8ff !important;
+}
+
+.platform-owner-shell .funding-page .funding-overview .funding-stat-detail {
+  color: #8da2bd !important;
+}
+
+.platform-owner-shell .funding-page .funding-overview .funding-stat-icon {
+  background: rgb(34 211 238 / 12%) !important;
+  border: 1px solid rgb(34 211 238 / 20%) !important;
+  color: #55d9f2 !important;
+}
+
+@media (max-width: 600px) {
+  .platform-owner-shell .funding-page .funding-overview {
+    padding: 13px !important;
+  }
+}
+
+/* =========================================================
+   PesaPilot — Accounting Dark Command Centre
+   Scoped to Platform Owner Accounting only
+   ========================================================= */
+
+.platform-owner-shell .platform-owner-finance-page {
+  color: #e8eefc !important;
+}
+
+/* Header */
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-title {
+  color: #f4f7ff !important;
+  opacity: 1 !important;
+  font-weight: 850;
+  letter-spacing: -.6px;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-subtitle {
+  color: #a8b6ce !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-refresh {
+  background: #17243a !important;
+  color: #eaf2ff !important;
+  border: 1px solid #344763 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-refresh:hover {
+  background: #203451 !important;
+  border-color: #38bdf8 !important;
+}
+
+/* Financial metric cards and panels */
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-card,
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-panel {
+  background: linear-gradient(145deg, #17243a, #111b2e) !important;
+  border: 1px solid #2a3b56 !important;
+  color: #eaf1ff !important;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%) !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-card:hover {
+  border-color: #4385bd !important;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 26%) !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-label,
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-muted {
+  color: #a9bad2 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-value,
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-value.large {
+  color: #f4f7ff !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-icon {
+  background: rgb(56 189 248 / 12%) !important;
+  color: #55c8ff !important;
+  border: 1px solid rgb(56 189 248 / 22%) !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-section-title,
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-panel-title {
+  color: #edf4ff !important;
+}
+
+/* Functional currency settings */
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-settings {
+  background: linear-gradient(145deg, #17243a, #101a2d) !important;
+  border: 1px solid #344965 !important;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 20%) !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-settings-icon {
+  background: rgb(99 102 241 / 15%) !important;
+  color: #a5b4fc !important;
+  border: 1px solid rgb(129 140 248 / 25%) !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-current strong {
+  color: #f3f7ff !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-form label {
+  color: #c7d5e9 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-form select {
+  background: #0c1729 !important;
+  color: #f0f6ff !important;
+  border: 1px solid #3a506e !important;
+  color-scheme: dark;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-form select:focus {
+  outline: none;
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 3px rgb(56 189 248 / 13%) !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-save {
+  background: linear-gradient(135deg, #2563eb, #4f46e5) !important;
+  color: #ffffff !important;
+  border: 1px solid #6384f5 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-save:hover:not(:disabled) {
+  background: linear-gradient(135deg, #3478f6, #625cf0) !important;
+  transform: translateY(-1px);
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-save:disabled {
+  opacity: .45 !important;
+  color: #aab8ce !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-note {
+  color: #9eafc8 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-success {
+  background: rgb(16 185 129 / 10%) !important;
+  color: #6ee7b7 !important;
+  border: 1px solid rgb(16 185 129 / 25%) !important;
+}
+
+/* Notice, errors and loading / empty states */
+.platform-owner-shell .platform-owner-finance-page .platform-owner-notice {
+  background: rgb(56 189 248 / 8%) !important;
+  color: #c5dcf7 !important;
+  border: 1px solid rgb(56 189 248 / 20%) !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-notice svg {
+  color: #55c8ff !important;
+  flex: 0 0 auto;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-error {
+  background: rgb(239 68 68 / 10%) !important;
+  color: #fca5a5 !important;
+  border: 1px solid rgb(239 68 68 / 28%) !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-section > .platform-owner-finance-panel .text-muted-foreground {
+  color: #a9bad2 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-section > .platform-owner-finance-panel .font-semibold {
+  color: #f1f6ff !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-section > .platform-owner-finance-panel .text-lg {
+  color: #f4f7ff !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page .platform-owner-finance-muted.small {
+  color: #91a4bf !important;
+}
+
+/* Responsive refinements */
+@media (max-width: 600px) {
+  .platform-owner-shell .platform-owner-finance-page .platform-owner-finance-header {
+    align-items: stretch;
+  }
+
+  .platform-owner-shell .platform-owner-finance-page .platform-owner-finance-refresh {
+    width: 100%;
+  }
+
+  .platform-owner-shell .platform-owner-finance-page .platform-owner-accounting-settings {
+    padding: 14px !important;
+  }
+}
+
+/* End Accounting Dark Command Centre */
+
+/* Accounting page — improved text colour hierarchy */
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-title {
+  color: #67d5ff !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-subtitle {
+  color: #9aacc8 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-section-title {
+  color: #7dd3fc !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-panel-title {
+  color: #a5b4fc !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-muted,
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-label {
+  color: #a9bad2 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-value,
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-value.large {
+  color: #c4b5fd !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-icon {
+  color: #67d5ff !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-accounting-settings-heading h2 {
+  color: #67d5ff !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-accounting-current strong {
+  color: #7dd3fc !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-accounting-form label {
+  color: #c4b5fd !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-accounting-note {
+  color: #94a3b8 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-accounting-success {
+  color: #6ee7b7 !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-notice {
+  color: #93c5fd !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-section .text-muted-foreground {
+  color: #a5b4fc !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-section .font-semibold {
+  color: #67d5ff !important;
+}
+
+.platform-owner-shell .platform-owner-finance-page
+.platform-owner-finance-muted.small {
+  color: #94a3b8 !important;
 }

@@ -387,7 +387,7 @@ export default function PlatformOwnerApplications() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState(null);
-  const [creatingLoan, setCreatingLoan] = useState("");
+  const [allocatingLoan, setAllocatingLoan] = useState("");
 
   const loadApplications = useCallback(async () => {
     setLoading(true);
@@ -452,14 +452,14 @@ export default function PlatformOwnerApplications() {
     }
   }
 
-  async function createLoan(application) {
+  async function allocateLoan(application) {
     const confirmed = window.confirm(
-      `Create a platform loan for ${application.customer_email} using the approved application?`
+      `Allocate a platform loan to ${application.customer_email}?`
     );
 
     if (!confirmed) return;
 
-    setCreatingLoan(application.id);
+    setAllocatingLoan(application.id);
     setError("");
     setNotice("");
 
@@ -468,14 +468,14 @@ export default function PlatformOwnerApplications() {
         await platformOwnerApi.createLoanFromApplication(application.id);
 
       setNotice(
-        `Loan created successfully. Loan ID: ${response.loan?.id || "Created"}`
+        `Loan allocated successfully. Loan ID: ${response.loan?.id || "Allocated"}`
       );
 
       await loadApplications();
     } catch (err) {
       setError(err.message || "The loan could not be created.");
     } finally {
-      setCreatingLoan("");
+      setAllocatingLoan("");
     }
   }
 
@@ -734,19 +734,27 @@ export default function PlatformOwnerApplications() {
                           </button>
                         )}
 
-                        {application.status === "approved" && (
-                          <button
-                            type="button"
-                            className="platform-owner-button small primary"
-                            onClick={() => createLoan(application)}
-                            disabled={creatingLoan === application.id}
-                          >
-                            <Plus size={14} />
-                            {creatingLoan === application.id
-                              ? "Creating..."
-                              : "Create loan"}
-                          </button>
-                        )}
+                        {application.status === "approved" &&
+                          !application.loan_allocated && (
+                            <button
+                              type="button"
+                              className="platform-owner-button small primary"
+                              onClick={() => allocateLoan(application)}
+                              disabled={allocatingLoan === application.id}
+                            >
+                              <Plus size={14} />
+                              {allocatingLoan === application.id
+                                ? "Allocating..."
+                                : "Allocate"}
+                            </button>
+                          )}
+
+                        {application.status === "approved" &&
+                          application.loan_allocated && (
+                            <span className="platform-owner-muted">
+                              Allocated
+                            </span>
+                          )}
 
                         {application.status !== "pending" &&
                           application.status !== "approved" && (

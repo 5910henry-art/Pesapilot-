@@ -442,6 +442,21 @@ def list_owner_platform_applications():
                     assessment,
                 )
 
+        allocated_loans = {}
+
+        if application_ids:
+            existing_loans = (
+                PlatformLoan.query
+                .filter(
+                    PlatformLoan.application_id.in_(application_ids)
+                )
+                .all()
+            )
+            allocated_loans = {
+                loan.application_id: loan
+                for loan in existing_loans
+            }
+
         applications = []
 
         for application, customer_email, product_name, currency_code in rows:
@@ -451,6 +466,11 @@ def list_owner_platform_applications():
                 "customer_email": customer_email,
                 "product_name": product_name,
                 "currency_code": currency_code,
+                "loan_allocated": application.id in allocated_loans,
+                "allocated_loan_id": (
+                    str(allocated_loans[application.id].id)
+                    if application.id in allocated_loans else None
+                ),
                 "reviewed_by": (
                     str(application.reviewed_by)
                     if application.reviewed_by else None

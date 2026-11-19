@@ -554,7 +554,7 @@ export default function PlatformOwnerInvestors() {
   }
 
   return (
-    <div className="platform-owner-page">
+    <div className="platform-owner-page platform-owner-investors-page">
       <div className="platform-owner-page-header">
         <div>
           <span className="platform-owner-eyebrow">LENDING OPERATIONS</span>

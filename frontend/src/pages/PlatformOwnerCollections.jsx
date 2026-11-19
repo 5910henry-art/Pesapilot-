@@ -267,7 +267,7 @@ export default function PlatformOwnerCollections() {
   const visibleOverdue = overdue;
 
   return (
-    <div className="platform-owner-page">
+    <div className="platform-owner-page platform-owner-collections-page">
       <div className="platform-owner-page-header">
         <div>
           <span className="platform-owner-eyebrow">LENDING OPERATIONS</span>

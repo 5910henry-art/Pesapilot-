@@ -55,7 +55,7 @@ export default function PlatformOwnerLayout() {
   }
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+    <div className={`app-shell platform-owner-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <SessionExpiryGuard />
 
       {menuOpen && (

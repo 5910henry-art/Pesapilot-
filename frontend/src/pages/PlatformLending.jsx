@@ -26,7 +26,7 @@ function money(minor, currency = "KES") {
   }).format(Number(minor || 0) / (10 ** digits));
 }
 
-function toMinorUnits(value, currency) {
+function toMinorUnits(value, currency, allowZero = false) {
   const digits = digitsFor(currency);
   const input = String(value).trim();
 
@@ -43,7 +43,7 @@ function toMinorUnits(value, currency) {
     BigInt(whole) * (10n ** BigInt(digits)) +
     BigInt((fraction + "0".repeat(digits)).slice(0, digits) || "0");
 
-  if (amount <= 0n || amount > BigInt(Number.MAX_SAFE_INTEGER)) {
+  if (amount < (allowZero ? 0n : 1n) || amount > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new Error("Enter a positive amount within the supported range.");
   }
 
@@ -107,7 +107,24 @@ export default function PlatformLending() {
   const [showApply, setShowApply] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [applicationForm, setApplicationForm] = useState({
-    amount: "", term_count: "", purpose: "",
+    amount: "",
+    term_count: "",
+    purpose: "",
+    full_name: "",
+    national_id: "",
+    phone: "",
+    email: "",
+    residential_address: "",
+    employment_status: "",
+    employer_business_name: "",
+    monthly_income: "",
+    monthly_expenses: "",
+    existing_monthly_repayments: "0",
+    explanation: "",
+    alternative_contact_name: "",
+    alternative_contact_phone: "",
+    alternative_contact_relationship: "",
+    additional_notes: "",
   });
   const [savingApplication, setSavingApplication] = useState(false);
   const [withdrawing, setWithdrawing] = useState(null);
@@ -168,12 +185,31 @@ export default function PlatformLending() {
     }
   }
 
+  function updateApplicationField(field, value) {
+    setApplicationForm((old) => ({ ...old, [field]: value }));
+  }
+
   function startApplication(product) {
     setSelectedProduct(product);
     setApplicationForm({
       amount: "",
       term_count: String(product.min_term_count),
       purpose: "",
+      full_name: "",
+      national_id: "",
+      phone: "",
+      email: "",
+      residential_address: "",
+      employment_status: "",
+      employer_business_name: "",
+      monthly_income: "",
+      monthly_expenses: "",
+      existing_monthly_repayments: "0",
+      explanation: "",
+      alternative_contact_name: "",
+      alternative_contact_phone: "",
+      alternative_contact_relationship: "",
+      additional_notes: "",
     });
     setError("");
     setNotice("");
@@ -189,16 +225,74 @@ export default function PlatformLending() {
     setNotice("");
 
     try {
-      const amount = toMinorUnits(
-        applicationForm.amount,
-        selectedProduct.currency_code
-      );
+      const currency = selectedProduct.currency_code;
+
+      const alternativeFields = [
+        applicationForm.alternative_contact_name,
+        applicationForm.alternative_contact_phone,
+        applicationForm.alternative_contact_relationship,
+      ];
+
+      const alternativeCount = alternativeFields.filter(
+        (value) => value.trim()
+      ).length;
+
+      if (alternativeCount !== 0 && alternativeCount !== 3) {
+        throw new Error(
+          "Complete all three alternative contact fields, or leave them all blank."
+        );
+      }
+
+      if (
+        ["employed", "self_employed"].includes(
+          applicationForm.employment_status
+        ) &&
+        !applicationForm.employer_business_name.trim()
+      ) {
+        throw new Error("Enter your employer or business name.");
+      }
 
       await platformLendingApi.createApplication({
         product_id: selectedProduct.id,
-        requested_principal_minor: amount,
+        requested_principal_minor: toMinorUnits(
+          applicationForm.amount,
+          currency
+        ),
         term_count: Number(applicationForm.term_count),
         purpose: applicationForm.purpose.trim(),
+
+        full_name: applicationForm.full_name.trim(),
+        national_id: applicationForm.national_id.trim(),
+        phone: applicationForm.phone.trim(),
+        email: applicationForm.email.trim() || null,
+        residential_address: applicationForm.residential_address.trim(),
+        employment_status: applicationForm.employment_status,
+        employer_business_name:
+          applicationForm.employer_business_name.trim() || null,
+
+        monthly_income_minor: toMinorUnits(
+          applicationForm.monthly_income,
+          currency
+        ),
+        monthly_expenses_minor: toMinorUnits(
+          applicationForm.monthly_expenses,
+          currency,
+          true
+        ),
+        existing_monthly_repayments_minor: toMinorUnits(
+          applicationForm.existing_monthly_repayments || "0",
+          currency,
+          true
+        ),
+
+        explanation: applicationForm.explanation.trim() || null,
+        alternative_contact_name:
+          applicationForm.alternative_contact_name.trim() || null,
+        alternative_contact_phone:
+          applicationForm.alternative_contact_phone.trim() || null,
+        alternative_contact_relationship:
+          applicationForm.alternative_contact_relationship.trim() || null,
+        additional_notes: applicationForm.additional_notes.trim() || null,
       });
 
       setShowApply(false);
@@ -622,42 +716,188 @@ export default function PlatformLending() {
         }}>
           <form className="lending-modal" onSubmit={submitApplication}>
             <div className="lending-modal-heading">
-              <div><span className="lending-eyebrow">NEW APPLICATION</span><h2>{selectedProduct.name}</h2></div>
-              <button type="button" onClick={() => setShowApply(false)} aria-label="Close" disabled={savingApplication}><X /></button>
+              <div>
+                <span className="lending-eyebrow">NEW APPLICATION</span>
+                <h2>{selectedProduct.name}</h2>
+              </div>
+              <button type="button" onClick={() => setShowApply(false)}
+                aria-label="Close" disabled={savingApplication}>
+                <X />
+              </button>
             </div>
+
             <p className="lending-muted">
               Request between {money(selectedProduct.min_principal_minor, activeCurrency)}
               {" and "}{money(selectedProduct.max_principal_minor, activeCurrency)}.
+              All financial figures below must use {activeCurrency}.
             </p>
-            <Field label={`Requested amount (${activeCurrency})`}>
-              <input
-                type="number" min="0" step={digitsFor(activeCurrency) ? "0.01" : "1"}
-                required value={applicationForm.amount}
-                onChange={(event) => setApplicationForm((old) => ({ ...old, amount: event.target.value }))}
-                placeholder="Enter amount"
-              />
+
+            <h3>1. Personal information</h3>
+
+            <Field label="Full legal name">
+              <input required maxLength={150} autoComplete="name"
+                value={applicationForm.full_name}
+                onChange={(e) => updateApplicationField("full_name", e.target.value)}
+                placeholder="Enter your full name" />
             </Field>
+
+            <Field label="National ID number">
+              <input required maxLength={50} autoComplete="off"
+                value={applicationForm.national_id}
+                onChange={(e) => updateApplicationField("national_id", e.target.value)}
+                placeholder="Enter your National ID number" />
+            </Field>
+
+            <Field label="Phone number">
+              <input required type="tel" maxLength={30} autoComplete="tel"
+                value={applicationForm.phone}
+                onChange={(e) => updateApplicationField("phone", e.target.value)}
+                placeholder="e.g. 07XXXXXXXX" />
+            </Field>
+
+            <Field label="Email address (optional)">
+              <input type="email" maxLength={254} autoComplete="email"
+                value={applicationForm.email}
+                onChange={(e) => updateApplicationField("email", e.target.value)}
+                placeholder="you@example.com" />
+            </Field>
+
+            <Field label="Residential address">
+              <textarea required maxLength={500} rows={3}
+                value={applicationForm.residential_address}
+                onChange={(e) => updateApplicationField("residential_address", e.target.value)}
+                placeholder="Enter your current residential address" />
+            </Field>
+
+            <h3>2. Employment information</h3>
+
+            <Field label="Employment status">
+              <select required value={applicationForm.employment_status}
+                onChange={(e) => updateApplicationField("employment_status", e.target.value)}>
+                <option value="">Select employment status</option>
+                <option value="employed">Employed</option>
+                <option value="self_employed">Self-employed</option>
+                <option value="unemployed">Unemployed</option>
+                <option value="student">Student</option>
+                <option value="retired">Retired</option>
+                <option value="other">Other</option>
+              </select>
+            </Field>
+
+            {["employed", "self_employed"].includes(applicationForm.employment_status) && (
+              <Field label="Employer or business name">
+                <input required maxLength={200}
+                  value={applicationForm.employer_business_name}
+                  onChange={(e) => updateApplicationField("employer_business_name", e.target.value)}
+                  placeholder="Enter employer or business name" />
+              </Field>
+            )}
+
+            <h3>3. Financial information</h3>
+
+            <Field label={`Monthly income (${activeCurrency})`}>
+              <input required type="number" min="0.01"
+                step={digitsFor(activeCurrency) ? "0.01" : "1"}
+                value={applicationForm.monthly_income}
+                onChange={(e) => updateApplicationField("monthly_income", e.target.value)}
+                placeholder="Total monthly income" />
+            </Field>
+
+            <Field label={`Monthly expenses (${activeCurrency})`}>
+              <input required type="number" min="0"
+                step={digitsFor(activeCurrency) ? "0.01" : "1"}
+                value={applicationForm.monthly_expenses}
+                onChange={(e) => updateApplicationField("monthly_expenses", e.target.value)}
+                placeholder="Total monthly expenses" />
+            </Field>
+
+            <Field label={`Existing monthly loan repayments (${activeCurrency})`}>
+              <input type="number" min="0"
+                step={digitsFor(activeCurrency) ? "0.01" : "1"}
+                value={applicationForm.existing_monthly_repayments}
+                onChange={(e) => updateApplicationField("existing_monthly_repayments", e.target.value)}
+                placeholder="Enter 0 if you have none" />
+            </Field>
+
+            <h3>4. Loan request</h3>
+
+            <Field label={`Requested amount (${activeCurrency})`}>
+              <input type="number" min="0"
+                step={digitsFor(activeCurrency) ? "0.01" : "1"}
+                required value={applicationForm.amount}
+                onChange={(e) => updateApplicationField("amount", e.target.value)}
+                placeholder="Enter amount" />
+            </Field>
+
             <Field label={`Repayment term (${selectedProduct.repayment_frequency})`}>
-              <input
-                type="number" min={selectedProduct.min_term_count}
+              <input type="number" min={selectedProduct.min_term_count}
                 max={selectedProduct.max_term_count} step="1" required
                 value={applicationForm.term_count}
-                onChange={(event) => setApplicationForm((old) => ({ ...old, term_count: event.target.value }))}
-              />
-              <small>Choose between {selectedProduct.min_term_count} and {selectedProduct.max_term_count} periods.</small>
+                onChange={(e) => updateApplicationField("term_count", e.target.value)} />
+              <small>
+                Choose between {selectedProduct.min_term_count} and {selectedProduct.max_term_count} periods.
+              </small>
             </Field>
+
             <Field label="Purpose of the loan">
-              <textarea
-                required maxLength={500} rows={4}
+              <textarea required maxLength={500} rows={4}
                 value={applicationForm.purpose}
-                onChange={(event) => setApplicationForm((old) => ({ ...old, purpose: event.target.value }))}
-                placeholder="Explain what you intend to use the loan for"
-              />
+                onChange={(e) => updateApplicationField("purpose", e.target.value)}
+                placeholder="Explain what you intend to use the loan for" />
             </Field>
+
+            <Field label="Additional explanation (optional)">
+              <textarea maxLength={2000} rows={3}
+                value={applicationForm.explanation}
+                onChange={(e) => updateApplicationField("explanation", e.target.value)}
+                placeholder="Add any other information relevant to your application" />
+            </Field>
+
+            <h3>5. Alternative contact (optional)</h3>
+            <p className="lending-muted">
+              Complete all three fields if you want to provide an alternative contact.
+            </p>
+
+            <Field label="Contact's full name">
+              <input maxLength={150}
+                value={applicationForm.alternative_contact_name}
+                onChange={(e) => updateApplicationField("alternative_contact_name", e.target.value)}
+                placeholder="Alternative contact name" />
+            </Field>
+
+            <Field label="Contact's phone number">
+              <input type="tel" maxLength={30}
+                value={applicationForm.alternative_contact_phone}
+                onChange={(e) => updateApplicationField("alternative_contact_phone", e.target.value)}
+                placeholder="Alternative contact phone" />
+            </Field>
+
+            <Field label="Relationship to you">
+              <input maxLength={80}
+                value={applicationForm.alternative_contact_relationship}
+                onChange={(e) => updateApplicationField("alternative_contact_relationship", e.target.value)}
+                placeholder="e.g. Parent, spouse, colleague" />
+            </Field>
+
+            <Field label="Additional notes (optional)">
+              <textarea maxLength={5000} rows={3}
+                value={applicationForm.additional_notes}
+                onChange={(e) => updateApplicationField("additional_notes", e.target.value)}
+                placeholder="Anything else you would like us to know" />
+            </Field>
+
             <div className="lending-modal-actions">
-              <button type="button" className="lending-button lending-button-secondary" onClick={() => setShowApply(false)} disabled={savingApplication}>Cancel</button>
-              <button type="submit" className="lending-button lending-button-primary" disabled={savingApplication}>
-                <Send size={16} /> {savingApplication ? "Submitting…" : "Submit application"}
+              <button type="button"
+                className="lending-button lending-button-secondary"
+                onClick={() => setShowApply(false)}
+                disabled={savingApplication}>
+                Cancel
+              </button>
+              <button type="submit"
+                className="lending-button lending-button-primary"
+                disabled={savingApplication}>
+                <Send size={16} />
+                {savingApplication ? "Submitting…" : "Submit application"}
               </button>
             </div>
           </form>
