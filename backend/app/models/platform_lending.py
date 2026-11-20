@@ -242,6 +242,11 @@ class PlatformLoanApplication(db.Model):
         nullable=True,
     )
 
+    customer_decision_message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     reviewed_by: Mapped[object | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

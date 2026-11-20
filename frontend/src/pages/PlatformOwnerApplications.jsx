@@ -64,6 +64,7 @@ function DecisionModal({ application, onClose, onSubmit, saving, error }) {
     String(application.requested_principal_minor)
   );
   const [notes, setNotes] = useState("");
+  const [customerMessage, setCustomerMessage] = useState("");
   const [amountError, setAmountError] = useState("");
 
   const applicant = application.applicant || null;
@@ -75,6 +76,7 @@ function DecisionModal({ application, onClose, onSubmit, saving, error }) {
     const payload = {
       decision,
       decision_notes: notes.trim() || null,
+      customer_decision_message: customerMessage.trim() || null,
     };
 
     if (decision === "approved") {
@@ -367,13 +369,24 @@ function DecisionModal({ application, onClose, onSubmit, saving, error }) {
           )}
 
           <label>
-            Decision notes
+            Internal reviewer notes (owner only)
             <textarea
               rows="4"
-              maxLength="5000"
+              maxLength="2000"
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
-              placeholder="Enter review comments..."
+              placeholder="Enter private review comments..."
+            />
+          </label>
+
+          <label>
+            Message to customer (visible to applicant)
+            <textarea
+              rows="3"
+              maxLength="1000"
+              value={customerMessage}
+              onChange={(event) => setCustomerMessage(event.target.value)}
+              placeholder="Explain the decision to the applicant..."
             />
           </label>
 

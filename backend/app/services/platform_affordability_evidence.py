@@ -178,17 +178,40 @@ def collect_personal_workspace_evidence(
 
 
 def collect_existing_monthly_debt(*, customer_id, workspace_id=None, as_of=None):
-    """Calculate existing monthly obligations without mixing lending domains."""
+    """Calculate known obligations across all personal workspaces owned by a customer.
+
+    Transaction-sharing consent controls access to journal evidence, not access
+    to loan obligations already recorded in PesaPilot.
+    """
     as_of = as_of or date.today()
     personal_monthly = 0
     platform_monthly = 0
     overdue_personal = 0
     overdue_platform = 0
 
-    if workspace_id is not None:
+    owned_workspace_ids = db.session.execute(
+        select(Workspace.id)
+        .join(
+            WorkspaceMember,
+            WorkspaceMember.workspace_id == Workspace.id,
+        )
+        .where(
+            WorkspaceMember.user_id == customer_id,
+            WorkspaceMember.role == "owner",
+            Workspace.workspace_type == "personal",
+        )
+    ).scalars().all()
+
+    # If a workspace is explicitly supplied, it must be one of the
+    # customer's owned personal workspaces. Debt discovery still covers
+    # every owned personal workspace, not only the consented evidence source.
+    if workspace_id is not None and workspace_id not in owned_workspace_ids:
+        raise ValueError("Personal debt workspace is not owned by the customer.")
+
+    if owned_workspace_ids:
         borrowed_loans = db.session.execute(
             select(PersonalLoan).where(
-                PersonalLoan.workspace_id == workspace_id,
+                PersonalLoan.workspace_id.in_(owned_workspace_ids),
                 PersonalLoan.created_by == customer_id,
                 PersonalLoan.direction == "borrowed",
                 PersonalLoan.status.in_(("active", "overdue", "restructured")),
@@ -209,7 +232,7 @@ def collect_existing_monthly_debt(*, customer_id, workspace_id=None, as_of=None)
                 select(func.coalesce(func.sum(
                     LoanInstallment.amount_minor - LoanInstallment.paid_minor
                 ), 0)).where(
-                    LoanInstallment.workspace_id == workspace_id,
+                    LoanInstallment.workspace_id == loan.workspace_id,
                     LoanInstallment.personal_loan_id == loan.id,
                     LoanInstallment.status == "overdue",
                 )

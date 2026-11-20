@@ -467,7 +467,7 @@ def list_owner_platform_applications():
         applications = []
 
         for application, customer_email, product_name, currency_code in rows:
-            item = _application_response(application)
+            item = _owner_application_response(application)
             item.update({
                 "customer_id": str(application.customer_id),
                 "customer_email": customer_email,
@@ -600,6 +600,13 @@ def decide_platform_application(application_id):
             "message": "Decision must be approved or rejected.",
         }), 400
 
+    affordability_override = data.get("affordability_override", False)
+    if type(affordability_override) is not bool:
+        return jsonify({
+            "success": False,
+            "message": "Affordability override must be a boolean.",
+        }), 400
+
     try:
         reviewer_id = _customer_id()
         if reviewer_id is None:
@@ -613,7 +620,9 @@ def decide_platform_application(application_id):
             reviewer_id=reviewer_id,
             decision=decision,
             decision_notes=data.get("decision_notes"),
+            customer_decision_message=data.get("customer_decision_message"),
             approved_principal_minor=data.get("approved_principal_minor"),
+            affordability_override=affordability_override,
         )
 
         if application is None:
@@ -628,7 +637,7 @@ def decide_platform_application(application_id):
         return jsonify({
             "success": True,
             "message": f"Application {decision} successfully.",
-            "application": _application_response(application),
+            "application": _owner_application_response(application),
         }), 200
 
     except PlatformLendingValidationError as exc:
@@ -2237,7 +2246,7 @@ def _application_response(application):
         "term_count": application.term_count,
         "purpose": application.purpose,
         "status": application.status,
-        "decision_notes": application.decision_notes,
+        "customer_decision_message": application.customer_decision_message,
         "submitted_at": application.submitted_at.isoformat(),
         "reviewed_at": (
             application.reviewed_at.isoformat()
@@ -2248,6 +2257,14 @@ def _application_response(application):
             if application.withdrawn_at else None
         ),
     }
+
+
+def _owner_application_response(application):
+    """Include private reviewer notes only in owner responses."""
+
+    response = _application_response(application)
+    response["decision_notes"] = application.decision_notes
+    return response
 
 
 @platform_bp.get("/loans")
@@ -3761,6 +3778,16 @@ def submit_platform_application():
             interest_method=product.interest_method,
             interest_rate_percent=product.interest_rate_percent,
         )
+
+        if (
+            estimate["estimated_affordable_principal_minor"]
+            < product.min_principal_minor
+        ):
+            raise ValueError(
+                "You are not qualified for this loan product at the moment. "
+                "This is based on the eligibility requirements and information "
+                "available during your assessment."
+            )
 
         previous_version = (
             db.session.query(

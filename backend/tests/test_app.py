@@ -80,6 +80,10 @@ from app.services.ai_manager.data_service import build_financial_snapshot
 from app.services.ai_manager.rules_engine import generate_insights
 from app.services.ai_manager.providers.groq import sanitize_financial_context
 from app.services.loan_schedules import build_repayment_schedule
+from app.services.platform_affordability_evidence import (
+    build_affordability_evidence_report,
+    collect_existing_monthly_debt,
+)
 from app.services.loan_repayments import (
     build_payment_allocations,
     confirm_loan_payment,
@@ -132,6 +136,20 @@ class PesaPilotTestCase(unittest.TestCase):
         cls.app_context.pop()
 
     def setUp(self):
+        # Give every test a clean database, including records committed
+        # by earlier tests in this shared in-memory SQLite database.
+        db.session.remove()
+        db.drop_all()
+        db.create_all()
+
+        db.session.add(Currency(
+            code="KES",
+            name="Kenyan Shilling",
+            minor_unit=2,
+            is_active=True,
+        ))
+        db.session.commit()
+
         self.client = self.app.test_client()
 
         self.user = User(
@@ -1213,6 +1231,50 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+    def test_no_consent_still_counts_recorded_borrowed_personal_debt(self):
+        created = self.create_personal_loan()
+        self.assertEqual(created.status_code, 201, created.json)
+
+        loan = db.session.get(PersonalLoan, UUID(created.json["loan"]["id"]))
+        loan.status = "active"
+        db.session.commit()
+
+        report = build_affordability_evidence_report(
+            customer_id=self.user.id,
+            declared_monthly_income_minor=4_000_000,
+            declared_monthly_expenses_minor=2_000_000,
+            declared_existing_monthly_repayments_minor=0,
+            consent=False,
+        )
+
+        self.assertEqual(
+            report["debt_evidence"]["existing_personal_monthly_repayments_minor"],
+            9167,
+        )
+        self.assertEqual(
+            report["effective_existing_monthly_repayments_minor"],
+            9167,
+        )
+        self.assertEqual(
+            report["workspace_evidence"]["months_with_records"],
+            0,
+        )
+
+    def test_lent_personal_loan_is_not_counted_as_customer_debt(self):
+        created = self.create_personal_loan(direction="lent")
+        self.assertEqual(created.status_code, 201, created.json)
+
+        loan = db.session.get(PersonalLoan, UUID(created.json["loan"]["id"]))
+        loan.status = "active"
+        db.session.commit()
+
+        debt = collect_existing_monthly_debt(customer_id=self.user.id)
+
+        self.assertEqual(
+            debt["existing_personal_monthly_repayments_minor"],
+            0,
+        )
+
     def create_personal_loan(self, **overrides):
         start = date.today()
         payload = {
@@ -1397,6 +1459,16 @@ class PesaPilotTestCase(unittest.TestCase):
         )
         db.session.add(application)
         db.session.flush()
+        db.session.add(PlatformLoanAffordabilityAssessment(
+            application_id=application.id,
+            version=1,
+            status="verified",
+            estimated_affordable_principal_minor=approved_amount,
+            recommended_monthly_instalment_minor=0,
+            report={},
+            reasons=[],
+        ))
+        db.session.flush()
         return application
 
 
@@ -1575,6 +1647,61 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(loan.outstanding_principal_minor, 0)
         self.assertEqual(loan.status, "created")
         self.assertEqual(application.status, "approved")
+
+    def test_platform_loan_service_requires_affordability_assessment(self):
+        application = self.create_approved_platform_application()
+        assessment = PlatformLoanAffordabilityAssessment.query.filter_by(
+            application_id=application.id
+        ).one()
+        db.session.delete(assessment)
+        db.session.flush()
+
+        with self.assertRaises(PlatformLendingValidationError):
+            create_platform_loan_from_application(
+                application_id=application.id
+            )
+
+        self.assertEqual(PlatformLoan.query.filter_by(
+            application_id=application.id
+        ).count(), 0)
+
+    def test_platform_loan_service_enforces_assessed_affordable_principal(self):
+        application = self.create_approved_platform_application(
+            requested_principal_minor=100000,
+            approved_principal_minor=75000,
+        )
+        assessment = PlatformLoanAffordabilityAssessment.query.filter_by(
+            application_id=application.id
+        ).one()
+        assessment.estimated_affordable_principal_minor = 50000
+        db.session.flush()
+
+        with self.assertRaises(PlatformLendingValidationError):
+            create_platform_loan_from_application(
+                application_id=application.id
+            )
+
+        self.assertEqual(PlatformLoan.query.filter_by(
+            application_id=application.id
+        ).count(), 0)
+
+    def test_platform_loan_service_requires_documented_exception_for_nonverified_assessment(self):
+        application = self.create_approved_platform_application()
+        assessment = PlatformLoanAffordabilityAssessment.query.filter_by(
+            application_id=application.id
+        ).one()
+        assessment.status = "needs_review"
+        application.decision_notes = None
+        db.session.flush()
+
+        with self.assertRaises(PlatformLendingValidationError):
+            create_platform_loan_from_application(
+                application_id=application.id
+            )
+
+        self.assertEqual(PlatformLoan.query.filter_by(
+            application_id=application.id
+        ).count(), 0)
 
     def test_platform_loan_service_rejects_unapproved_application(self):
         application = self.create_approved_platform_application()
@@ -5665,6 +5792,16 @@ class PesaPilotTestCase(unittest.TestCase):
             status="pending",
         )
         db.session.add(application)
+        db.session.flush()
+        db.session.add(PlatformLoanAffordabilityAssessment(
+            application_id=application.id,
+            version=1,
+            status="verified",
+            estimated_affordable_principal_minor=100000,
+            recommended_monthly_instalment_minor=0,
+            report={},
+            reasons=[],
+        ))
         db.session.add(PlatformAdmin(
             user_id=self.user.id,
             role="owner",
@@ -5677,7 +5814,8 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
             json={
                 "decision": "approved",
-                "decision_notes": "Application meets requirements.",
+                "decision_notes": "PRIVATE: internal approval review.",
+                "customer_decision_message": "Your application has been approved.",
             },
         )
 
@@ -5689,7 +5827,11 @@ class PesaPilotTestCase(unittest.TestCase):
         )
         self.assertEqual(
             response.json["application"]["decision_notes"],
-            "Application meets requirements.",
+            "PRIVATE: internal approval review.",
+        )
+        self.assertEqual(
+            response.json["application"]["customer_decision_message"],
+            "Your application has been approved.",
         )
 
         db.session.refresh(application)
@@ -5714,6 +5856,16 @@ class PesaPilotTestCase(unittest.TestCase):
             status="pending",
         )
         db.session.add(application)
+        db.session.flush()
+        db.session.add(PlatformLoanAffordabilityAssessment(
+            application_id=application.id,
+            version=1,
+            status="verified",
+            estimated_affordable_principal_minor=100000,
+            recommended_monthly_instalment_minor=0,
+            report={},
+            reasons=[],
+        ))
         db.session.add(PlatformAdmin(
             user_id=self.user.id,
             role="owner",
@@ -5929,6 +6081,61 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401, response.json)
 
 
+    def test_inactive_customer_cannot_submit_platform_application(self):
+        product = self.create_platform_loan_product()
+        self.user.is_active = False
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=self.platform_application_payload(product),
+        )
+
+        self.assertEqual(response.status_code, 401, response.json)
+        self.assertEqual(
+            PlatformLoanApplication.query.filter_by(
+                customer_id=self.user.id
+            ).count(),
+            0,
+        )
+
+    def test_unaffordable_application_is_rejected_without_persisting_records(self):
+        product = self.create_platform_loan_product()
+        applications_before = PlatformLoanApplication.query.filter_by(
+            customer_id=self.user.id
+        ).count()
+        details_before = PlatformLoanApplicationDetails.query.count()
+        assessments_before = PlatformLoanAffordabilityAssessment.query.count()
+
+        response = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=self.platform_application_payload(
+                product,
+                monthly_income_minor=100000,
+                monthly_expenses_minor=100000,
+                existing_monthly_repayments_minor=0,
+            ),
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertIn("not qualified", response.json["message"].lower())
+        self.assertEqual(
+            PlatformLoanApplication.query.filter_by(
+                customer_id=self.user.id
+            ).count(),
+            applications_before,
+        )
+        self.assertEqual(
+            PlatformLoanApplicationDetails.query.count(),
+            details_before,
+        )
+        self.assertEqual(
+            PlatformLoanAffordabilityAssessment.query.count(),
+            assessments_before,
+        )
+
     def test_customer_can_submit_platform_loan_application(self):
         product = self.create_platform_loan_product()
 
@@ -5940,6 +6147,8 @@ class PesaPilotTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201, response.json)
         self.assertTrue(response.json["success"])
+        self.assertNotIn("decision_notes", response.json["application"])
+        self.assertIn("customer_decision_message", response.json["application"])
         self.assertEqual(
             response.json["application"]["status"],
             "pending",
@@ -6028,12 +6237,25 @@ class PesaPilotTestCase(unittest.TestCase):
 
         application_id = submitted.json["application"]["id"]
 
+        application = db.session.get(
+            PlatformLoanApplication,
+            UUID(application_id),
+        )
+        application.decision_notes = "PRIVATE: internal risk review."
+        application.customer_decision_message = "Your application is being withdrawn."
+        db.session.commit()
+
         response = self.client.delete(
             f"/api/v1/platform/applications/{application_id}",
             headers=self.headers,
         )
 
         self.assertEqual(response.status_code, 200, response.json)
+        self.assertNotIn("decision_notes", response.json["application"])
+        self.assertEqual(
+            response.json["application"]["customer_decision_message"],
+            "Your application is being withdrawn.",
+        )
         self.assertEqual(
             response.json["application"]["status"],
             "withdrawn",

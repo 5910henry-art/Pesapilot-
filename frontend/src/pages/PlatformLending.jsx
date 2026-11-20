@@ -761,8 +761,8 @@ export default function PlatformLending() {
                             Approved: {money(application.approved_principal_minor, currency)}
                           </div>
                         )}
-                        {application.decision_notes && (
-                          <p className="lending-decision-note">{application.decision_notes}</p>
+                        {application.customer_decision_message && (
+                          <p className="lending-decision-note">{application.customer_decision_message}</p>
                         )}
                         {application.status === "pending" && (
                           <button

@@ -14,6 +14,7 @@ from ..models import (
     PlatformLedgerAccount,
     PlatformLoan,
     PlatformLoanApplication,
+    PlatformLoanAffordabilityAssessment,
     PlatformLoanDisbursement,
     PlatformLoanInstallment,
     PlatformLoanPayment,
@@ -137,19 +138,42 @@ def submit_loan_application(
 
     return application
 
+def _latest_application_affordability_assessment(application_id):
+    return db.session.execute(
+        select(PlatformLoanAffordabilityAssessment)
+        .where(
+            PlatformLoanAffordabilityAssessment.application_id == application_id
+        )
+        .order_by(PlatformLoanAffordabilityAssessment.version.desc())
+        .limit(1)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+
 def review_loan_application(
     *,
     application_id,
     reviewer_id,
     decision,
     decision_notes=None,
+    customer_decision_message=None,
     approved_principal_minor=None,
+    affordability_override=False,
 ):
     """Record an owner's approval or rejection of a pending application."""
 
     if decision not in {"approved", "rejected"}:
         raise PlatformLendingValidationError(
             "Decision must be approved or rejected."
+        )
+
+    if type(affordability_override) is not bool:
+        raise PlatformLendingValidationError(
+            "Affordability override must be a boolean."
+        )
+    if decision == "rejected" and affordability_override:
+        raise PlatformLendingValidationError(
+            "Affordability override can only be used for approval."
         )
 
     if decision_notes is not None:
@@ -161,6 +185,17 @@ def review_loan_application(
         if len(decision_notes) > 2000:
             raise PlatformLendingValidationError(
                 "Decision notes must not exceed 2000 characters."
+            )
+
+    if customer_decision_message is not None:
+        if not isinstance(customer_decision_message, str):
+            raise PlatformLendingValidationError(
+                "Customer decision message must be text."
+            )
+        customer_decision_message = customer_decision_message.strip()
+        if len(customer_decision_message) > 1000:
+            raise PlatformLendingValidationError(
+                "Customer decision message must not exceed 1000 characters."
             )
 
     application = db.session.execute(
@@ -191,6 +226,33 @@ def review_loan_application(
                 "Approved principal must be a positive integer no greater "
                 "than the requested principal."
             )
+
+        assessment = _latest_application_affordability_assessment(
+            application.id
+        )
+        if assessment is None:
+            raise PlatformLendingValidationError(
+                "A completed affordability assessment is required before approval."
+            )
+
+        affordable_principal = assessment.estimated_affordable_principal_minor
+        if type(affordable_principal) is not int or affordable_principal <= 0:
+            raise PlatformLendingValidationError(
+                "The affordability assessment does not support a positive loan amount."
+            )
+        if approved_principal_minor > affordable_principal:
+            raise PlatformLendingValidationError(
+                "Approved principal cannot exceed the assessed affordable principal."
+            )
+        if assessment.status != "verified":
+            if not affordability_override:
+                raise PlatformLendingValidationError(
+                    "This affordability result requires an explicit owner override."
+                )
+            if not decision_notes:
+                raise PlatformLendingValidationError(
+                    "Decision notes are required when overriding an affordability result."
+                )
     elif approved_principal_minor is not None:
         raise PlatformLendingValidationError(
             "Rejected applications cannot have an approved principal."
@@ -199,6 +261,16 @@ def review_loan_application(
     application.approved_principal_minor = approved_principal_minor
     application.status = decision
     application.decision_notes = decision_notes or None
+    application.customer_decision_message = (
+        customer_decision_message
+        or (
+            "Your loan application has been approved."
+            if decision == "approved"
+            else
+            "Your application was not approved at this time. "
+            "Please contact PesaPilot support if you need more information."
+        )
+    )
     application.reviewed_by = reviewer_id
     application.reviewed_at = utc_now()
 
@@ -230,6 +302,35 @@ def create_platform_loan_from_application(*, application_id):
     ):
         raise PlatformLendingValidationError(
             "The application has an invalid approved principal."
+        )
+
+    assessment = _latest_application_affordability_assessment(
+        application.id
+    )
+    if assessment is None:
+        raise PlatformLendingValidationError(
+            "A completed affordability assessment is required before loan creation."
+        )
+
+    affordable_principal = assessment.estimated_affordable_principal_minor
+    if (
+        type(affordable_principal) is not int
+        or affordable_principal <= 0
+        or approved_principal > affordable_principal
+    ):
+        raise PlatformLendingValidationError(
+            "The approved loan amount exceeds the assessed affordable principal."
+        )
+
+    if (
+        assessment.status != "verified"
+        and not (
+            isinstance(application.decision_notes, str)
+            and application.decision_notes.strip()
+        )
+    ):
+        raise PlatformLendingValidationError(
+            "A documented reviewer exception is required for a non-verified affordability assessment."
         )
 
     existing_loan = db.session.execute(
