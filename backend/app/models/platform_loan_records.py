@@ -44,9 +44,9 @@ class PlatformLoan(db.Model):
         unique=True,
     )
 
-    customer_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     product_id: Mapped[uuid.UUID] = mapped_column(
@@ -365,9 +365,9 @@ class PlatformLoanDisbursement(db.Model):
         nullable=False,
     )
 
-    recorded_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     notes: Mapped[str | None] = mapped_column(
@@ -467,6 +467,11 @@ class PlatformLoanPayment(db.Model):
         nullable=True,
     )
 
+    borrower_financial_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("financial_accounts.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
     journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_journal_entries.id", ondelete="RESTRICT"),
         nullable=True,
@@ -516,13 +521,13 @@ class PlatformLoanPayment(db.Model):
         nullable=False,
     )
 
-    recorded_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
@@ -542,7 +547,7 @@ class PlatformLoanPayment(db.Model):
     )
 
     rejected_by: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
@@ -614,7 +619,7 @@ class PlatformLoanPayment(db.Model):
         ),
         CheckConstraint(
             "status != 'rejected' OR "
-            "(rejected_by IS NOT NULL AND rejected_at IS NOT NULL "
+            "(rejected_at IS NOT NULL "
             "AND rejection_reason IS NOT NULL "
             "AND length(trim(rejection_reason)) > 0)",
             name="ck_platform_payment_rejection",
@@ -623,7 +628,6 @@ class PlatformLoanPayment(db.Model):
             "status NOT IN ('confirmed', 'reversed') OR "
             "(financial_account_id IS NOT NULL "
             "AND journal_entry_id IS NOT NULL "
-            "AND confirmed_by IS NOT NULL "
             "AND confirmed_at IS NOT NULL "
             "AND principal_minor + interest_minor = amount_minor)",
             name="ck_platform_payment_confirmation",

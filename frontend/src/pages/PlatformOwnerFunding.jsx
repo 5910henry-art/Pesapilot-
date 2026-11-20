@@ -63,8 +63,8 @@ export default function PlatformOwnerFunding() {
   const [accountCurrencies, setAccountCurrencies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [savingAccount, setSavingAccount] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [accountMessage, setAccountMessage] = useState(null);
   const [investorSearch, setInvestorSearch] = useState("");
   const [accountForm, setAccountForm] = useState({
     name: "PesaPilot Main Account",
@@ -76,7 +76,7 @@ export default function PlatformOwnerFunding() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError("");
+    setLoadError("");
     try {
       const [portfolio, investorResponse, accountResponse] = await Promise.all([
         platformOwnerApi.getPortfolioReport(),
@@ -88,7 +88,7 @@ export default function PlatformOwnerFunding() {
       setAccounts(accountResponse.accounts || []);
       setAccountCurrencies(accountResponse.currencies || []);
     } catch (err) {
-      setError(err.message || "Could not load funding information.");
+      setLoadError(err.message || "Could not load funding information.");
     } finally {
       setLoading(false);
     }
@@ -105,11 +105,10 @@ export default function PlatformOwnerFunding() {
 
   const handleCreateAccount = async (event) => {
     event.preventDefault();
-    setError("");
-    setSuccess("");
+    setAccountMessage(null);
 
     if (!accountForm.name.trim() || !accountForm.currency_code) {
-      setError("Enter an account name and select a currency.");
+      setAccountMessage({ type: "error", text: "Enter an account name and select a currency." });
       return;
     }
 
@@ -122,7 +121,7 @@ export default function PlatformOwnerFunding() {
         display_reference: accountForm.display_reference.trim(),
       });
 
-      setSuccess(response.message || "Platform account created successfully.");
+      setAccountMessage({ type: "success", text: response.message || "Platform account created successfully." });
       setAccountForm((current) => ({
         ...current,
         name: "",
@@ -131,7 +130,7 @@ export default function PlatformOwnerFunding() {
       }));
       await load();
     } catch (err) {
-      setError(err.message || "Could not create the platform account.");
+      setAccountMessage({ type: "error", text: err.message || "Could not create the platform account." });
     } finally {
       setSavingAccount(false);
     }
@@ -206,8 +205,9 @@ export default function PlatformOwnerFunding() {
         </button>
       </header>
 
-      {error && <div className="platform-owner-finance-error">{error}</div>}
-      {success && <div className="platform-owner-finance-success">{success}</div>}
+      {loadError && (
+        <div className="platform-owner-finance-error" role="alert">{loadError}</div>
+      )}
 
       {loading ? (
         <div className="platform-owner-finance-panel funding-loading">
@@ -350,6 +350,17 @@ export default function PlatformOwnerFunding() {
                   />
                 </label>
               </div>
+
+              {accountMessage && (
+                <div
+                  className={accountMessage.type === "error"
+                    ? "platform-owner-finance-error"
+                    : "platform-owner-finance-success"}
+                  role={accountMessage.type === "error" ? "alert" : "status"}
+                >
+                  {accountMessage.text}
+                </div>
+              )}
 
               <div className="funding-form-actions">
                 <span>Account details are used for transaction records.</span>

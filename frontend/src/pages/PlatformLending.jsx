@@ -4,7 +4,8 @@ import {
   Clock3, CheckCircle2, AlertCircle, X, Wallet,
   FileText, CalendarDays, HandCoins, Send,
 } from "lucide-react";
-import { platformLendingApi } from "../api/client";
+import { financeApi, platformLendingApi } from "../api/client";
+import { useAuth } from "../context/useAuth";
 import { Skeleton } from "../components/Skeleton";
 
 const ZERO_DECIMAL = new Set([
@@ -92,22 +93,33 @@ function Field({ label, children }) {
 }
 
 export default function PlatformLending() {
+  const { activeWorkspace } = useAuth();
+  const workspaceId = activeWorkspace?.id;
   const [products, setProducts] = useState([]);
   const [applications, setApplications] = useState([]);
   const [loans, setLoans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [detailsError, setDetailsError] = useState("");
+  const [applicationMessage, setApplicationMessage] = useState("");
+  const [receivingAccountsError, setReceivingAccountsError] = useState("");
+  const [applicationNotice, setApplicationNotice] = useState("");
+  const [withdrawMessages, setWithdrawMessages] = useState({});
+  const [repaymentMessage, setRepaymentMessage] = useState("");
+  const [loanNotice, setLoanNotice] = useState("");
   const [tab, setTab] = useState("products");
   const [selectedLoan, setSelectedLoan] = useState(null);
   const [loanDetails, setLoanDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
 
   const [showApply, setShowApply] = useState(false);
+  const [receivingAccounts, setReceivingAccounts] = useState([]);
+  const [loadingReceivingAccounts, setLoadingReceivingAccounts] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [applicationForm, setApplicationForm] = useState({
     amount: "",
+    customer_financial_account_id: "",
     term_count: "",
     purpose: "",
     full_name: "",
@@ -133,13 +145,17 @@ export default function PlatformLending() {
   const [repaymentForm, setRepaymentForm] = useState({
     amount: "", payment_date: new Date().toLocaleDateString("en-CA"),
     payment_method: "mobile_money", reference: "", notes: "",
+    borrower_financial_account_id: "",
   });
   const [savingRepayment, setSavingRepayment] = useState(false);
+  const [repaymentAccounts, setRepaymentAccounts] = useState([]);
+  const [loadingRepaymentAccounts, setLoadingRepaymentAccounts] = useState(false);
+  const [repaymentAccountError, setRepaymentAccountError] = useState("");
 
   const loadData = useCallback(async (quiet = false) => {
     if (quiet) setRefreshing(true);
     else setLoading(true);
-    setError("");
+    setLoadError("");
 
     try {
       const [productResult, applicationResult, loanResult] =
@@ -153,7 +169,7 @@ export default function PlatformLending() {
       setApplications(applicationResult.applications || []);
       setLoans(loanResult.loans || []);
     } catch (err) {
-      setError(err.message || "PesaPilot Lending could not be loaded.");
+      setLoadError(err.message || "PesaPilot Lending could not be loaded.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -173,13 +189,14 @@ export default function PlatformLending() {
     setSelectedLoan(loan);
     setLoanDetails(null);
     setDetailsLoading(true);
-    setError("");
+    setDetailsError("");
+    setLoanNotice("");
 
     try {
       const result = await platformLendingApi.getLoan(loan.id);
       setLoanDetails(result);
     } catch (err) {
-      setError(err.message || "Loan details could not be loaded.");
+      setDetailsError(err.message || "Loan details could not be loaded.");
     } finally {
       setDetailsLoading(false);
     }
@@ -189,10 +206,13 @@ export default function PlatformLending() {
     setApplicationForm((old) => ({ ...old, [field]: value }));
   }
 
-  function startApplication(product) {
+  async function startApplication(product) {
     setSelectedProduct(product);
+    setReceivingAccounts([]);
+    setLoadingReceivingAccounts(true);
     setApplicationForm({
       amount: "",
+      customer_financial_account_id: "",
       term_count: String(product.min_term_count),
       purpose: "",
       full_name: "",
@@ -211,9 +231,28 @@ export default function PlatformLending() {
       alternative_contact_relationship: "",
       additional_notes: "",
     });
-    setError("");
-    setNotice("");
+    setApplicationMessage("");
+    setReceivingAccountsError("");
+    setApplicationNotice("");
     setShowApply(true);
+
+    try {
+      const result = await platformLendingApi.listReceivingAccounts(product.id);
+      const accounts = Array.isArray(result?.accounts) ? result.accounts : [];
+      setReceivingAccounts(accounts);
+      if (accounts.length === 1) {
+        setApplicationForm((old) => ({
+          ...old,
+          customer_financial_account_id: accounts[0].id,
+        }));
+      }
+    } catch (err) {
+      setReceivingAccountsError(
+        err.message || "Could not load your eligible receiving accounts."
+      );
+    } finally {
+      setLoadingReceivingAccounts(false);
+    }
   }
 
   async function submitApplication(event) {
@@ -221,8 +260,8 @@ export default function PlatformLending() {
     if (!selectedProduct || savingApplication) return;
 
     setSavingApplication(true);
-    setError("");
-    setNotice("");
+    setApplicationMessage("");
+    setApplicationNotice("");
 
     try {
       const currency = selectedProduct.currency_code;
@@ -252,8 +291,13 @@ export default function PlatformLending() {
         throw new Error("Enter your employer or business name.");
       }
 
+      if (!applicationForm.customer_financial_account_id) {
+        throw new Error("Select the account where you want to receive the loan.");
+      }
+
       await platformLendingApi.createApplication({
         product_id: selectedProduct.id,
+        customer_financial_account_id: applicationForm.customer_financial_account_id,
         requested_principal_minor: toMinorUnits(
           applicationForm.amount,
           currency
@@ -296,11 +340,11 @@ export default function PlatformLending() {
       });
 
       setShowApply(false);
-      setNotice("Your loan application has been submitted for review.");
+      setApplicationNotice("Your loan application has been submitted for review.");
       setTab("applications");
       await loadData(true);
     } catch (err) {
-      setError(err.message || "Your application could not be submitted.");
+      setApplicationMessage(err.message || "Your application could not be submitted.");
     } finally {
       setSavingApplication(false);
     }
@@ -309,17 +353,69 @@ export default function PlatformLending() {
   async function withdrawApplication(application) {
     if (withdrawing) return;
     setWithdrawing(application.id);
-    setError("");
-    setNotice("");
+    setWithdrawMessages((old) => ({
+      ...old,
+      [application.id]: null,
+    }));
 
     try {
       await platformLendingApi.withdrawApplication(application.id);
-      setNotice("Your application has been withdrawn.");
+      setWithdrawMessages((old) => ({
+        ...old,
+        [application.id]: {
+          type: "success",
+          message: "Your application has been withdrawn.",
+        },
+      }));
       await loadData(true);
     } catch (err) {
-      setError(err.message || "The application could not be withdrawn.");
+      setWithdrawMessages((old) => ({
+        ...old,
+        [application.id]: {
+          type: "error",
+          message: err.message || "The application could not be withdrawn.",
+        },
+      }));
     } finally {
       setWithdrawing(null);
+    }
+  }
+
+  async function openRepayment() {
+    setShowRepayment(true);
+    setRepaymentAccounts([]);
+    setRepaymentAccountError("");
+    setRepaymentMessage("");
+    setLoanNotice("");
+    setLoadingRepaymentAccounts(true);
+
+    setRepaymentForm((old) => ({
+      ...old,
+      borrower_financial_account_id: "",
+    }));
+
+    try {
+      if (!workspaceId) {
+        throw new Error("Select your personal workspace to load your accounts.");
+      }
+
+      const result = await financeApi.listAccounts(workspaceId);
+      const currency = loanDetails?.loan?.currency_code ||
+        selectedLoan?.currency_code;
+
+      const eligible = (result.accounts || []).filter(
+        (account) =>
+          account.is_active &&
+          account.currency === currency
+      );
+
+      setRepaymentAccounts(eligible);
+    } catch (err) {
+      setRepaymentAccountError(
+        err.message || "Your financial accounts could not be loaded."
+      );
+    } finally {
+      setLoadingRepaymentAccounts(false);
     }
   }
 
@@ -328,8 +424,8 @@ export default function PlatformLending() {
     if (!selectedLoan || savingRepayment) return;
 
     setSavingRepayment(true);
-    setError("");
-    setNotice("");
+    setRepaymentMessage("");
+    setLoanNotice("");
 
     try {
       const currency = loanDetails?.loan?.currency_code ||
@@ -339,25 +435,31 @@ export default function PlatformLending() {
         amount_minor: toMinorUnits(repaymentForm.amount, currency),
         payment_date: repaymentForm.payment_date,
         payment_method: repaymentForm.payment_method,
+        borrower_financial_account_id:
+          repaymentForm.borrower_financial_account_id &&
+          repaymentForm.borrower_financial_account_id !== "other"
+            ? repaymentForm.borrower_financial_account_id
+            : null,
         reference: repaymentForm.reference.trim() || null,
         notes: repaymentForm.notes.trim() || null,
       });
 
       setShowRepayment(false);
-      setNotice("Repayment submitted. It will remain pending until verified.");
+      setLoanNotice("Repayment submitted. It will remain pending until verified.");
       setRepaymentForm({
         amount: "",
         payment_date: new Date().toLocaleDateString("en-CA"),
         payment_method: "mobile_money",
         reference: "",
         notes: "",
+        borrower_financial_account_id: "",
       });
 
       const result = await platformLendingApi.getLoan(selectedLoan.id);
       setLoanDetails(result);
       await loadData(true);
     } catch (err) {
-      setError(err.message || "The repayment could not be submitted.");
+      setRepaymentMessage(err.message || "The repayment could not be submitted.");
     } finally {
       setSavingRepayment(false);
     }
@@ -388,18 +490,10 @@ export default function PlatformLending() {
         </button>
       </header>
 
-      {error && (
+      {loadError && (
         <div className="lending-alert lending-alert-error" role="alert">
-          <AlertCircle size={18} /> {error}
-          <button type="button" onClick={() => setError("")} aria-label="Dismiss">
-            <X size={16} />
-          </button>
-        </div>
-      )}
-      {notice && (
-        <div className="lending-alert lending-alert-success" role="status">
-          <CheckCircle2 size={18} /> {notice}
-          <button type="button" onClick={() => setNotice("")} aria-label="Dismiss">
+          <AlertCircle size={18} /> {loadError}
+          <button type="button" onClick={() => setLoadError("")} aria-label="Dismiss">
             <X size={16} />
           </button>
         </div>
@@ -417,6 +511,15 @@ export default function PlatformLending() {
           >
             <ArrowLeft size={17} /> Back to my loans
           </button>
+
+          {detailsError && (
+            <div className="lending-alert lending-alert-error" role="alert">
+              <AlertCircle size={18} /> {detailsError}
+              <button type="button" onClick={() => setDetailsError("")} aria-label="Dismiss">
+                <X size={16} />
+              </button>
+            </div>
+          )}
 
           {detailsLoading ? (
             <div className="lending-panel"><Skeleton /></div>
@@ -452,6 +555,15 @@ export default function PlatformLending() {
                 </div>
               </div>
 
+              {loanNotice && (
+                <div className="lending-alert lending-alert-success" role="status">
+                  <CheckCircle2 size={18} /> {loanNotice}
+                  <button type="button" onClick={() => setLoanNotice("")} aria-label="Dismiss">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+
               <div className="lending-detail-actions">
                 <div>
                   <h3>Repay this loan</h3>
@@ -461,7 +573,7 @@ export default function PlatformLending() {
                   <button
                     type="button"
                     className="lending-button lending-button-primary"
-                    onClick={() => setShowRepayment(true)}
+                    onClick={openRepayment}
                   >
                     <Plus size={17} /> Submit repayment
                   </button>
@@ -617,6 +729,14 @@ export default function PlatformLending() {
               <div className="lending-section-heading">
                 <div><h2>My applications</h2><p>Track the status of your loan requests.</p></div>
               </div>
+              {applicationNotice && (
+                <div className="lending-alert lending-alert-success" role="status">
+                  <CheckCircle2 size={18} /> {applicationNotice}
+                  <button type="button" onClick={() => setApplicationNotice("")} aria-label="Dismiss">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
               {applications.length ? (
                 <div className="lending-record-list">
                   {applications.map((application) => {
@@ -653,6 +773,18 @@ export default function PlatformLending() {
                           >
                             {withdrawing === application.id ? "Withdrawing…" : "Withdraw application"}
                           </button>
+                        )}
+                        {withdrawMessages[application.id] && (
+                          <div
+                            className={`lending-alert ${
+                              withdrawMessages[application.id].type === "error"
+                                ? "lending-alert-error"
+                                : "lending-alert-success"
+                            }`}
+                            role={withdrawMessages[application.id].type === "error" ? "alert" : "status"}
+                          >
+                            {withdrawMessages[application.id].message}
+                          </div>
                         )}
                       </article>
                     );
@@ -731,6 +863,15 @@ export default function PlatformLending() {
               {" and "}{money(selectedProduct.max_principal_minor, activeCurrency)}.
               All financial figures below must use {activeCurrency}.
             </p>
+
+            {applicationMessage && (
+              <div className="lending-alert lending-alert-error" role="alert">
+                <AlertCircle size={18} /> {applicationMessage}
+                <button type="button" onClick={() => setApplicationMessage("")} aria-label="Dismiss">
+                  <X size={16} />
+                </button>
+              </div>
+            )}
 
             <h3>1. Personal information</h3>
 
@@ -820,6 +961,35 @@ export default function PlatformLending() {
             </Field>
 
             <h3>4. Loan request</h3>
+
+            <Field label="Account to receive loan funds">
+              <select
+                required
+                value={applicationForm.customer_financial_account_id}
+                disabled={loadingReceivingAccounts || receivingAccounts.length === 0}
+                onChange={(e) => updateApplicationField("customer_financial_account_id", e.target.value)}
+              >
+                <option value="">
+                  {loadingReceivingAccounts ? "Loading your accounts..." : "Select receiving account"}
+                </option>
+                {receivingAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} · {account.account_type} ({account.currency_code})
+                  </option>
+                ))}
+              </select>
+              {receivingAccountsError && (
+                <div className="lending-alert lending-alert-error" role="alert">
+                  <AlertCircle size={18} /> {receivingAccountsError}
+                </div>
+              )}
+              {!loadingReceivingAccounts && receivingAccounts.length === 0 && (
+                <small>
+                  No eligible {selectedProduct.currency_code} account was found.
+                  Add an active cash, bank or mobile-money account to your personal workspace first.
+                </small>
+              )}
+            </Field>
 
             <Field label={`Requested amount (${activeCurrency})`}>
               <input type="number" min="0"
@@ -916,6 +1086,14 @@ export default function PlatformLending() {
             <div className="lending-alert lending-alert-info">
               Your submission is a payment report, not an instant balance update. The PesaPilot team must verify it before it is confirmed.
             </div>
+            {repaymentMessage && (
+              <div className="lending-alert lending-alert-error" role="alert">
+                <AlertCircle size={18} /> {repaymentMessage}
+                <button type="button" onClick={() => setRepaymentMessage("")} aria-label="Dismiss">
+                  <X size={16} />
+                </button>
+              </div>
+            )}
             <Field label={`Amount (${detailLoan?.currency_code || selectedLoan.currency_code})`}>
               <input
                 type="number" min="0"
@@ -929,6 +1107,32 @@ export default function PlatformLending() {
               <input type="date" required value={repaymentForm.payment_date}
                 onChange={(event) => setRepaymentForm((old) => ({ ...old, payment_date: event.target.value }))} />
             </Field>
+            <Field label="Payment from account">
+              <select
+                required
+                value={repaymentForm.borrower_financial_account_id}
+                onChange={(event) => setRepaymentForm((old) => ({
+                  ...old,
+                  borrower_financial_account_id: event.target.value,
+                }))}
+              >
+                <option value="">Choose an account</option>
+                {loadingRepaymentAccounts && (
+                  <option disabled value="loading">Loading accounts…</option>
+                )}
+                {repaymentAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} ({account.account_type})
+                  </option>
+                ))}
+                <option value="other">Other (not listed)</option>
+              </select>
+            </Field>
+            {repaymentAccountError && (
+              <div className="lending-alert lending-alert-info" role="status">
+                {repaymentAccountError} You can still choose Other (not listed).
+              </div>
+            )}
             <Field label="Payment method">
               <select value={repaymentForm.payment_method}
                 onChange={(event) => setRepaymentForm((old) => ({ ...old, payment_method: event.target.value }))}>
@@ -938,10 +1142,14 @@ export default function PlatformLending() {
                 <option value="other">Other</option>
               </select>
             </Field>
-            <Field label="Transaction reference (optional)">
-              <input maxLength={100} value={repaymentForm.reference}
+            <Field label="Transaction reference">
+              <input
+                required
+                maxLength={100}
+                value={repaymentForm.reference}
                 onChange={(event) => setRepaymentForm((old) => ({ ...old, reference: event.target.value }))}
-                placeholder="e.g. M-PESA confirmation code" />
+                placeholder="Enter your M-PESA or bank transaction reference"
+              />
             </Field>
             <Field label="Additional notes (optional)">
               <textarea rows={3} maxLength={5000} value={repaymentForm.notes}

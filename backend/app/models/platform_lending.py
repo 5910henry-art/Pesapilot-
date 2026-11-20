@@ -201,9 +201,9 @@ class PlatformLoanApplication(db.Model):
         default=new_uuid,
     )
 
-    customer_id: Mapped[object] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
+    customer_id: Mapped[object | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     product_id: Mapped[object] = mapped_column(
@@ -226,9 +226,9 @@ class PlatformLoanApplication(db.Model):
         nullable=False,
     )
 
-    purpose: Mapped[str] = mapped_column(
+    purpose: Mapped[str | None] = mapped_column(
         String(500),
-        nullable=False,
+        nullable=True,
     )
 
     status: Mapped[str] = mapped_column(

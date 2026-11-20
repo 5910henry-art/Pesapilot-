@@ -1,17 +1,18 @@
 import hashlib
 import re
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from email_validator import EmailNotValidError, validate_email
 from flask import current_app, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
+    get_jwt,
     get_jwt_identity,
     jwt_required,
 )
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -26,6 +27,27 @@ from app.models import (
     LedgerAccount,
     AuditLog,
     RefreshToken,
+    PlatformAdmin,
+    PlatformLoan,
+    PlatformLoanApplication,
+    PlatformLoanPayment,
+    PlatformLoanDisbursement,
+    PlatformLoanApplicationDetails,
+    PlatformLoanAffordabilityAssessment,
+    FinancialAccount,
+    JournalEntry,
+    JournalLine,
+    ExpenseCategory,
+    Budget,
+    SavingsGoal,
+    SavingsGoalMovement,
+    PersonalLoan,
+    LoanInstallment,
+    LoanPayment,
+    LoanPaymentAllocation,
+    LoanDisbursement,
+    Bill,
+    BillPayment,
 )
 
 from . import auth_bp
@@ -323,17 +345,25 @@ def login():
         }), 403
 
     try:
+        session_id = uuid4()
+        session_claims = {"sid": str(session_id)}
+
         access_token = create_access_token(
-            identity=str(user.id)
+            identity=str(user.id),
+            additional_claims=session_claims,
         )
 
         refresh_token = create_refresh_token(
-            identity=str(user.id)
+            identity=str(user.id),
+            additional_claims=session_claims,
         )
 
         token_record = RefreshToken(
             user_id=user.id,
             token_hash=hash_refresh_token(refresh_token),
+            session_id=session_id,
+            user_agent=request.headers.get("User-Agent", "")[:512] or None,
+            ip_address=request.remote_addr,
             expires_at=(
                 datetime.now(timezone.utc)
                 + timedelta(
@@ -413,13 +443,19 @@ def refresh():
                 "message": "Account is unavailable.",
             }), 403
 
+        session_claims = {"sid": str(old_record.session_id)}
+
         new_refresh_token = create_refresh_token(
-            identity=str(user.id)
+            identity=str(user.id),
+            additional_claims=session_claims,
         )
 
         new_record = RefreshToken(
             user_id=user.id,
             token_hash=hash_refresh_token(new_refresh_token),
+            session_id=old_record.session_id,
+            user_agent=old_record.user_agent,
+            ip_address=old_record.ip_address,
             expires_at=(
                 now + timedelta(
                     seconds=current_app.config[
@@ -433,7 +469,8 @@ def refresh():
         db.session.add(new_record)
 
         new_access_token = create_access_token(
-            identity=str(user.id)
+            identity=str(user.id),
+            additional_claims=session_claims,
         )
 
         db.session.commit()
@@ -495,14 +532,37 @@ def logout():
             }), 403
 
         now = datetime.now(timezone.utc)
+        expires_at = record.expires_at
 
-        if record.revoked_at is not None or record.expires_at <= now:
+        # SQLite may return timezone-naive UTC datetimes.
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if record.revoked_at is not None or expires_at <= now:
             return jsonify({
                 "success": False,
                 "message": "Refresh token is expired or revoked.",
             }), 401
 
-        record.revoked_at = now
+        revoked_count = db.session.query(RefreshToken).filter(
+            RefreshToken.user_id == user_id,
+            RefreshToken.session_id == record.session_id,
+            RefreshToken.revoked_at.is_(None),
+        ).update(
+            {RefreshToken.revoked_at: now},
+            synchronize_session=False,
+        )
+
+        db.session.add(AuditLog(
+            workspace_id=None,
+            user_id=user_id,
+            action="user_logged_out",
+            resource_type="auth_session",
+            resource_id=str(record.session_id),
+            details={"revoked_token_count": revoked_count},
+            ip_address=request.remote_addr,
+        ))
+
         db.session.commit()
 
         return jsonify({
@@ -517,6 +577,951 @@ def logout():
         return jsonify({
             "success": False,
             "message": "Logout could not be completed.",
+        }), 500
+
+
+# ---------------------------------------------------------
+# ACTIVE SESSIONS
+# ---------------------------------------------------------
+
+@auth_bp.get("/sessions")
+@jwt_required()
+def list_active_sessions():
+    try:
+        user_id = UUID(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    claims = get_jwt()
+    current_session_id = None
+
+    try:
+        if claims.get("sid"):
+            current_session_id = UUID(str(claims["sid"]))
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid session identity.",
+        }), 401
+
+    now = datetime.now(timezone.utc)
+
+    records = db.session.query(RefreshToken).filter(
+        RefreshToken.user_id == user_id,
+        RefreshToken.expires_at > now,
+    ).order_by(RefreshToken.created_at.asc()).all()
+
+    grouped = {}
+    for record in records:
+        grouped.setdefault(record.session_id, []).append(record)
+
+    sessions = []
+
+    for session_id, session_records in grouped.items():
+        active_records = [
+            item for item in session_records
+            if item.revoked_at is None
+        ]
+
+        if not active_records:
+            continue
+
+        latest = max(
+            session_records,
+            key=lambda item: item.created_at,
+        )
+
+        first_seen = min(
+            item.created_at for item in session_records
+        )
+        last_seen = max(
+            item.created_at for item in session_records
+        )
+
+        sessions.append({
+            "session_id": str(session_id),
+            "created_at": first_seen.isoformat(),
+            "last_seen_at": last_seen.isoformat(),
+            "user_agent": latest.user_agent,
+            "ip_address": latest.ip_address,
+            "is_current": session_id == current_session_id,
+        })
+
+    sessions.sort(
+        key=lambda item: item["last_seen_at"],
+        reverse=True,
+    )
+
+    return jsonify({
+        "success": True,
+        "sessions": sessions,
+        "count": len(sessions),
+    }), 200
+
+
+@auth_bp.delete("/sessions/<session_id>")
+@jwt_required()
+def revoke_session(session_id):
+    try:
+        user_id = UUID(get_jwt_identity())
+        target_session_id = UUID(session_id)
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid user or session identity.",
+        }), 400
+
+    claims = get_jwt()
+
+    try:
+        current_session_id = UUID(str(claims["sid"]))
+    except (KeyError, ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Current session cannot be identified.",
+        }), 400
+
+    if target_session_id == current_session_id:
+        return jsonify({
+            "success": False,
+            "message": "Use logout to end the current session.",
+        }), 400
+
+    try:
+        now = datetime.now(timezone.utc)
+
+        revoked_count = db.session.query(RefreshToken).filter(
+            RefreshToken.user_id == user_id,
+            RefreshToken.session_id == target_session_id,
+            RefreshToken.revoked_at.is_(None),
+        ).update(
+            {RefreshToken.revoked_at: now},
+            synchronize_session=False,
+        )
+
+        if not revoked_count:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": "Active session was not found.",
+            }), 404
+
+        db.session.add(AuditLog(
+            workspace_id=None,
+            user_id=user_id,
+            action="session_revoked",
+            resource_type="auth_session",
+            resource_id=str(target_session_id),
+            details={"revoked_token_count": revoked_count},
+            ip_address=request.remote_addr,
+        ))
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Session revoked successfully.",
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Session revocation failed")
+
+        return jsonify({
+            "success": False,
+            "message": "Session could not be revoked.",
+        }), 500
+
+
+@auth_bp.post("/sessions/revoke-others")
+@jwt_required()
+def revoke_other_sessions():
+    try:
+        user_id = UUID(get_jwt_identity())
+        current_session_id = UUID(str(get_jwt()["sid"]))
+    except (KeyError, ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Current session cannot be identified.",
+        }), 401
+
+    try:
+        now = datetime.now(timezone.utc)
+
+        revoked_count = db.session.query(RefreshToken).filter(
+            RefreshToken.user_id == user_id,
+            RefreshToken.session_id != current_session_id,
+            RefreshToken.revoked_at.is_(None),
+        ).update(
+            {RefreshToken.revoked_at: now},
+            synchronize_session=False,
+        )
+
+        db.session.add(AuditLog(
+            workspace_id=None,
+            user_id=user_id,
+            action="other_sessions_revoked",
+            resource_type="auth_session",
+            resource_id=str(current_session_id),
+            details={"revoked_token_count": revoked_count},
+            ip_address=request.remote_addr,
+        ))
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Other sessions have been revoked.",
+            "revoked_token_count": revoked_count,
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Other session revocation failed")
+
+        return jsonify({
+            "success": False,
+            "message": "Other sessions could not be revoked.",
+        }), 500
+
+
+@auth_bp.post("/change-password")
+@jwt_required()
+def change_password():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    current_password = data.get("current_password")
+    new_password = data.get("new_password")
+
+    if not isinstance(current_password, str) or not isinstance(new_password, str):
+        return jsonify({
+            "success": False,
+            "message": "Current and new passwords are required.",
+        }), 400
+
+    if len(new_password) < 12 or len(new_password) > 128:
+        return jsonify({
+            "success": False,
+            "message": "Password must be between 12 and 128 characters.",
+        }), 400
+
+    try:
+        user_id = UUID(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    try:
+        user = db.session.get(User, user_id)
+
+        if user is None or not user.is_active:
+            return jsonify({
+                "success": False,
+                "message": "Account is unavailable.",
+            }), 403
+
+        if not check_password_hash(user.password_hash, current_password):
+            return jsonify({
+                "success": False,
+                "message": "Current password is incorrect.",
+            }), 400
+
+        if check_password_hash(user.password_hash, new_password):
+            return jsonify({
+                "success": False,
+                "message": "New password must be different from the current password.",
+            }), 400
+
+        now = datetime.now(timezone.utc)
+        user.password_hash = generate_password_hash(new_password)
+
+        revoked_count = db.session.query(RefreshToken).filter(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        ).update(
+            {RefreshToken.revoked_at: now},
+            synchronize_session=False,
+        )
+
+        db.session.add(AuditLog(
+            workspace_id=None,
+            user_id=user_id,
+            action="password_changed",
+            resource_type="user",
+            resource_id=str(user_id),
+            details={"revoked_session_token_count": revoked_count},
+            ip_address=request.remote_addr,
+        ))
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Password changed successfully. Please sign in again.",
+            "revoked_session_token_count": revoked_count,
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Password change failed")
+
+        return jsonify({
+            "success": False,
+            "message": "Password could not be changed.",
+        }), 500
+
+
+# ACCOUNT DELETION ELIGIBILITY
+# ---------------------------------------------------------
+
+@auth_bp.get("/account-deletion/eligibility")
+@jwt_required()
+def account_deletion_eligibility():
+    try:
+        user_id = UUID(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    try:
+        user = db.session.get(User, user_id)
+        if user is None or not user.is_active:
+            return jsonify({
+                "success": False,
+                "message": "Account is unavailable.",
+            }), 403
+
+        blockers = []
+
+        # Outstanding or unfinished platform loans.
+        loans = PlatformLoan.query.filter_by(
+            customer_id=user_id
+        ).all()
+
+        outstanding_count = sum(
+            1 for loan in loans
+            if loan.outstanding_principal_minor > 0
+        )
+        unfinished_count = sum(
+            1 for loan in loans
+            if loan.status in {"created", "funding"}
+        )
+
+        if outstanding_count:
+            blockers.append({
+                "code": "outstanding_platform_loan",
+                "message": (
+                    "Settle all outstanding PesaPilot platform loans "
+                    "before deleting your account."
+                ),
+                "count": outstanding_count,
+            })
+
+        if unfinished_count:
+            blockers.append({
+                "code": "unfinished_platform_loan",
+                "message": (
+                    "A platform loan is still being created or funded. "
+                    "Resolve it before deleting your account."
+                ),
+                "count": unfinished_count,
+            })
+
+        pending_applications = PlatformLoanApplication.query.filter_by(
+            customer_id=user_id,
+            status="pending",
+        ).count()
+
+        if pending_applications:
+            blockers.append({
+                "code": "pending_platform_application",
+                "message": (
+                    "You have a pending PesaPilot loan application."
+                ),
+                "count": pending_applications,
+            })
+
+        pending_payments = (
+            db.session.query(PlatformLoanPayment)
+            .join(
+                PlatformLoan,
+                PlatformLoan.id == PlatformLoanPayment.loan_id,
+            )
+            .filter(
+                PlatformLoan.customer_id == user_id,
+                PlatformLoanPayment.status == "pending",
+            )
+            .count()
+        )
+
+        if pending_payments:
+            blockers.append({
+                "code": "pending_platform_payment",
+                "message": (
+                    "A platform loan repayment is still pending. "
+                    "Wait until it is resolved."
+                ),
+                "count": pending_payments,
+            })
+
+        # A shared workspace with other members must retain its owner.
+        owned_shared_workspaces = []
+        memberships = (
+            db.session.query(WorkspaceMember, Workspace)
+            .join(
+                Workspace,
+                Workspace.id == WorkspaceMember.workspace_id,
+            )
+            .filter(
+                WorkspaceMember.user_id == user_id,
+                WorkspaceMember.role == "owner",
+            )
+            .all()
+        )
+
+        for membership, workspace in memberships:
+            other_members = WorkspaceMember.query.filter(
+                WorkspaceMember.workspace_id == workspace.id,
+                WorkspaceMember.user_id != user_id,
+            ).count()
+
+            if other_members:
+                owned_shared_workspaces.append({
+                    "workspace_id": str(workspace.id),
+                    "workspace_name": workspace.name,
+                })
+
+        if owned_shared_workspaces:
+            blockers.append({
+                "code": "shared_workspace_ownership",
+                "message": (
+                    "Transfer ownership of each shared workspace "
+                    "before deleting your account."
+                ),
+                "workspaces": owned_shared_workspaces,
+            })
+
+        # Do not remove the final active platform administrator.
+        admin_access = db.session.get(PlatformAdmin, user_id)
+        if admin_access is not None and admin_access.is_active:
+            active_admin_count = PlatformAdmin.query.filter_by(
+                is_active=True
+            ).count()
+
+            if active_admin_count <= 1:
+                blockers.append({
+                    "code": "last_platform_admin",
+                    "message": (
+                        "Another active platform administrator must "
+                        "be appointed before deleting this account."
+                    ),
+                })
+
+        return jsonify({
+            "success": True,
+            "eligible": not blockers,
+            "blockers": blockers,
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Account deletion eligibility check failed"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Account deletion eligibility could not be checked.",
+        }), 500
+
+
+
+# PERMANENT ACCOUNT DELETION
+# ---------------------------------------------------------
+
+@auth_bp.delete("/account-deletion")
+@jwt_required()
+def permanently_delete_account():
+    try:
+        user_id = UUID(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    password = data.get("password")
+    confirmation = data.get("confirmation")
+
+    if not isinstance(password, str) or not password:
+        return jsonify({
+            "success": False,
+            "message": "Enter your current password to continue.",
+        }), 400
+
+    if confirmation != "DELETE":
+        return jsonify({
+            "success": False,
+            "message": 'Type DELETE exactly to confirm permanent deletion.',
+        }), 400
+
+    try:
+        # Lock the account row where supported and recheck eligibility
+        # inside this transaction, rather than trusting an earlier GET.
+        user = (
+            db.session.query(User)
+            .filter(User.id == user_id)
+            .with_for_update()
+            .first()
+        )
+
+        if user is None or not user.is_active:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": "Account is unavailable.",
+            }), 404
+
+        if not check_password_hash(user.password_hash, password):
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": "The password is incorrect.",
+            }), 401
+
+        # Recheck all financial and workspace blockers.
+        blockers = []
+
+        loans = PlatformLoan.query.filter_by(customer_id=user_id).all()
+
+        outstanding_count = sum(
+            1 for loan in loans
+            if loan.outstanding_principal_minor > 0
+        )
+        unfinished_count = sum(
+            1 for loan in loans
+            if loan.status in {"created", "funding"}
+        )
+
+        if outstanding_count:
+            blockers.append({
+                "code": "outstanding_platform_loan",
+                "message": "Settle all outstanding PesaPilot platform loans before deleting your account.",
+                "count": outstanding_count,
+            })
+
+        if unfinished_count:
+            blockers.append({
+                "code": "unfinished_platform_loan",
+                "message": "A platform loan is still being created or funded.",
+                "count": unfinished_count,
+            })
+
+        pending_applications = PlatformLoanApplication.query.filter_by(
+            customer_id=user_id,
+            status="pending",
+        ).count()
+
+        if pending_applications:
+            blockers.append({
+                "code": "pending_platform_application",
+                "message": "You have a pending PesaPilot loan application.",
+                "count": pending_applications,
+            })
+
+        pending_payments = (
+            db.session.query(PlatformLoanPayment)
+            .join(
+                PlatformLoan,
+                PlatformLoan.id == PlatformLoanPayment.loan_id,
+            )
+            .filter(
+                PlatformLoan.customer_id == user_id,
+                PlatformLoanPayment.status == "pending",
+            )
+            .count()
+        )
+
+        if pending_payments:
+            blockers.append({
+                "code": "pending_platform_payment",
+                "message": "A platform loan repayment is still pending.",
+                "count": pending_payments,
+            })
+
+        memberships = (
+            db.session.query(WorkspaceMember, Workspace)
+            .join(Workspace, Workspace.id == WorkspaceMember.workspace_id)
+            .filter(
+                WorkspaceMember.user_id == user_id,
+                WorkspaceMember.role == "owner",
+            )
+            .all()
+        )
+
+        owned_shared_workspaces = []
+        for membership, workspace in memberships:
+            other_members = WorkspaceMember.query.filter(
+                WorkspaceMember.workspace_id == workspace.id,
+                WorkspaceMember.user_id != user_id,
+            ).count()
+
+            if other_members:
+                owned_shared_workspaces.append({
+                    "workspace_id": str(workspace.id),
+                    "workspace_name": workspace.name,
+                })
+
+        if owned_shared_workspaces:
+            blockers.append({
+                "code": "shared_workspace_ownership",
+                "message": "Transfer ownership of each shared workspace before deleting your account.",
+                "workspaces": owned_shared_workspaces,
+            })
+
+        admin_access = db.session.get(PlatformAdmin, user_id)
+        if admin_access is not None and admin_access.is_active:
+            active_admin_count = PlatformAdmin.query.filter_by(
+                is_active=True
+            ).count()
+            if active_admin_count <= 1:
+                blockers.append({
+                    "code": "last_platform_admin",
+                    "message": "Another active platform administrator must be appointed first.",
+                })
+
+        if blockers:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "eligible": False,
+                "blockers": blockers,
+                "message": "Resolve the listed requirements before deleting your account.",
+            }), 409
+
+        # Workspaces with no other members are owned solely by this user
+        # and can be removed. Shared workspaces are preserved.
+        user_memberships = WorkspaceMember.query.filter_by(
+            user_id=user_id
+        ).all()
+
+        owned_workspace_ids = []
+        shared_workspace_ids = []
+
+        for membership in user_memberships:
+            other_count = WorkspaceMember.query.filter(
+                WorkspaceMember.workspace_id == membership.workspace_id,
+                WorkspaceMember.user_id != user_id,
+            ).count()
+
+            workspace = db.session.get(Workspace, membership.workspace_id)
+
+            is_sole_member = other_count == 0
+            is_deletable_personal = (
+                workspace is not None
+                and workspace.workspace_type == "personal"
+            )
+            is_sole_business_owner = membership.role == "owner"
+
+            if is_sole_member and (
+                is_deletable_personal or is_sole_business_owner
+            ):
+                owned_workspace_ids.append(membership.workspace_id)
+            else:
+                # Preserve shared workspaces and business workspaces the
+                # departing user does not solely own.
+                shared_workspace_ids.append(membership.workspace_id)
+
+        # Anonymise historical platform loan records before deleting any
+        # personal workspace, account, or journal entry they reference.
+        application_ids = [
+            row[0]
+            for row in db.session.query(PlatformLoanApplication.id).filter(
+                PlatformLoanApplication.customer_id == user_id
+            ).all()
+        ]
+        platform_loan_ids = [
+            row[0]
+            for row in db.session.query(PlatformLoan.id).filter(
+                PlatformLoan.customer_id == user_id
+            ).all()
+        ]
+
+        if application_ids:
+            details_rows = PlatformLoanApplicationDetails.query.filter(
+                PlatformLoanApplicationDetails.application_id.in_(application_ids)
+            ).all()
+
+            for details in details_rows:
+                details.customer_id = None
+                details.customer_financial_account_id = None
+                details.full_name = None
+                details.national_id_encrypted = None
+                details.phone = None
+                details.email = None
+                details.residential_address = None
+                details.employment_status = None
+                details.employer_business_name = None
+                details.monthly_income_minor = None
+                details.monthly_expenses_minor = None
+                details.existing_monthly_repayments_minor = None
+                details.explanation = None
+                details.alternative_contact_name = None
+                details.alternative_contact_phone = None
+                details.alternative_contact_relationship = None
+                details.additional_notes = None
+                details.affordability_consent = False
+                details.affordability_workspace_id = None
+                details.affordability_consent_at = None
+
+            assessments = PlatformLoanAffordabilityAssessment.query.filter(
+                PlatformLoanAffordabilityAssessment.application_id.in_(application_ids)
+            ).all()
+
+            for assessment in assessments:
+                assessment.source_workspace_id = None
+                assessment.report = {
+                    "redacted": True,
+                    "reason": "account_deletion",
+                }
+                assessment.reasons = []
+
+            applications = PlatformLoanApplication.query.filter(
+                PlatformLoanApplication.id.in_(application_ids)
+            ).all()
+
+            for application in applications:
+                application.customer_id = None
+                application.purpose = None
+                application.decision_notes = None
+
+        PlatformLoan.query.filter_by(customer_id=user_id).update(
+            {PlatformLoan.customer_id: None},
+            synchronize_session=False,
+        )
+
+        # Retain platform financial history, but remove personal-workspace
+        # references and free-text notes that may identify the borrower.
+        if platform_loan_ids:
+            PlatformLoanDisbursement.query.filter(
+                PlatformLoanDisbursement.loan_id.in_(platform_loan_ids)
+            ).update(
+                {PlatformLoanDisbursement.notes: None},
+                synchronize_session=False,
+            )
+            PlatformLoanPayment.query.filter(
+                PlatformLoanPayment.loan_id.in_(platform_loan_ids),
+                PlatformLoanPayment.status == "rejected",
+            ).update(
+                {
+                    PlatformLoanPayment.notes: None,
+                    PlatformLoanPayment.rejection_reason:
+                        "Redacted after account deletion",
+                },
+                synchronize_session=False,
+            )
+
+            PlatformLoanPayment.query.filter(
+                PlatformLoanPayment.loan_id.in_(platform_loan_ids),
+                PlatformLoanPayment.status != "rejected",
+            ).update(
+                {
+                    PlatformLoanPayment.notes: None,
+                    PlatformLoanPayment.rejection_reason: None,
+                },
+                synchronize_session=False,
+            )
+
+        if owned_workspace_ids:
+            PlatformLoanDisbursement.query.filter(
+                PlatformLoanDisbursement.customer_workspace_id.in_(
+                    owned_workspace_ids
+                )
+            ).update(
+                {
+                    PlatformLoanDisbursement.customer_workspace_id: None,
+                    PlatformLoanDisbursement.customer_financial_account_id: None,
+                    PlatformLoanDisbursement.customer_journal_entry_id: None,
+                },
+                synchronize_session=False,
+            )
+
+            PlatformLoanPayment.query.filter(
+                PlatformLoanPayment.borrower_financial_account_id.in_(
+                    db.session.query(FinancialAccount.id).filter(
+                        FinancialAccount.workspace_id.in_(owned_workspace_ids)
+                    )
+                )
+            ).update(
+                {PlatformLoanPayment.borrower_financial_account_id: None},
+                synchronize_session=False,
+            )
+
+        # Retain audit events, but remove personal actor, IP, resource and
+        # arbitrary JSON details. Shared-workspace records remain present.
+        AuditLog.query.filter(
+            AuditLog.user_id == user_id
+        ).update(
+            {
+                AuditLog.user_id: None,
+                AuditLog.ip_address: None,
+                AuditLog.resource_id: None,
+                AuditLog.details: {"redacted": "account_deletion"},
+            },
+            synchronize_session=False,
+        )
+
+        if owned_workspace_ids:
+            AuditLog.query.filter(
+                AuditLog.workspace_id.in_(owned_workspace_ids)
+            ).update(
+                {
+                    AuditLog.workspace_id: None,
+                    AuditLog.ip_address: None,
+                    AuditLog.resource_id: None,
+                    AuditLog.details: {"redacted": "workspace_deletion"},
+                },
+                synchronize_session=False,
+            )
+
+            # Remove personal-workspace records in dependency order.
+            SavingsGoalMovement.query.filter(
+                SavingsGoalMovement.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            LoanPaymentAllocation.query.filter(
+                LoanPaymentAllocation.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            LoanPayment.query.filter(
+                LoanPayment.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            LoanDisbursement.query.filter(
+                LoanDisbursement.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            LoanInstallment.query.filter(
+                LoanInstallment.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            # Anonymise this user as counterparty on loans in retained workspaces.
+            PersonalLoan.query.filter(
+                PersonalLoan.counterparty_user_id == user_id
+            ).update(
+                {
+                    PersonalLoan.counterparty_user_id: None,
+                    PersonalLoan.counterparty_name: "Deleted user",
+                    PersonalLoan.counterparty_phone: None,
+                    PersonalLoan.description: None,
+                },
+                synchronize_session=False,
+            )
+
+            PersonalLoan.query.filter(
+                PersonalLoan.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            BillPayment.query.filter(
+                BillPayment.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            Bill.query.filter(
+                Bill.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            Budget.query.filter(
+                Budget.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            SavingsGoal.query.filter(
+                SavingsGoal.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            journal_ids = select(JournalEntry.id).where(
+                JournalEntry.workspace_id.in_(owned_workspace_ids)
+            )
+
+            # Clear reversal links both within and into the deleted journals.
+            JournalEntry.query.filter(
+                or_(
+                    JournalEntry.workspace_id.in_(owned_workspace_ids),
+                    JournalEntry.reversal_of_id.in_(journal_ids),
+                )
+            ).update(
+                {JournalEntry.reversal_of_id: None},
+                synchronize_session=False,
+            )
+
+            JournalLine.query.filter(
+                JournalLine.journal_entry_id.in_(journal_ids)
+            ).delete(synchronize_session=False)
+
+            JournalEntry.query.filter(
+                JournalEntry.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            ExpenseCategory.query.filter(
+                ExpenseCategory.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            # Journal lines and expense categories are gone, so ledger
+            # accounts can now be removed before their financial accounts.
+            LedgerAccount.query.filter(
+                LedgerAccount.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            FinancialAccount.query.filter(
+                FinancialAccount.workspace_id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+            Workspace.query.filter(
+                Workspace.id.in_(owned_workspace_ids)
+            ).delete(synchronize_session=False)
+
+        # Explicitly remove the user's membership from surviving shared
+        # workspaces. Other members and all shared data remain untouched.
+        WorkspaceMember.query.filter_by(user_id=user_id).delete(
+            synchronize_session=False
+        )
+
+        # Delete the account last. Refresh tokens, profile and platform
+        # administrator membership have user-level CASCADE constraints.
+        db.session.delete(user)
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Your PesaPilot account has been permanently deleted.",
+            "deleted_workspace_count": len(owned_workspace_ids),
+            "preserved_shared_workspace_count": len(shared_workspace_ids),
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Permanent account deletion failed")
+        return jsonify({
+            "success": False,
+            "message": "Account deletion failed. No changes were committed.",
         }), 500
 
 
@@ -582,6 +1587,241 @@ def get_current_user():
             }
             for membership, workspace in memberships
         ],
+    }), 200
+
+
+
+@auth_bp.get("/currencies")
+@jwt_required()
+def list_active_currencies():
+    currencies = (
+        Currency.query
+        .filter(Currency.is_active.is_(True))
+        .order_by(Currency.code.asc())
+        .all()
+    )
+
+    return jsonify({
+        "success": True,
+        "currencies": [
+            {
+                "code": currency.code,
+                "name": currency.name,
+            }
+            for currency in currencies
+        ],
+    }), 200
+
+
+# UPDATE PERSONAL PROFILE
+# ---------------------------------------------------------
+
+@auth_bp.patch("/profile")
+@jwt_required()
+def update_current_user_profile():
+    try:
+        user_id = UUID(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    user = db.session.get(User, user_id)
+
+    if user is None or not user.is_active:
+        return jsonify({
+            "success": False,
+            "message": "Account is unavailable.",
+        }), 403
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    allowed_fields = {
+        "first_name",
+        "last_name",
+        "phone",
+        "preferred_currency",
+    }
+
+    unknown_fields = set(data) - allowed_fields
+
+    if unknown_fields:
+        return jsonify({
+            "success": False,
+            "message": "Unsupported profile field(s): "
+                       + ", ".join(sorted(unknown_fields)),
+        }), 400
+
+    if not data:
+        return jsonify({
+            "success": False,
+            "message": "Provide at least one profile field to update.",
+        }), 400
+
+    profile = db.session.get(UserProfile, user_id)
+
+    if profile is None:
+        return jsonify({
+            "success": False,
+            "message": "Your personal profile could not be found.",
+        }), 404
+
+    changes = []
+    phone_changed = False
+
+    for field in ("first_name", "last_name"):
+        if field in data:
+            value = data[field]
+
+            if not isinstance(value, str):
+                return jsonify({
+                    "success": False,
+                    "message": f"{field.replace('_', ' ').title()} must be text.",
+                }), 400
+
+            value = value.strip()
+
+            if not value:
+                return jsonify({
+                    "success": False,
+                    "message": f"{field.replace('_', ' ').title()} is required.",
+                }), 400
+
+            if len(value) > 100:
+                return jsonify({
+                    "success": False,
+                    "message": f"{field.replace('_', ' ').title()} must not exceed 100 characters.",
+                }), 400
+
+            if getattr(profile, field) != value:
+                setattr(profile, field, value)
+                changes.append(field)
+
+    if "phone" in data:
+        raw_phone = data["phone"]
+
+        if raw_phone is not None and not isinstance(raw_phone, str):
+            return jsonify({
+                "success": False,
+                "message": "Phone number must be text or null.",
+            }), 400
+
+        phone = (raw_phone or "").strip() or None
+
+        if phone and not re.fullmatch(r"\+[1-9]\d{7,14}", phone):
+            return jsonify({
+                "success": False,
+                "message": "Enter a valid international phone number, such as +254712345678.",
+            }), 400
+
+        if phone != user.phone:
+            if phone:
+                duplicate = User.query.filter(
+                    User.phone == phone,
+                    User.id != user_id,
+                ).first()
+
+                if duplicate:
+                    return jsonify({
+                        "success": False,
+                        "message": "That phone number is already linked to another account.",
+                    }), 409
+
+            user.phone = phone
+            user.phone_verified = False
+            phone_changed = True
+            changes.append("phone")
+
+    if "preferred_currency" in data:
+        currency = data["preferred_currency"]
+
+        if not isinstance(currency, str):
+            return jsonify({
+                "success": False,
+                "message": "Preferred currency must be a currency code.",
+            }), 400
+
+        currency = currency.strip().upper()
+
+        if not re.fullmatch(r"[A-Z]{3}", currency):
+            return jsonify({
+                "success": False,
+                "message": "Enter a valid three-letter currency code.",
+            }), 400
+
+        currency_record = db.session.get(Currency, currency)
+
+        if currency_record is None or not currency_record.is_active:
+            return jsonify({
+                "success": False,
+                "message": "That currency is unavailable or inactive.",
+            }), 400
+
+        if profile.preferred_currency != currency:
+            profile.preferred_currency = currency
+            changes.append("preferred_currency")
+
+    if not changes:
+        return jsonify({
+            "success": True,
+            "message": "Your profile is already up to date.",
+            "changed": False,
+        }), 200
+
+    audit = AuditLog(
+        workspace_id=None,
+        user_id=user.id,
+        action="profile_updated",
+        resource_type="user_profile",
+        resource_id=str(user.id),
+        details={
+            "changed_fields": changes,
+            "phone_verification_reset": phone_changed,
+        },
+        ip_address=request.remote_addr,
+    )
+
+    db.session.add(audit)
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": "That phone number is already linked to another account.",
+        }), 409
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Profile update failed")
+        return jsonify({
+            "success": False,
+            "message": "Your profile could not be updated.",
+        }), 500
+
+    return jsonify({
+        "success": True,
+        "message": "Your profile has been updated.",
+        "changed": True,
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "phone": user.phone,
+            "phone_verified": user.phone_verified,
+        },
+        "profile": {
+            "first_name": profile.first_name,
+            "last_name": profile.last_name,
+            "timezone": profile.timezone,
+            "preferred_currency": profile.preferred_currency,
+        },
     }), 200
 
 

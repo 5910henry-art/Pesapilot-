@@ -33,10 +33,10 @@ class PlatformLoanApplicationDetails(db.Model):
         primary_key=True,
     )
 
-    customer_id: Mapped[uuid.UUID] = mapped_column(
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
         db.Uuid(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 
@@ -45,27 +45,27 @@ class PlatformLoanApplicationDetails(db.Model):
         ForeignKey("financial_accounts.id", ondelete="RESTRICT"),
         nullable=True,
     )
-    full_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    national_id_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    phone: Mapped[str] = mapped_column(String(30), nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    national_id_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    residential_address: Mapped[str] = mapped_column(String(500), nullable=False)
+    residential_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    employment_status: Mapped[str] = mapped_column(
-        String(30), nullable=False
+    employment_status: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
     )
     employer_business_name: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
 
-    monthly_income_minor: Mapped[int] = mapped_column(
-        BigInteger, nullable=False
+    monthly_income_minor: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
     )
-    monthly_expenses_minor: Mapped[int] = mapped_column(
-        BigInteger, nullable=False
+    monthly_expenses_minor: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
     )
-    existing_monthly_repayments_minor: Mapped[int] = mapped_column(
-        BigInteger, default=0, nullable=False
+    existing_monthly_repayments_minor: Mapped[int | None] = mapped_column(
+        BigInteger, default=0, nullable=True
     )
 
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)

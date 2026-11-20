@@ -71,8 +71,8 @@ class Bill(db.Model):
         db.Uuid(as_uuid=True), nullable=False, unique=True
     )
 
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -155,8 +155,8 @@ class BillPayment(db.Model):
         db.Uuid(as_uuid=True), nullable=False, unique=True
     )
 
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"), nullable=False
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

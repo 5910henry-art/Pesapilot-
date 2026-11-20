@@ -106,8 +106,11 @@ export default function Bills() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [createMessage, setCreateMessage] = useState(null);
+  const [paymentMessage, setPaymentMessage] = useState(null);
+  const [detailsError, setDetailsError] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [selectedBill, setSelectedBill] = useState(null);
   const [billDetails, setBillDetails] = useState(null);
@@ -130,7 +133,7 @@ export default function Bills() {
     if (quiet) setRefreshing(true);
     else setLoading(true);
 
-    setError("");
+    setLoadError("");
 
     try {
       const [billResult, categoryResult] = await Promise.all([
@@ -143,7 +146,7 @@ export default function Bills() {
         (item) => item.is_active && item.ledger_account?.id
       ));
     } catch (err) {
-      setError(err.message || "Could not load bills.");
+      setLoadError(err.message || "Could not load bills.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -192,14 +195,13 @@ export default function Bills() {
     setSelectedBill(bill);
     setBillDetails(null);
     setDetailsLoading(true);
-    setError("");
+    setDetailsError("");
 
     try {
       const result = await financeApi.getBill(bill.id, workspaceId);
       setBillDetails(result);
     } catch (err) {
-      setError(err.message || "Could not load bill details.");
-      setSelectedBill(null);
+      setDetailsError(err.message || "Could not load bill details.");
     } finally {
       setDetailsLoading(false);
     }
@@ -207,16 +209,16 @@ export default function Bills() {
 
   async function handleCreate(event) {
     event.preventDefault();
-    setError("");
-    setNotice("");
+    setCreateMessage(null);
+    setActionNotice("");
 
     if (!billForm.category_id) {
-      setError("Select an expense category.");
+      setCreateMessage({ type: "error", text: "Select an expense category." });
       return;
     }
 
     if (billForm.due_date < billForm.bill_date) {
-      setError("The due date cannot be before the bill date.");
+      setCreateMessage({ type: "error", text: "The due date cannot be before the bill date." });
       return;
     }
 
@@ -224,7 +226,7 @@ export default function Bills() {
     try {
       amountMinor = toMinor(billForm.amount, currency);
     } catch (err) {
-      setError(err.message);
+      setCreateMessage({ type: "error", text: err.message });
       return;
     }
 
@@ -245,10 +247,10 @@ export default function Bills() {
 
       setShowCreate(false);
       setBillForm(initialBillForm());
-      setNotice(result.message || "Bill created successfully.");
+      setActionNotice(result.message || "Bill created successfully.");
       await loadData(true);
     } catch (err) {
-      setError(err.message || "Could not create bill.");
+      setCreateMessage({ type: "error", text: err.message || "Could not create bill." });
     } finally {
       setSaving(false);
     }
@@ -263,18 +265,18 @@ export default function Bills() {
     });
     setShowPayment(true);
     setSelectedBill(null);
-    setError("");
+    setPaymentMessage(null);
   }
 
   async function handlePayment(event) {
     event.preventDefault();
     if (!payingBill) return;
 
-    setError("");
-    setNotice("");
+    setPaymentMessage(null);
+    setActionNotice("");
 
     if (!paymentForm.financial_account_id) {
-      setError("Choose the account used to pay this bill.");
+      setPaymentMessage({ type: "error", text: "Choose the account used to pay this bill." });
       return;
     }
 
@@ -282,12 +284,12 @@ export default function Bills() {
     try {
       amountMinor = toMinor(paymentForm.amount, currency);
     } catch (err) {
-      setError(err.message);
+      setPaymentMessage({ type: "error", text: err.message });
       return;
     }
 
     if (amountMinor > Number(payingBill.remaining_minor || 0)) {
-      setError("Payment cannot exceed the outstanding balance.");
+      setPaymentMessage({ type: "error", text: "Payment cannot exceed the outstanding balance." });
       return;
     }
 
@@ -305,10 +307,10 @@ export default function Bills() {
       setShowPayment(false);
       setPayingBill(null);
       setPaymentForm(initialPaymentForm());
-      setNotice(result.message || "Bill payment recorded successfully.");
+      setActionNotice(result.message || "Bill payment recorded successfully.");
       await loadData(true);
     } catch (err) {
-      setError(err.message || "Could not record payment.");
+      setPaymentMessage({ type: "error", text: err.message || "Could not record payment." });
     } finally {
       setSaving(false);
     }
@@ -358,7 +360,8 @@ export default function Bills() {
               className="primary-button"
               type="button"
               onClick={() => {
-                setError("");
+                setCreateMessage(null);
+                setActionNotice("");
                 setShowCreate(true);
               }}
             >
@@ -368,14 +371,9 @@ export default function Bills() {
         </div>
       </div>
 
-      {error && (
-        <div className="accounts-message error">
-          <AlertCircle size={17} /> {error}
-        </div>
-      )}
-      {notice && (
-        <div className="accounts-message success">
-          <CheckCircle2 size={17} /> {notice}
+      {loadError && (
+        <div className="accounts-message error" role="alert">
+          <AlertCircle size={17} /> {loadError}
         </div>
       )}
 
@@ -408,6 +406,12 @@ export default function Bills() {
           </div>
           <span className="bills-count">{visibleBills.length} shown</span>
         </div>
+
+        {actionNotice && (
+          <div className="accounts-message success" role="status">
+            <CheckCircle2 size={17} /> {actionNotice}
+          </div>
+        )}
 
         <div className="bills-toolbar">
           <div className="bills-search">
@@ -470,7 +474,11 @@ export default function Bills() {
                 : "Add your rent, utilities, school fees or other obligations."}
             </p>
             {!bills.length && (
-              <button className="primary-button" onClick={() => setShowCreate(true)}>
+              <button className="primary-button" onClick={() => {
+                setCreateMessage(null);
+                setActionNotice("");
+                setShowCreate(true);
+              }}>
                 <Plus size={16} /> Create your first bill
               </button>
             )}
@@ -644,6 +652,13 @@ export default function Bills() {
                 </label>
               </div>
 
+              {createMessage && (
+                <div className={`accounts-message ${createMessage.type}`} role={createMessage.type === "error" ? "alert" : "status"}>
+                  {createMessage.type === "error" ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
+                  {createMessage.text}
+                </div>
+              )}
+
               {!categories.length && (
                 <p className="bills-form-note">
                   Create an active expense category in Budgets before recording a bill.
@@ -739,6 +754,13 @@ export default function Bills() {
                 </label>
               </div>
 
+              {paymentMessage && (
+                <div className={`accounts-message ${paymentMessage.type}`} role={paymentMessage.type === "error" ? "alert" : "status"}>
+                  {paymentMessage.type === "error" ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
+                  {paymentMessage.text}
+                </div>
+              )}
+
               {!accounts.length && (
                 <p className="bills-form-note">
                   Add an active cash, bank or mobile-money account in Accounts using {currency}.
@@ -771,6 +793,12 @@ export default function Bills() {
                 <X size={19} />
               </button>
             </div>
+
+            {detailsError && (
+              <div className="accounts-message error" role="alert">
+                <AlertCircle size={17} /> {detailsError}
+              </div>
+            )}
 
             {detailsLoading ? (
               <div className="bills-detail-grid bills-detail-skeleton" aria-hidden="true">

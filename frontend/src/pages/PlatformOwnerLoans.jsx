@@ -128,6 +128,7 @@ export default function PlatformOwnerLoans() {
       .slice(0, 16);
   });
   const [notes, setNotes] = useState("");
+  const [oneTimeDueDate, setOneTimeDueDate] = useState("");
   const [allocations, setAllocations] = useState([
     { investor_id: "", amount: "" },
   ]);
@@ -185,34 +186,85 @@ export default function PlatformOwnerLoans() {
     setNotes("");
     setOneTimeDueDate("");
     setAllocations([{ investor_id: "", amount: "" }]);
+    setFormError("");
     setAccounts([]);
     setCustomerAccounts([]);
     setInvestors([]);
     setAccountsLoading(true);
 
+
     try {
-      const [accountResult, customerAccountResult, investorResult] =
-        await Promise.all([
-          platformOwnerApi.listFinancialAccounts(loan.currency_code),
-          platformOwnerApi.listCustomerAccounts(loan.id),
-          platformOwnerApi.listInvestors({
-            is_active: true,
-            page: 1,
-            per_page: 100,
-          }),
+      const timedRequest = (name, promise) =>
+        Promise.race([
+          promise,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(name + " timed out after 8 seconds")), 8000)
+          ),
         ]);
-      setAccounts(accountResult.accounts || []);
-      const borrowerAccounts = customerAccountResult.accounts || [];
-      setCustomerAccounts(borrowerAccounts);
-      const savedId = customerAccountResult.selected_account_id;
-      setCustomerAccountId(
-        savedId && borrowerAccounts.some((account) => account.id === savedId)
-          ? savedId
-          : borrowerAccounts.length === 1 ? borrowerAccounts[0].id : ""
-      );
-      setInvestors(investorResult.investors || []);
-    } catch (err) {
-      setFormError(err.message || "Could not load platform accounts, borrower accounts and investors.");
+
+
+      const request1 = platformOwnerApi.listFinancialAccounts();
+
+      const request2 = platformOwnerApi.listCustomerAccounts(loan.id);
+
+      const request3 = platformOwnerApi.listInvestors({
+        is_active: true,
+        page: 1,
+        per_page: 100,
+      });
+
+      const results = await Promise.allSettled([
+        timedRequest("Platform accounts", request1),
+        timedRequest("Borrower accounts", request2),
+        timedRequest("Investors", request3),
+      ]);
+
+
+
+      const errors = [];
+
+
+      if (results[0].status === "fulfilled") {
+        const loanCurrency = String(loan.currency_code || "KES")
+          .trim()
+          .toUpperCase();
+
+        const platformAccounts = results[0].value.accounts || [];
+        setAccounts(
+          platformAccounts.filter(
+            (account) =>
+              String(account.currency_code || "").trim().toUpperCase() ===
+              loanCurrency
+          )
+        );
+      } else {
+        errors.push("Platform accounts could not be loaded. Please try again.");
+      }
+
+      if (results[1].status === "fulfilled") {
+        const customerResult = results[1].value;
+        const borrowerAccounts = customerResult.accounts || [];
+        setCustomerAccounts(borrowerAccounts);
+
+        const savedId = customerResult.selected_account_id;
+        setCustomerAccountId(
+          savedId && borrowerAccounts.some((account) => account.id === savedId)
+            ? savedId
+            : borrowerAccounts.length === 1 ? borrowerAccounts[0].id : ""
+        );
+      } else {
+        errors.push("Borrower accounts could not be loaded. Please try again.");
+      }
+
+      if (results[2].status === "fulfilled") {
+        setInvestors(results[2].value.investors || []);
+      } else {
+        errors.push("Investor information could not be loaded. Please try again.");
+      }
+
+      if (errors.length) {
+        setFormError(errors.join(" "));
+      }
     } finally {
       setAccountsLoading(false);
     }
@@ -414,14 +466,6 @@ export default function PlatformOwnerLoans() {
         </button>
       </div>
 
-      {notice && (
-        <div className="platform-loan-notice platform-loan-notice-success">
-          <CheckCircle2 size={17} />
-          {notice}
-          <button type="button" onClick={() => setNotice("")}><X size={15} /></button>
-        </div>
-      )}
-
       <div className="platform-loan-toolbar">
         <div className="platform-loan-search">
           <Search size={17} />
@@ -441,7 +485,7 @@ export default function PlatformOwnerLoans() {
       </div>
 
       {error && (
-        <div className="platform-loan-notice platform-loan-notice-error">
+        <div className="platform-loan-notice platform-loan-notice-error" role="alert">
           <AlertCircle size={17} /> {error}
         </div>
       )}
@@ -535,7 +579,7 @@ export default function PlatformOwnerLoans() {
 
       {detailError && (
         <Modal title="Loan details" onClose={() => setDetailError("")}>
-          <div className="platform-loan-notice platform-loan-notice-error">
+          <div className="platform-loan-notice platform-loan-notice-error" role="alert">
             <AlertCircle size={17} /> {detailError}
           </div>
         </Modal>
@@ -548,6 +592,15 @@ export default function PlatformOwnerLoans() {
           onClose={() => setSelectedLoan(null)}
         >
           <div className="platform-loan-detail">
+            {notice && (
+              <div className="platform-loan-notice platform-loan-notice-success" role="status">
+                <CheckCircle2 size={17} />
+                {notice}
+                <button type="button" onClick={() => setNotice("")} aria-label="Dismiss message">
+                  <X size={15} />
+                </button>
+              </div>
+            )}
             <div className="platform-loan-detail-heading">
               <div>
                 <h3>{loan.product_name}</h3>
@@ -860,7 +913,7 @@ export default function PlatformOwnerLoans() {
             </label>
 
             {formError && (
-              <div className="platform-loan-notice platform-loan-notice-error">
+              <div className="platform-loan-notice platform-loan-notice-error" role="alert">
                 <AlertCircle size={16} /> {formError}
               </div>
             )}

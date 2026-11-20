@@ -134,8 +134,11 @@ export default function Loans() {
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [formMessage, setFormMessage] = useState(null);
+  const [loanMessages, setLoanMessages] = useState({});
+  const [paymentMessages, setPaymentMessages] = useState({});
+  const [workspaceNotice, setWorkspaceNotice] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editingLoan, setEditingLoan] = useState(null);
@@ -178,6 +181,34 @@ export default function Loans() {
   const [updatingPayment, setUpdatingPayment] = useState(null);
   const [deletingPayment, setDeletingPayment] = useState(null);
 
+  function setLoanMessage(loanId, type, message) {
+    setLoanMessages((current) => ({
+      ...current,
+      [loanId]: message ? { type, message } : null,
+    }));
+  }
+
+  function setPaymentMessage(paymentId, type, message) {
+    setPaymentMessages((current) => ({
+      ...current,
+      [paymentId]: message ? { type, message } : null,
+    }));
+  }
+
+  function renderFeedback(item) {
+    if (!item?.message) return null;
+    return (
+      <div
+        className={`loans-alert ${item.type === "error" ? "loans-alert-error" : "loans-alert-success"}`}
+        role={item.type === "error" ? "alert" : "status"}
+      >
+        {item.type === "error"
+          ? <AlertCircle size={17} />
+          : <CheckCircle2 size={17} />}
+        <span>{item.message}</span>
+      </div>
+    );
+  }
 
   const loadLoans = useCallback(async (quiet = false) => {
     const requestId = ++workspaceRequestRef.current;
@@ -192,7 +223,7 @@ export default function Loans() {
     if (quiet) setRefreshing(true);
     else setLoading(true);
 
-    setError("");
+    setLoadError("");
 
     try {
       const data = await loansApi.listLoans(workspaceId);
@@ -202,7 +233,7 @@ export default function Loans() {
       }
     } catch (err) {
       if (requestId === workspaceRequestRef.current) {
-        setError(err.message || "Loans could not be loaded.");
+        setLoadError(err.message || "Loans could not be loaded.");
       }
     } finally {
       if (requestId === workspaceRequestRef.current) {
@@ -217,8 +248,11 @@ export default function Loans() {
     setLoanDetails({});
     setExpandedLoan(null);
     setLoadingDetails(null);
-    setError("");
-    setNotice("");
+    setLoadError("");
+    setFormMessage(null);
+    setLoanMessages({});
+    setPaymentMessages({});
+    setWorkspaceNotice("");
 
     loadLoans();
   }, [loadLoans]);
@@ -288,18 +322,16 @@ export default function Loans() {
       due_date: loan.due_date,
       description: loan.description || "",
     });
-    setError("");
-    setNotice("");
+    setFormMessage(null);
     setShowForm(true);
   }
 
   async function handleCreate(event) {
     event.preventDefault();
-    setError("");
-    setNotice("");
+    setFormMessage(null);
 
     if (!workspaceId) {
-      setError("Select a workspace before recording a loan.");
+      setFormMessage({ type: "error", message: "Select a workspace before recording a loan." });
       return;
     }
 
@@ -356,16 +388,20 @@ export default function Loans() {
       setForm({ ...INITIAL_FORM, start_date: todayLocal(), due_date: defaultDueDate() });
       setEditingLoan(null);
       setShowForm(false);
-      setNotice(
-        editingLoan
+      setFormMessage({
+        type: "success",
+        message: editingLoan
           ? "Draft loan updated successfully."
-          : "Loan recorded as a draft. Activate it when the repayment plan is ready."
-      );
+          : "Loan recorded as a draft. Activate it when the repayment plan is ready.",
+      });
       await loadLoans(true);
     } catch (err) {
-      setError(err.message || (editingLoan
-        ? "The draft loan could not be updated."
-        : "The loan could not be recorded."));
+      setFormMessage({
+        type: "error",
+        message: err.message || (editingLoan
+          ? "The draft loan could not be updated."
+          : "The loan could not be recorded."),
+      });
     } finally {
       setSaving(false);
     }
@@ -382,7 +418,7 @@ export default function Loans() {
     if (loanDetails[loanId]) return;
 
     setLoadingDetails(loanId);
-    setError("");
+    setLoanMessage(loanId, null, "");
 
     try {
       const data = await loansApi.getLoan(loanId, workspaceId);
@@ -391,7 +427,7 @@ export default function Loans() {
         [loanId]: data,
       }));
     } catch (err) {
-      setError(err.message || "Loan details could not be loaded.");
+      setLoanMessage(loanId, "error", err.message || "Loan details could not be loaded.");
     } finally {
       setLoadingDetails(null);
     }
@@ -403,8 +439,7 @@ export default function Loans() {
     }
 
     setActivating(loanId);
-    setError("");
-    setNotice("");
+    setLoanMessage(loanId, null, "");
 
     try {
       const data = await loansApi.activateLoan(loanId, workspaceId);
@@ -417,10 +452,10 @@ export default function Loans() {
         },
       }));
 
-      setNotice("Loan activated and repayment schedule generated.");
+      setLoanMessage(loanId, "success", "Loan activated and repayment schedule generated.");
       await loadLoans(true);
     } catch (err) {
-      setError(err.message || "The loan could not be activated.");
+      setLoanMessage(loanId, "error", err.message || "The loan could not be activated.");
     } finally {
       setActivating(null);
     }
@@ -440,19 +475,17 @@ export default function Loans() {
       payment_method: "cash",
       notes: "",
     });
-    setError("");
-    setNotice("");
+    setLoanMessage(loan.id, null, "");
   }
 
   async function handleDisburseLoan(loan) {
     if (!disbursementForm.financial_account_id) {
-      setError("Choose the account used for this disbursement.");
+      setLoanMessage(loan.id, "error", "Choose the account used for this disbursement.");
       return;
     }
 
     setDisbursing(loan.id);
-    setError("");
-    setNotice("");
+    setLoanMessage(loan.id, null, "");
 
     try {
       await loansApi.disburseLoan(loan.id, {
@@ -464,7 +497,7 @@ export default function Loans() {
       });
 
       setDisbursementLoan(null);
-      setNotice("Loan disbursement posted successfully.");
+      setLoanMessage(loan.id, "success", "Loan disbursement posted successfully.");
 
       const refreshed = await loansApi.getLoan(loan.id, workspaceId);
       setLoanDetails((current) => ({
@@ -473,7 +506,7 @@ export default function Loans() {
       }));
       await loadLoans(true);
     } catch (err) {
-      setError(err.message || "The loan could not be disbursed.");
+      setLoanMessage(loan.id, "error", err.message || "The loan could not be disbursed.");
     } finally {
       setDisbursing(null);
     }
@@ -489,14 +522,12 @@ export default function Loans() {
       reference: "",
       notes: "",
     });
-    setError("");
-    setNotice("");
+    setLoanMessage(loan.id, null, "");
   }
 
   async function handleRecordLoanPayment(loan) {
     setSavingPayment(true);
-    setError("");
-    setNotice("");
+    setLoanMessage(loan.id, null, "");
 
     try {
       const amountMinor = toMinorUnits(
@@ -523,17 +554,17 @@ export default function Loans() {
         reference: "",
         notes: "",
       });
-      setNotice("Repayment recorded as pending. Select an account to confirm it.");
+      setLoanMessage(loan.id, "success", "Repayment recorded as pending. Select an account to confirm it.");
 
       try {
         const refreshed = await loansApi.getLoan(loan.id, workspaceId);
         setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
         await loadLoans(true);
       } catch (refreshError) {
-        setError("Repayment was recorded, but the loan details could not refresh. Please refresh the loan.");
+        setLoanMessage(loan.id, "error", "Repayment was recorded, but the loan details could not refresh. Please refresh the loan.");
       }
     } catch (err) {
-      setError(err.message || "The repayment could not be recorded.");
+      setLoanMessage(loan.id, "error", err.message || "The repayment could not be recorded.");
     } finally {
       setSavingPayment(false);
     }
@@ -553,14 +584,12 @@ export default function Loans() {
       reference: payment.reference || "",
       notes: payment.notes || "",
     });
-    setError("");
-    setNotice("");
+    setPaymentMessage(payment.id, null, "");
   }
 
   async function handleUpdateLoanPayment(loan, payment) {
     setUpdatingPayment(payment.id);
-    setError("");
-    setNotice("");
+    setPaymentMessage(payment.id, null, "");
 
     try {
       const amountMinor = toMinorUnits(
@@ -579,7 +608,7 @@ export default function Loans() {
       });
 
       setEditingPaymentId(null);
-      setNotice("Pending repayment updated successfully.");
+      setPaymentMessage(payment.id, "success", "Pending repayment updated successfully.");
 
       const refreshed = await loansApi.getLoan(loan.id, workspaceId);
       setLoanDetails((current) => ({
@@ -588,7 +617,7 @@ export default function Loans() {
       }));
       await loadLoans(true);
     } catch (err) {
-      setError(err.message || "The pending repayment could not be updated.");
+      setPaymentMessage(payment.id, "error", err.message || "The pending repayment could not be updated.");
     } finally {
       setUpdatingPayment(null);
     }
@@ -602,8 +631,7 @@ export default function Loans() {
     if (!confirmed) return;
 
     setDeletingPayment(payment.id);
-    setError("");
-    setNotice("");
+    setPaymentMessage(payment.id, null, "");
 
     try {
       await loansApi.deletePayment(loan.id, payment.id, {
@@ -614,7 +642,7 @@ export default function Loans() {
         setEditingPaymentId(null);
       }
 
-      setNotice("Pending repayment deleted successfully.");
+      setPaymentMessage(payment.id, "success", "Pending repayment deleted successfully.");
 
       const refreshed = await loansApi.getLoan(loan.id, workspaceId);
       setLoanDetails((current) => ({
@@ -623,7 +651,7 @@ export default function Loans() {
       }));
       await loadLoans(true);
     } catch (err) {
-      setError(err.message || "The pending repayment could not be deleted.");
+      setPaymentMessage(payment.id, "error", err.message || "The pending repayment could not be deleted.");
     } finally {
       setDeletingPayment(null);
     }
@@ -648,14 +676,13 @@ export default function Loans() {
         : eligibleAccounts[0]?.id || "";
 
       if (!accountId) {
-        setError("No active matching account is available for this repayment.");
+        setPaymentMessage(payment.id, "error", "No active matching account is available for this repayment.");
         return;
       }
     }
 
     setConfirmingPayment(payment.id);
-    setError("");
-    setNotice("");
+    setPaymentMessage(payment.id, null, "");
 
     try {
       await loansApi.confirmPayment(loan.id, payment.id, {
@@ -663,17 +690,17 @@ export default function Loans() {
         ...(isExternal ? {} : { financial_account_id: accountId }),
       });
 
-      setNotice("Repayment confirmed and accounting updated.");
+      setPaymentMessage(payment.id, "success", "Repayment confirmed and accounting updated.");
 
       try {
         const refreshed = await loansApi.getLoan(loan.id, workspaceId);
         setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
         await loadLoans(true);
       } catch (refreshError) {
-        setError("Repayment was confirmed, but the loan details could not refresh. Please refresh the loan.");
+        setPaymentMessage(payment.id, "error", "Repayment was confirmed, but the loan details could not refresh. Please refresh the loan.");
       }
     } catch (err) {
-      setError(err.message || "The repayment could not be confirmed.");
+      setPaymentMessage(payment.id, "error", err.message || "The repayment could not be confirmed.");
     } finally {
       setConfirmingPayment(null);
     }
@@ -702,8 +729,7 @@ export default function Loans() {
             type="button"
             className="loans-primary-button"
             onClick={() => {
-              setError("");
-              setNotice("");
+              setFormMessage(null);
               setShowForm(true);
             }}
           >
@@ -713,17 +739,10 @@ export default function Loans() {
         </div>
       </div>
 
-      {error && (
-        <div className="loans-alert loans-alert-error">
+      {loadError && (
+        <div className="loans-alert loans-alert-error" role="alert">
           <AlertCircle size={17} />
-          {error}
-        </div>
-      )}
-
-      {notice && (
-        <div className="loans-alert loans-alert-success">
-          <CheckCircle2 size={17} />
-          {notice}
+          <span>{loadError}</span>
         </div>
       )}
 
@@ -762,11 +781,19 @@ export default function Loans() {
         </button>
         <button
           type="button"
-          onClick={() => setNotice("Lending Business tools will be added after the loan application and borrower-management backend is ready.")}
+          onClick={() => setWorkspaceNotice("Lending Business tools will be added after the loan application and borrower-management backend is ready.")}
         >
           Lending Business <span>Coming next</span>
         </button>
       </div>
+
+      {workspaceNotice && (
+        <div className="loans-alert loans-alert-success" role="status">
+          <CheckCircle2 size={17} />
+          <span>{workspaceNotice}</span>
+          <button type="button" onClick={() => setWorkspaceNotice("")} aria-label="Dismiss message">×</button>
+        </div>
+      )}
 
       <section className="loans-list-section">
         <div className="loans-section-heading">
@@ -922,6 +949,7 @@ export default function Loans() {
                           </button>
                         </div>
                         <div className="loans-detail-panel">
+                      {renderFeedback(loanMessages[loan.id])}
                       {loadingDetails === loan.id ? (
                         <div className="loans-detail-grid loans-detail-skeleton" aria-hidden="true">
                           {Array.from({ length: 4 }, (_, index) => (
@@ -1242,6 +1270,7 @@ export default function Loans() {
 
                                 return (
                                   <div className="loans-payment-item" key={payment.id}>
+                                    {renderFeedback(paymentMessages[payment.id])}
                                     <div className="loans-payment-summary">
                                       <strong>{money(payment.amount_minor, loan.currency_code)}</strong>
                                       <span>{payment.payment_date}</span>
@@ -1801,6 +1830,8 @@ export default function Loans() {
                 <Clock3 size={16} />
                 Interest rates are annual. The final repayment date must match the repayment schedule.
               </div>
+
+              {renderFeedback(formMessage)}
 
               <div className="loans-modal-actions">
                 <button

@@ -41,7 +41,7 @@ export default function Transactions() {
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [rowMessages, setRowMessages] = useState({});
   const [statusFilter, setStatusFilter] = useState("all");
   const [accountTypeFilter, setAccountTypeFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState("all");
@@ -156,14 +156,30 @@ export default function Transactions() {
     if (!confirmed) return;
 
     setError("");
-    setSuccess("");
+    setRowMessages((current) => {
+      const next = { ...current };
+      delete next[entry.id];
+      return next;
+    });
     setSaving(true);
     try {
       await financeApi.clearDraftEntry(entry.id, workspaceId);
-      setSuccess(`Draft "${entry.description}" was cleared.`);
       await loadData(true);
+      setRowMessages((current) => ({
+        ...current,
+        [entry.id]: {
+          type: "success",
+          message: `Draft "${entry.description}" was cleared.`,
+        },
+      }));
     } catch (err) {
-      setError(err.message || "Draft could not be cleared.");
+      setRowMessages((current) => ({
+        ...current,
+        [entry.id]: {
+          type: "error",
+          message: err.message || "Draft could not be cleared.",
+        },
+      }));
     } finally {
       setSaving(false);
     }
@@ -179,15 +195,31 @@ export default function Transactions() {
     if (!confirmed) return;
 
     setError("");
-    setSuccess("");
+    setRowMessages((current) => {
+      const next = { ...current };
+      delete next[entry.id];
+      return next;
+    });
     setSaving(true);
 
     try {
       await financeApi.reverseEntry(entry.id, workspaceId);
-      setSuccess(`"${entry.description}" was reversed successfully.`);
       await loadData(true);
+      setRowMessages((current) => ({
+        ...current,
+        [entry.id]: {
+          type: "success",
+          message: `"${entry.description}" was reversed successfully.`,
+        },
+      }));
     } catch (err) {
-      setError(err.message || "Transaction could not be reversed.");
+      setRowMessages((current) => ({
+        ...current,
+        [entry.id]: {
+          type: "error",
+          message: err.message || "Transaction could not be reversed.",
+        },
+      }));
     } finally {
       setSaving(false);
     }
@@ -216,12 +248,6 @@ export default function Transactions() {
       {error && (
         <div className="accounts-message error-message" role="alert">
           <AlertCircle size={17} />{error}
-        </div>
-      )}
-
-      {success && (
-        <div className="accounts-message success-message" role="status">
-          <CheckCircle2 size={17} />{success}
         </div>
       )}
 
@@ -377,32 +403,46 @@ export default function Transactions() {
                       </span>
                     </td>
                     <td>
-                      {entry.status === "posted" ? (
-                        <button
-                          type="button"
-                          className="transaction-reverse-button"
-                          onClick={() => handleReverse(entry)}
-                          disabled={saving}
-                          title="Reverse this transaction"
-                        >
-                          <RotateCcw size={14} />
-                          Reverse
-                        </button>
-                      ) : entry.status === "reversed" ? (
-                        <span className="transaction-action-muted">Reversed</span>
-                      ) : entry.status === "draft" ? (
-                        <button
-                          type="button"
-                          className="transaction-reverse-button"
-                          onClick={() => handleClear(entry)}
-                          disabled={saving}
-                          title="Permanently clear this draft"
-                        >
-                          Clear
-                        </button>
-                      ) : (
-                        <span className="transaction-action-muted">—</span>
-                      )}
+                      <div className="transaction-row-action">
+                        {entry.status === "posted" ? (
+                          <button
+                            type="button"
+                            className="transaction-reverse-button"
+                            onClick={() => handleReverse(entry)}
+                            disabled={saving}
+                            title="Reverse this transaction"
+                          >
+                            <RotateCcw size={14} />
+                            Reverse
+                          </button>
+                        ) : entry.status === "reversed" ? (
+                          <span className="transaction-action-muted">Reversed</span>
+                        ) : entry.status === "draft" ? (
+                          <button
+                            type="button"
+                            className="transaction-reverse-button"
+                            onClick={() => handleClear(entry)}
+                            disabled={saving}
+                            title="Permanently clear this draft"
+                          >
+                            Clear
+                          </button>
+                        ) : (
+                          <span className="transaction-action-muted">—</span>
+                        )}
+
+                        {rowMessages[entry.id] && (
+                          <div
+                            className={`transaction-row-message ${rowMessages[entry.id].type}`}
+                            role={rowMessages[entry.id].type === "error" ? "alert" : "status"}
+                          >
+                            {rowMessages[entry.id].type === "error"
+                              ? <AlertCircle size={13} />
+                              : <CheckCircle2 size={13} />}
+                            <span>{rowMessages[entry.id].message}</span>
+                          </div>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

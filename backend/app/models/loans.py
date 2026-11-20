@@ -39,9 +39,9 @@ class PersonalLoan(db.Model):
         index=True,
     )
 
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        db.Uuid(as_uuid=True),
-        nullable=False,
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     direction: Mapped[str] = mapped_column(
@@ -144,12 +144,6 @@ class PersonalLoan(db.Model):
         UniqueConstraint(
             "workspace_id", "id",
             name="uq_personal_loan_workspace_id",
-        ),
-        ForeignKeyConstraint(
-            ["workspace_id", "created_by"],
-            ["workspace_members.workspace_id", "workspace_members.user_id"],
-            name="fk_personal_loan_workspace_creator",
-            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "direction IN ('borrowed', 'lent')",

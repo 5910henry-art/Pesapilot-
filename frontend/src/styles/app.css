@@ -20352,3 +20352,324 @@ button { font: inherit; cursor: pointer; }
 .platform-owner-finance-muted.small {
   color: #94a3b8 !important;
 }
+
+/* =========================================================
+   PESAPILOT — PLATFORM OWNER LOAN PORTFOLIO DARK THEME
+   ========================================================= */
+
+.platform-owner-shell .platform-owner-loans-page {
+  color: #e5edf7 !important;
+  background: transparent !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page h1,
+.platform-owner-shell .platform-owner-loans-page h2,
+.platform-owner-shell .platform-owner-loans-page h3,
+.platform-owner-shell .platform-owner-loans-page strong {
+  color: #edf4fc;
+}
+
+.platform-owner-shell .platform-owner-loans-page p {
+  color: #91a2b8;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-owner-eyebrow {
+  color: #67e8f9 !important;
+}
+
+/* Toolbar and search */
+.platform-owner-shell .platform-owner-loans-page .platform-loan-toolbar {
+  background: #111e30 !important;
+  border: 1px solid #29394f !important;
+  border-radius: 14px;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-search {
+  background: #0c1829 !important;
+  border: 1px solid #354a63 !important;
+  color: #91a2b8 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-search input,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-toolbar select {
+  background: #0c1829 !important;
+  background-color: #0c1829 !important;
+  color: #edf4fc !important;
+  border: 1px solid #354a63 !important;
+  color-scheme: dark;
+}
+
+.platform-owner-shell .platform-owner-loans-page input::placeholder {
+  color: #71849c !important;
+}
+
+/* Main portfolio table card */
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table-card,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table-scroll,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table {
+  background: #111e30 !important;
+  background-color: #111e30 !important;
+  color: #dce7f4 !important;
+  border-color: #29394f !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table thead,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table th {
+  background: #192a40 !important;
+  background-color: #192a40 !important;
+  color: #9eb2ca !important;
+  border-color: #304158 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table tbody tr,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table td {
+  background: #111e30 !important;
+  background-color: #111e30 !important;
+  color: #cbd8e8 !important;
+  border-color: #29394f !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table tbody tr:hover,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table tbody tr:hover td {
+  background: #1a2b42 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table td strong {
+  color: #edf4fc !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-table td small,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-id {
+  color: #91a2b8 !important;
+}
+
+/* Empty state and pagination */
+.platform-owner-shell .platform-owner-loans-page .platform-loan-empty {
+  background: #111e30 !important;
+  color: #a9bbd0 !important;
+  border-color: #304158 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-empty strong {
+  color: #edf4fc !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-pagination,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-muted {
+  color: #91a2b8 !important;
+}
+
+/* Status labels */
+.platform-owner-shell .platform-owner-loans-page .platform-status {
+  border: 1px solid #3b506a !important;
+  background: #1b2b40 !important;
+  color: #cbd8e8 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-status-active,
+.platform-owner-shell .platform-owner-loans-page .platform-status-paid {
+  background: rgb(16 185 129 / 12%) !important;
+  color: #6ee7b7 !important;
+  border-color: rgb(52 211 153 / 28%) !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-status-overdue,
+.platform-owner-shell .platform-owner-loans-page .platform-status-written_off {
+  background: rgb(239 68 68 / 12%) !important;
+  color: #fca5a5 !important;
+  border-color: rgb(248 113 113 / 28%) !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-status-created,
+.platform-owner-shell .platform-owner-loans-page .platform-status-funding {
+  background: rgb(59 130 246 / 13%) !important;
+  color: #93c5fd !important;
+  border-color: rgb(96 165 250 / 28%) !important;
+}
+
+/* Notices */
+.platform-owner-shell .platform-owner-loans-page .platform-loan-notice {
+  background: #142238 !important;
+  color: #dce7f4 !important;
+  border: 1px solid #354a63 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-notice-success {
+  background: rgb(6 95 70 / 18%) !important;
+  color: #6ee7b7 !important;
+  border-color: rgb(52 211 153 / 28%) !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-notice-error {
+  background: rgb(127 29 29 / 18%) !important;
+  color: #fca5a5 !important;
+  border-color: rgb(248 113 113 / 28%) !important;
+}
+
+/* Modal surfaces */
+.platform-owner-shell .platform-loan-modal-backdrop {
+  background: rgb(2 8 18 / 82%) !important;
+  backdrop-filter: blur(9px);
+}
+
+.platform-owner-shell .platform-loan-modal {
+  background: linear-gradient(155deg, #15243a, #0c1829) !important;
+  background-color: #111e30 !important;
+  color: #dce7f4 !important;
+  border: 1px solid #354a63 !important;
+  box-shadow: 0 28px 90px rgb(0 0 0 / 48%);
+}
+
+.platform-owner-shell .platform-loan-modal-header {
+  background: #15243a !important;
+  border-bottom: 1px solid #304158 !important;
+}
+
+.platform-owner-shell .platform-loan-modal-header h2 {
+  color: #f1f6fc !important;
+}
+
+.platform-owner-shell .platform-loan-icon-button {
+  background: #1b2b40 !important;
+  color: #c7d5e7 !important;
+  border: 1px solid #344860 !important;
+}
+
+/* Loan detail content */
+.platform-owner-shell .platform-owner-loans-page .platform-loan-detail,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-detail-section {
+  background: transparent !important;
+  color: #dce7f4 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-detail-heading h3,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-detail-section h3 {
+  color: #edf4fc !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-detail-heading p,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-detail-facts {
+  color: #a9bbd0 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-metric {
+  background: linear-gradient(145deg, #192b42, #111e30) !important;
+  border: 1px solid #304158 !important;
+  color: #a9bbd0 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-metric span,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-metric small {
+  color: #91a2b8 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-metric strong {
+  color: #f1f6fc !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-detail-facts span {
+  color: #b8c7d9 !important;
+}
+
+/* Disbursement callout */
+.platform-owner-shell .platform-owner-loans-page .platform-loan-disburse-callout {
+  background: #142a40 !important;
+  border: 1px solid #28516a !important;
+  color: #dce7f4 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-disburse-callout strong {
+  color: #67e8f9 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-disburse-callout span {
+  color: #b8c7d9 !important;
+}
+
+/* Disbursement form */
+.platform-owner-shell .platform-loans-page .platform-loan-form,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form {
+  background: transparent !important;
+  color: #dce7f4 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form label {
+  color: #c7d4e3 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form input,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form select,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form textarea {
+  background: #0c1829 !important;
+  background-color: #0c1829 !important;
+  color: #edf4fc !important;
+  border: 1px solid #354a63 !important;
+  color-scheme: dark;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form input::placeholder,
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form textarea::placeholder {
+  color: #71849c !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form-intro {
+  color: #a9bbd0 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form-balance {
+  background: #192b42 !important;
+  border: 1px solid #304158 !important;
+  color: #a9bbd0 !important;
+}
+
+.platform-owner-shell .platform-owner-loans-page .platform-loan-form-balance strong {
+  color: #67e8f9 !important;
+}
+
+/* Keep native dropdown options dark */
+.platform-owner-shell .platform-owner-loans-page select option {
+  background: #111e30 !important;
+  color: #edf4fc !important;
+}
+
+.transaction-row-action {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  min-width: 110px;
+}
+
+.transaction-row-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  max-width: 210px;
+  padding: 6px 7px;
+  border: 1px solid;
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.transaction-row-message svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.transaction-row-message.error {
+  color: #a93232;
+  background: #fff0f0;
+  border-color: #f3d6d6;
+}
+
+.transaction-row-message.success {
+  color: #087c55;
+  background: #eaf7ef;
+  border-color: #d4eddf;
+}

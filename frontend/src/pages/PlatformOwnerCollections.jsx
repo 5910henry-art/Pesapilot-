@@ -23,7 +23,10 @@ function dateTime(value) {
 
 function Notice({ type, children, onClose }) {
   return (
-    <div className={`platform-owner-notice ${type}`} role="status">
+    <div
+      className={`platform-owner-notice ${type}`}
+      role={type === "error" ? "alert" : "status"}
+    >
       <span>{children}</span>
       <button type="button" onClick={onClose} aria-label="Dismiss">
         <X size={16} />
@@ -32,7 +35,7 @@ function Notice({ type, children, onClose }) {
   );
 }
 
-function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
+function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving, error }) {
   const [accountId, setAccountId] = useState("");
   const [reference, setReference] = useState("");
   const [reason, setReason] = useState("");
@@ -110,6 +113,10 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
             <strong>{payment.payment_method || "—"}</strong>
           </div>
           <div>
+            <span>Paid from</span>
+            <strong>{payment.borrower_account_name || "Other / not listed"}</strong>
+          </div>
+          <div>
             <span>Reference</span>
             <strong>{payment.reference || "—"}</strong>
           </div>
@@ -167,6 +174,12 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
             </label>
           )}
 
+          {error && (
+            <div className="platform-owner-notice error" role="alert">
+              <span>{error}</span>
+            </div>
+          )}
+
           <div className="platform-owner-modal-actions">
             <button
               type="button"
@@ -187,9 +200,11 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
             >
               {saving
                 ? "Processing..."
-                : mode === "reject"
-                  ? "Reject reported repayment"
-                  : "Reverse repayment"}
+                : mode === "confirm"
+                  ? "Confirm repayment"
+                  : mode === "reject"
+                    ? "Reject reported repayment"
+                    : "Reverse repayment"}
             </button>
           </div>
         </form>
@@ -204,15 +219,16 @@ export default function PlatformOwnerCollections() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
   const [selected, setSelected] = useState(null);
   const [filter, setFilter] = useState("pending");
   const [asOfDate, setAsOfDate] = useState("");
 
   const loadCollections = useCallback(async () => {
     setLoading(true);
-    setError("");
+    setLoadError("");
 
     try {
       const [collections, financialAccounts] = await Promise.all([
@@ -225,7 +241,7 @@ export default function PlatformOwnerCollections() {
       setAsOfDate(collections.as_of_date || "");
       setAccounts(financialAccounts.accounts || []);
     } catch (err) {
-      setError(err.message || "Collections could not be loaded.");
+      setLoadError(err.message || "Collections could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -239,25 +255,25 @@ export default function PlatformOwnerCollections() {
     if (!selected) return;
 
     setSaving(true);
-    setError("");
-    setNotice("");
+    setActionError("");
+    setActionNotice("");
 
     try {
       if (selected.mode === "confirm") {
         await platformOwnerApi.confirmPayment(paymentId, payload);
-        setNotice("Repayment confirmed and posted successfully.");
+        setActionNotice("Repayment confirmed and posted successfully.");
       } else if (selected.mode === "reject") {
         await platformOwnerApi.rejectPayment(paymentId, payload);
-        setNotice("Reported repayment rejected. No accounting entry was created.");
+        setActionNotice("Reported repayment rejected. No accounting entry was created.");
       } else {
         await platformOwnerApi.reversePayment(paymentId, payload);
-        setNotice("Repayment reversed successfully.");
+        setActionNotice("Repayment reversed successfully.");
       }
 
       setSelected(null);
       await loadCollections();
     } catch (err) {
-      setError(err.message || "The repayment operation failed.");
+      setActionError(err.message || "The repayment operation failed.");
     } finally {
       setSaving(false);
     }
@@ -286,8 +302,16 @@ export default function PlatformOwnerCollections() {
         </button>
       </div>
 
-      {error && <Notice type="error" onClose={() => setError("")}>{error}</Notice>}
-      {notice && <Notice type="success" onClose={() => setNotice("")}>{notice}</Notice>}
+      {loadError && (
+        <Notice type="error" onClose={() => setLoadError("")}>
+          {loadError}
+        </Notice>
+      )}
+      {actionNotice && (
+        <Notice type="success" onClose={() => setActionNotice("")}>
+          {actionNotice}
+        </Notice>
+      )}
 
       <div className="platform-owner-stat-row">
         <div className="platform-owner-stat-card">
@@ -342,6 +366,7 @@ export default function PlatformOwnerCollections() {
                   <th>Amount</th>
                   <th>Payment date</th>
                   <th>Method</th>
+                  <th>Paid from</th>
                   <th>Reference</th>
                   <th>Actions</th>
                 </tr>
@@ -354,20 +379,29 @@ export default function PlatformOwnerCollections() {
                     <td>{money(payment.amount_minor, payment.currency_code)}</td>
                     <td>{dateTime(payment.payment_date)}</td>
                     <td>{payment.payment_method || "—"}</td>
+                    <td>{payment.borrower_account_name || "Other / not listed"}</td>
                     <td>{payment.reference || "—"}</td>
                     <td>
                       <div className="platform-owner-inline-actions">
                         <button
                           type="button"
                           className="platform-owner-button primary"
-                          onClick={() => setSelected({ payment, mode: "confirm" })}
+                          onClick={() => {
+                            setActionError("");
+                            setActionNotice("");
+                            setSelected({ payment, mode: "confirm" });
+                          }}
                         >
                           <CheckCircle size={14} /> Confirm
                         </button>
                         <button
                           type="button"
                           className="platform-owner-button secondary"
-                          onClick={() => setSelected({ payment, mode: "reject" })}
+                          onClick={() => {
+                            setActionError("");
+                            setActionNotice("");
+                            setSelected({ payment, mode: "reject" });
+                          }}
                         >
                           <X size={14} /> Reject
                         </button>
@@ -421,9 +455,15 @@ export default function PlatformOwnerCollections() {
           payment={selected.payment}
           accounts={accounts}
           mode={selected.mode}
-          onClose={() => setSelected(null)}
+          onClose={() => {
+            if (!saving) {
+              setSelected(null);
+              setActionError("");
+            }
+          }}
           onSubmit={processPayment}
           saving={saving}
+          error={actionError}
         />
       )}
     </div>

@@ -42,8 +42,34 @@ async function readResponse(response) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
+    const serverMessage =
+      typeof data.message === "string" ? data.message.trim() : "";
+
+    const looksTechnical =
+      !serverMessage ||
+      serverMessage.length > 500 ||
+      /<[^>]*>|traceback|sqlalchemy|psycopg|database error|internal server error/i.test(serverMessage);
+
+    const fallbackMessages = {
+      400: "Please check the information you entered and try again.",
+      401: "Your session has expired. Please sign in again.",
+      403: "You do not have permission to complete this action.",
+      404: "The requested information or action could not be found.",
+      409: "This action conflicts with the current account or record state. Refresh and try again.",
+      413: "The submitted information is too large.",
+      422: "Some of the information provided is invalid. Please review it and try again.",
+      429: "Too many requests. Please wait a moment and try again.",
+      500: "Something went wrong on our side. Please try again.",
+      502: "The service is temporarily unavailable. Please try again shortly.",
+      503: "The service is temporarily unavailable. Please try again shortly.",
+      504: "The request took too long. Please try again.",
+    };
+
     const error = new Error(
-      data.message || `Request failed (${response.status})`
+      looksTechnical
+        ? fallbackMessages[response.status] ||
+          "The request could not be completed. Please try again."
+        : serverMessage
     );
     error.status = response.status;
     error.data = data;
@@ -161,6 +187,51 @@ export const authApi = {
 
   me() {
     return apiRequest("/auth/me");
+  },
+
+  listCurrencies() {
+    return apiRequest("/auth/currencies");
+  },
+
+  updateProfile(payload) {
+    return apiRequest("/auth/profile", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  changePassword(payload) {
+    return apiRequest("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  listSessions() {
+    return apiRequest("/auth/sessions");
+  },
+
+  revokeSession(sessionId) {
+    return apiRequest(`/auth/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  revokeOtherSessions() {
+    return apiRequest("/auth/sessions/revoke-others", {
+      method: "POST",
+    });
+  },
+
+  accountDeletionEligibility() {
+    return apiRequest("/auth/account-deletion/eligibility");
+  },
+
+  deleteAccount(payload) {
+    return apiRequest("/auth/account-deletion", {
+      method: "DELETE",
+      body: JSON.stringify(payload),
+    });
   },
 
   createBusinessWorkspace(payload) {
@@ -462,6 +533,9 @@ export const loansApi = {
 export const platformLendingApi = {
   listProducts() {
     return apiRequest("/platform/products");
+  },
+  listReceivingAccounts(productId) {
+    return apiRequest(`/platform/receiving-accounts/${encodeURIComponent(productId)}`);
   },
 
   listLoans(options = {}) {

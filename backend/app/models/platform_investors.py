@@ -40,8 +40,8 @@ class PlatformInvestor(db.Model):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now, nullable=False
@@ -87,8 +87,8 @@ class PlatformInvestorContribution(db.Model):
     status: Mapped[str] = mapped_column(
         String(20), default="posted", nullable=False
     )
-    recorded_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -147,8 +147,8 @@ class PlatformInvestorWithdrawal(db.Model):
     status: Mapped[str] = mapped_column(
         String(20), default="posted", nullable=False
     )
-    recorded_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

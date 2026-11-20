@@ -1336,6 +1336,7 @@ def record_platform_loan_payment(
     recorded_by,
     reference=None,
     notes=None,
+    borrower_financial_account_id=None,
 ):
     """Record a pending repayment instruction or manually reported receipt."""
 
@@ -1430,6 +1431,7 @@ def record_platform_loan_payment(
         status="pending",
         recorded_by=recorded_by,
         notes=notes,
+        borrower_financial_account_id=borrower_financial_account_id,
     )
 
     db.session.add(payment)

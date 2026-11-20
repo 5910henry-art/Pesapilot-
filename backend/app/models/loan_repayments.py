@@ -148,8 +148,9 @@ class LoanPayment(db.Model):
     status: Mapped[str] = mapped_column(
         String(20), default="pending", nullable=False
     )
-    recorded_by: Mapped[uuid.UUID] = mapped_column(
-        db.Uuid(as_uuid=True), nullable=False
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -161,12 +162,6 @@ class LoanPayment(db.Model):
             ["workspace_id", "personal_loan_id"],
             ["personal_loans.workspace_id", "personal_loans.id"],
             name="fk_loan_payment_workspace_loan",
-            ondelete="RESTRICT",
-        ),
-        ForeignKeyConstraint(
-            ["workspace_id", "recorded_by"],
-            ["workspace_members.workspace_id", "workspace_members.user_id"],
-            name="fk_loan_payment_workspace_recorder",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(

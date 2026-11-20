@@ -51,7 +51,7 @@ function Status({ value }) {
   );
 }
 
-function InvestorForm({ onClose, onSubmit, saving }) {
+function InvestorForm({ onClose, onSubmit, saving, error }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -102,6 +102,7 @@ function InvestorForm({ onClose, onSubmit, saving }) {
             <textarea rows="3" value={notes} onChange={(e) => setNotes(e.target.value)}
               maxLength={5000} />
           </label>
+          {error && <div className="platform-owner-notice error" role="alert">{error}</div>}
           <div className="platform-owner-modal-actions">
             <button type="button" className="platform-owner-button secondary" onClick={onClose}>
               Cancel
@@ -116,12 +117,13 @@ function InvestorForm({ onClose, onSubmit, saving }) {
   );
 }
 
-function CapitalTransactionModal({ investor, accounts, type, onClose, onSubmit, saving }) {
+function CapitalTransactionModal({ investor, accounts, type, onClose, onSubmit, saving, error }) {
   const [accountId, setAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(new Date().toLocaleDateString("en-CA"));
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
+  const [validationError, setValidationError] = useState("");
 
   const account = accounts.find((item) => item.id === accountId);
   const currency = account?.currency_code || "KES";
@@ -135,16 +137,20 @@ function CapitalTransactionModal({ investor, accounts, type, onClose, onSubmit, 
   async function submit(event) {
     event.preventDefault();
 
-    if (!account) return;
+    if (!account) {
+      setValidationError("Select a platform financial account.");
+      return;
+    }
     if (minorAmount === null) {
-      window.alert(`Enter a valid amount with no more than ${digits(currency)} decimal places.`);
+      setValidationError(`Enter a valid amount with no more than ${digits(currency)} decimal places.`);
       return;
     }
 
     if (type === "withdrawal" && minorAmount > available) {
-      window.alert(`The investor's available capital is ${money(available, currency)}.`);
+      setValidationError(`The investor's available capital is ${money(available, currency)}.`);
       return;
     }
+    setValidationError("");
 
     await onSubmit({
       financial_account_id: account.id,
@@ -219,6 +225,11 @@ function CapitalTransactionModal({ investor, accounts, type, onClose, onSubmit, 
               maxLength={5000} />
           </label>
 
+          {(validationError || error) && (
+            <div className="platform-owner-notice error" role="alert">
+              {validationError || error}
+            </div>
+          )}
           <div className="platform-owner-modal-actions">
             <button type="button" className="platform-owner-button secondary" onClick={onClose}>
               Cancel
@@ -233,7 +244,7 @@ function CapitalTransactionModal({ investor, accounts, type, onClose, onSubmit, 
   );
 }
 
-function ReverseModal({ transaction, type, onClose, onSubmit, saving }) {
+function ReverseModal({ transaction, type, onClose, onSubmit, saving, error }) {
   const [reference, setReference] = useState("");
 
   async function submit(event) {
@@ -262,6 +273,7 @@ function ReverseModal({ transaction, type, onClose, onSubmit, saving }) {
               maxLength={100} required />
             <small>A reference is required to reverse this posted transaction.</small>
           </label>
+          {error && <div className="platform-owner-notice error" role="alert">{error}</div>}
           <div className="platform-owner-modal-actions">
             <button type="button" className="platform-owner-button secondary" onClick={onClose}>
               Cancel
@@ -276,7 +288,7 @@ function ReverseModal({ transaction, type, onClose, onSubmit, saving }) {
   );
 }
 
-function InvestorDetail({ investor, detail, onClose, onTransaction, onReverse, busy }) {
+function InvestorDetail({ investor, detail, onClose, onTransaction, onReverse, busy, error }) {
   if (!detail) return null;
 
   const { contributions = [], withdrawals = [], allocations = [], capital = [] } = detail;
@@ -305,6 +317,8 @@ function InvestorDetail({ investor, detail, onClose, onTransaction, onReverse, b
             <ArrowUpCircle size={16} /> Withdrawal
           </button>
         </div>
+
+        {error && <div className="platform-owner-notice error" role="alert">{error}</div>}
 
         <h3>Capital position</h3>
         {capital.length === 0 ? (
@@ -420,8 +434,12 @@ export default function PlatformOwnerInvestors() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [detailError, setDetailError] = useState("");
+  const [createError, setCreateError] = useState("");
+  const [transactionError, setTransactionError] = useState("");
+  const [reverseError, setReverseError] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -431,7 +449,7 @@ export default function PlatformOwnerInvestors() {
 
   const loadInvestors = useCallback(async () => {
     setLoading(true);
-    setError("");
+    setLoadError("");
     try {
       const response = await platformOwnerApi.listInvestors({
         search: search.trim() || undefined,
@@ -441,7 +459,7 @@ export default function PlatformOwnerInvestors() {
       });
       setInvestors(response.investors || []);
     } catch (err) {
-      setError(err.message || "Investors could not be loaded.");
+      setLoadError(err.message || "Investors could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -453,14 +471,15 @@ export default function PlatformOwnerInvestors() {
 
   async function createInvestor(payload) {
     setSaving(true);
-    setError("");
+    setCreateError("");
+    setActionNotice("");
     try {
       await platformOwnerApi.createInvestor(payload);
       setShowCreate(false);
-      setNotice("Investor registered successfully.");
+      setActionNotice("Investor registered successfully.");
       await loadInvestors();
     } catch (err) {
-      setError(err.message || "Investor could not be registered.");
+      setCreateError(err.message || "Investor could not be registered.");
     } finally {
       setSaving(false);
     }
@@ -468,37 +487,39 @@ export default function PlatformOwnerInvestors() {
 
   async function openInvestor(investor) {
     setSaving(true);
-    setError("");
+    setDetailError("");
     try {
       const response = await platformOwnerApi.getInvestor(investor.id);
       setSelected(investor);
       setDetail(response);
     } catch (err) {
-      setError(err.message || "Investor details could not be loaded.");
+      setDetailError(err.message || "Investor details could not be loaded.");
     } finally {
       setSaving(false);
     }
   }
 
   async function openTransaction(type) {
-    setError("");
+    setDetailError("");
+    setTransactionError("");
     try {
       const response = await platformOwnerApi.listFinancialAccounts();
       const availableAccounts = response.accounts || [];
       setAccounts(availableAccounts);
       if (!availableAccounts.length) {
-        setError("No active platform financial accounts are available.");
+        setDetailError("No active platform financial accounts are available.");
         return;
       }
       setTransactionType(type);
     } catch (err) {
-      setError(err.message || "Platform financial accounts could not be loaded.");
+      setDetailError(err.message || "Platform financial accounts could not be loaded.");
     }
   }
 
   async function saveTransaction(payload) {
     setSaving(true);
-    setError("");
+    setTransactionError("");
+    setActionNotice("");
     try {
       if (transactionType === "contribution") {
         await platformOwnerApi.recordContribution(selected.id, payload);
@@ -506,10 +527,10 @@ export default function PlatformOwnerInvestors() {
         await platformOwnerApi.recordWithdrawal(selected.id, payload);
       }
       setTransactionType("");
-      setNotice(`Investor ${transactionType} recorded successfully.`);
+      setActionNotice(`Investor ${transactionType} recorded successfully.`);
       await refreshSelected();
     } catch (err) {
-      setError(err.message || `Investor ${transactionType} could not be recorded.`);
+      setTransactionError(err.message || `Investor ${transactionType} could not be recorded.`);
     } finally {
       setSaving(false);
     }
@@ -536,7 +557,8 @@ export default function PlatformOwnerInvestors() {
   async function reverseTransaction(transactionId, payload) {
     const { type } = reverseTarget;
     setSaving(true);
-    setError("");
+    setReverseError("");
+    setActionNotice("");
     try {
       if (type === "contribution") {
         await platformOwnerApi.reverseContribution(transactionId, payload);
@@ -544,10 +566,10 @@ export default function PlatformOwnerInvestors() {
         await platformOwnerApi.reverseWithdrawal(transactionId, payload);
       }
       setReverseTarget(null);
-      setNotice(`Investor ${type} reversed successfully.`);
+      setActionNotice(`Investor ${type} reversed successfully.`);
       await refreshSelected();
     } catch (err) {
-      setError(err.message || `Investor ${type} could not be reversed.`);
+      setReverseError(err.message || `Investor ${type} could not be reversed.`);
     } finally {
       setSaving(false);
     }
@@ -567,14 +589,17 @@ export default function PlatformOwnerInvestors() {
             <RefreshCw size={16} className={loading ? "platform-owner-spin" : ""} />
             Refresh
           </button>
-          <button className="platform-owner-button primary" onClick={() => setShowCreate(true)}>
+          <button className="platform-owner-button primary" onClick={() => { setCreateError(""); setActionNotice(""); setShowCreate(true); }}>
             <Plus size={16} /> Register investor
           </button>
         </div>
       </div>
 
-      {error && <div className="platform-owner-notice error">{error}</div>}
-      {notice && <div className="platform-owner-notice success">{notice}</div>}
+      {loadError && <div className="platform-owner-notice error" role="alert">{loadError}</div>}
+      {detailError && !selected && (
+        <div className="platform-owner-notice error" role="alert">{detailError}</div>
+      )}
+      {actionNotice && <div className="platform-owner-notice success" role="status">{actionNotice}</div>}
 
       <div className="platform-owner-toolbar">
         <input value={search} onChange={(e) => setSearch(e.target.value)}
@@ -630,7 +655,7 @@ export default function PlatformOwnerInvestors() {
 
       {showCreate && (
         <InvestorForm onClose={() => setShowCreate(false)}
-          onSubmit={createInvestor} saving={saving} />
+          onSubmit={createInvestor} saving={saving} error={createError} />
       )}
 
       {selected && detail && (
@@ -639,8 +664,9 @@ export default function PlatformOwnerInvestors() {
           detail={detail}
           onClose={() => { setSelected(null); setDetail(null); }}
           onTransaction={openTransaction}
-          onReverse={(transaction, type) => setReverseTarget({ transaction, type })}
+          onReverse={(transaction, type) => { setReverseError(""); setReverseTarget({ transaction, type }); }}
           busy={saving}
+          error={detailError}
         />
       )}
 
@@ -652,6 +678,7 @@ export default function PlatformOwnerInvestors() {
           onClose={() => setTransactionType("")}
           onSubmit={saveTransaction}
           saving={saving}
+          error={transactionError}
         />
       )}
 
@@ -662,6 +689,7 @@ export default function PlatformOwnerInvestors() {
           onClose={() => setReverseTarget(null)}
           onSubmit={reverseTransaction}
           saving={saving}
+          error={reverseError}
         />
       )}
     </div>

@@ -108,8 +108,9 @@ export default function Budgets() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [categoryMessage, setCategoryMessage] = useState(null);
+  const [budgetMessage, setBudgetMessage] = useState(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [showBudgetForm, setShowBudgetForm] = useState(false);
   const [categoryName, setCategoryName] = useState("");
@@ -147,7 +148,7 @@ export default function Budgets() {
     if (background) setRefreshing(true);
     else setLoading(true);
 
-    setError("");
+    setLoadError("");
 
     try {
       const [categoryResult, budgetResult] = await Promise.all([
@@ -168,7 +169,7 @@ export default function Budgets() {
           : nextCategories.find((item) => item.is_active)?.id || ""
       );
     } catch (err) {
-      setError(err.message || "Unable to load budgets.");
+      setLoadError(err.message || "Unable to load budgets.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -188,11 +189,10 @@ export default function Budgets() {
 
   async function handleCreateCategory(event) {
     event.preventDefault();
-    setError("");
-    setSuccess("");
+    setCategoryMessage(null);
 
     if (!categoryName.trim()) {
-      setError("Enter a category name.");
+      setCategoryMessage({ type: "error", text: "Enter a category name." });
       return;
     }
 
@@ -205,11 +205,10 @@ export default function Budgets() {
       });
 
       setCategoryName("");
-      setShowCategoryForm(false);
-      setSuccess(result.message || "Category created successfully.");
+      setCategoryMessage({ type: "success", text: result.message || "Category created successfully." });
       await loadData(true);
     } catch (err) {
-      setError(err.message || "Could not create category.");
+      setCategoryMessage({ type: "error", text: err.message || "Could not create category." });
     } finally {
       setSaving(false);
     }
@@ -217,16 +216,15 @@ export default function Budgets() {
 
   async function handleCreateBudget(event) {
     event.preventDefault();
-    setError("");
-    setSuccess("");
+    setBudgetMessage(null);
 
     if (!categoryId) {
-      setError("Create or select an expense category first.");
+      setBudgetMessage({ type: "error", text: "Create or select an expense category first." });
       return;
     }
 
     if (!period.start || !period.end || period.end < period.start) {
-      setError("Choose a valid budget period.");
+      setBudgetMessage({ type: "error", text: "Choose a valid budget period." });
       return;
     }
 
@@ -235,7 +233,7 @@ export default function Budgets() {
     try {
       amountMinor = toMinorUnits(amount, currency);
     } catch (err) {
-      setError(err.message);
+      setBudgetMessage({ type: "error", text: err.message });
       return;
     }
 
@@ -251,11 +249,10 @@ export default function Budgets() {
       });
 
       setAmount("");
-      setShowBudgetForm(false);
-      setSuccess(result.message || "Budget created successfully.");
+      setBudgetMessage({ type: "success", text: result.message || "Budget created successfully." });
       await loadData(true);
     } catch (err) {
-      setError(err.message || "Could not create budget.");
+      setBudgetMessage({ type: "error", text: err.message || "Could not create budget." });
     } finally {
       setSaving(false);
     }
@@ -308,7 +305,7 @@ export default function Budgets() {
               className="primary-button"
               type="button"
               onClick={() => {
-                setError("");
+                setBudgetMessage(null);
                 setShowBudgetForm((value) => !value);
                 setShowCategoryForm(false);
               }}
@@ -320,17 +317,10 @@ export default function Budgets() {
         </div>
       </div>
 
-      {error && (
-        <div className="accounts-message error">
+      {loadError && (
+        <div className="accounts-message error" role="alert">
           <AlertCircle size={17} />
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="accounts-message success">
-          <CheckCircle2 size={17} />
-          {success}
+          {loadError}
         </div>
       )}
 
@@ -408,6 +398,12 @@ export default function Budgets() {
                 Cancel
               </button>
             </div>
+            {categoryMessage && (
+              <div className={`accounts-message ${categoryMessage.type}`} role={categoryMessage.type === "error" ? "alert" : "status"}>
+                {categoryMessage.type === "error" ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
+                {categoryMessage.text}
+              </div>
+            )}
           </form>
         </div>
       )}
@@ -481,6 +477,12 @@ export default function Budgets() {
               </p>
             )}
 
+            {budgetMessage && (
+              <div className={`accounts-message ${budgetMessage.type}`} role={budgetMessage.type === "error" ? "alert" : "status"}>
+                {budgetMessage.type === "error" ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
+                {budgetMessage.text}
+              </div>
+            )}
             <div className="account-form-actions">
               <button
                 className="primary-button"
@@ -510,7 +512,7 @@ export default function Budgets() {
             className="secondary-button"
             type="button"
             onClick={() => {
-              setError("");
+              setCategoryMessage(null);
               setShowCategoryForm((value) => !value);
               setShowBudgetForm(false);
             }}

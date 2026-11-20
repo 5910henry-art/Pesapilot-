@@ -267,3 +267,34 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Hidden Platform Owner login mode */
+.auth-brand-toggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.auth-owner-mode .auth-brand-icon {
+  background: #172554;
+  color: #bfdbfe;
+}
+
+.auth-owner-mode .auth-eyebrow {
+  color: #2563eb;
+}
+
+.auth-owner-mode .auth-submit {
+  background: #1d4ed8;
+}
+
+.auth-owner-mode .auth-submit:hover {
+  background: #1e40af;
+}
+
+.auth-owner-mode .auth-switch {
+  color: #64748b;
+}

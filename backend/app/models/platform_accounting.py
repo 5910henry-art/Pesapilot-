@@ -249,13 +249,13 @@ class PlatformJournalEntry(db.Model):
         nullable=False,
     )
 
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"),
-        nullable=False,
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     posted_by: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 

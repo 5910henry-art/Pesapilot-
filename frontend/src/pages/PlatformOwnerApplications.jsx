@@ -58,12 +58,13 @@ function statusClass(status) {
   return `platform-owner-status platform-owner-status-${status}`;
 }
 
-function DecisionModal({ application, onClose, onSubmit, saving }) {
+function DecisionModal({ application, onClose, onSubmit, saving, error }) {
   const [decision, setDecision] = useState("approved");
   const [approvedAmount, setApprovedAmount] = useState(
     String(application.requested_principal_minor)
   );
   const [notes, setNotes] = useState("");
+  const [amountError, setAmountError] = useState("");
 
   const applicant = application.applicant || null;
   const assessment = application.affordability_assessment || null;
@@ -84,7 +85,7 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
         amount <= 0 ||
         amount > application.requested_principal_minor
       ) {
-        window.alert("Enter a valid amount not exceeding the requested amount.");
+        setAmountError("Enter a valid amount not exceeding the requested amount.");
         return;
       }
 
@@ -311,6 +312,12 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
         )}
 
         <form onSubmit={submit} className="platform-owner-form">
+          {error && (
+            <div className="platform-owner-notice error" role="alert">
+              <AlertCircle size={17} />
+              <span>{error}</span>
+            </div>
+          )}
           <label>
             Application decision
             <select
@@ -332,8 +339,23 @@ function DecisionModal({ application, onClose, onSubmit, saving }) {
                 step="1"
                 required
                 value={approvedAmount}
-                onChange={(event) => setApprovedAmount(event.target.value)}
+                onChange={(event) => {
+                  setApprovedAmount(event.target.value);
+                  setAmountError("");
+                }}
+                aria-invalid={Boolean(amountError)}
+                aria-describedby={amountError ? "approved-amount-error" : undefined}
               />
+              {amountError && (
+                <span
+                  id="approved-amount-error"
+                  className="platform-owner-notice error"
+                  role="alert"
+                >
+                  <AlertCircle size={15} />
+                  {amountError}
+                </span>
+              )}
               <small>
                 Maximum:{" "}
                 {money(
@@ -384,14 +406,15 @@ export default function PlatformOwnerApplications() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [decisionError, setDecisionError] = useState("");
+  const [applicationMessages, setApplicationMessages] = useState({});
   const [selected, setSelected] = useState(null);
   const [allocatingLoan, setAllocatingLoan] = useState("");
 
   const loadApplications = useCallback(async () => {
     setLoading(true);
-    setError("");
+    setLoadError("");
 
     try {
       const response = await platformOwnerApi.listApplications({
@@ -401,7 +424,7 @@ export default function PlatformOwnerApplications() {
 
       setApplications(response.applications || []);
     } catch (err) {
-      setError(err.message || "Applications could not be loaded.");
+      setLoadError(err.message || "Applications could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -437,16 +460,27 @@ export default function PlatformOwnerApplications() {
 
   async function saveDecision(applicationId, payload) {
     setSaving(true);
-    setError("");
-    setNotice("");
+    setDecisionError("");
+    setApplicationMessages((old) => ({
+      ...old,
+      [applicationId]: null,
+    }));
 
     try {
       await platformOwnerApi.decideApplication(applicationId, payload);
       setSelected(null);
-      setNotice(`Application ${payload.decision} successfully.`);
+      setApplicationMessages((old) => ({
+        ...old,
+        [applicationId]: {
+          type: "success",
+          message: `Application ${payload.decision} successfully.`,
+        },
+      }));
       await loadApplications();
     } catch (err) {
-      setError(err.message || "The application decision could not be saved.");
+      setDecisionError(
+        err.message || "The application decision could not be saved."
+      );
     } finally {
       setSaving(false);
     }
@@ -460,20 +494,32 @@ export default function PlatformOwnerApplications() {
     if (!confirmed) return;
 
     setAllocatingLoan(application.id);
-    setError("");
-    setNotice("");
+    setApplicationMessages((old) => ({
+      ...old,
+      [application.id]: null,
+    }));
 
     try {
       const response =
         await platformOwnerApi.createLoanFromApplication(application.id);
 
-      setNotice(
-        `Loan allocated successfully. Loan ID: ${response.loan?.id || "Allocated"}`
-      );
+      setApplicationMessages((old) => ({
+        ...old,
+        [application.id]: {
+          type: "success",
+          message: `Loan allocated successfully. Loan ID: ${response.loan?.id || "Allocated"}`,
+        },
+      }));
 
       await loadApplications();
     } catch (err) {
-      setError(err.message || "The loan could not be created.");
+      setApplicationMessages((old) => ({
+        ...old,
+        [application.id]: {
+          type: "error",
+          message: err.message || "The loan could not be created.",
+        },
+      }));
     } finally {
       setAllocatingLoan("");
     }
@@ -507,21 +553,15 @@ export default function PlatformOwnerApplications() {
         </button>
       </header>
 
-      {notice && (
-        <div className="platform-owner-notice success">
-          <CheckCircle size={17} />
-          <span>{notice}</span>
-          <button onClick={() => setNotice("")} aria-label="Dismiss">
-            <X size={16} />
-          </button>
-        </div>
-      )}
-
-      {error && (
-        <div className="platform-owner-notice error">
+      {loadError && (
+        <div className="platform-owner-notice error" role="alert">
           <AlertCircle size={17} />
-          <span>{error}</span>
-          <button onClick={() => setError("")} aria-label="Dismiss">
+          <span>{loadError}</span>
+          <button
+            type="button"
+            onClick={() => setLoadError("")}
+            aria-label="Dismiss"
+          >
             <X size={16} />
           </button>
         </div>
@@ -762,6 +802,32 @@ export default function PlatformOwnerApplications() {
                               No action
                             </span>
                           )}
+                        {applicationMessages[application.id] && (
+                          <div
+                            className={`platform-owner-notice ${
+                              applicationMessages[application.id].type === "error"
+                                ? "error"
+                                : "success"
+                            }`}
+                            role={
+                              applicationMessages[application.id].type === "error"
+                                ? "alert"
+                                : "status"
+                            }
+                          >
+                            <span>{applicationMessages[application.id].message}</span>
+                            <button
+                              type="button"
+                              onClick={() => setApplicationMessages((old) => ({
+                                ...old,
+                                [application.id]: null,
+                              }))}
+                              aria-label="Dismiss"
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -790,9 +856,15 @@ export default function PlatformOwnerApplications() {
       {selected && (
         <DecisionModal
           application={selected}
-          onClose={() => setSelected(null)}
+          onClose={() => {
+            if (!saving) {
+              setSelected(null);
+              setDecisionError("");
+            }
+          }}
           onSubmit={saveDecision}
           saving={saving}
+          error={decisionError}
         />
       )}
 

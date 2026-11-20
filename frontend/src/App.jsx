@@ -32,6 +32,7 @@ import PlatformOwnerAccounting from "./pages/PlatformOwnerAccounting";
 import Bills from "./pages/Bills";
 import Expenses from "./pages/Expenses";
 import AIManager from "./pages/AIManager";
+import Settings from "./pages/Settings";
 
 import "./styles/app.css";
 
@@ -56,6 +57,7 @@ export default function App() {
               <Route path="/bills" element={<Bills />} />
               <Route path="/expenses" element={<Expenses />} />
               <Route path="/ai-manager" element={<AIManager />} />
+              <Route path="/settings" element={<Settings />} />
             </Route>
           </Route>
 

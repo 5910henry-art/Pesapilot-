@@ -1,4 +1,5 @@
 import unittest
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import UUID, uuid4
@@ -15,6 +16,8 @@ from app.models import (
     Currency,
     AuditLog,
     User,
+    UserProfile,
+    RefreshToken,
     Workspace,
     WorkspaceMember,
     FinancialAccount,
@@ -81,7 +84,8 @@ from app.services.loan_repayments import (
     build_payment_allocations,
     confirm_loan_payment,
 )
-from flask_jwt_extended import create_access_token
+from flask_jwt_extended import create_access_token, create_refresh_token
+from werkzeug.security import generate_password_hash, check_password_hash
 
 
 class PesaPilotTestCase(unittest.TestCase):
@@ -244,6 +248,834 @@ class PesaPilotTestCase(unittest.TestCase):
     def tearDown(self):
         db.session.rollback()
         db.session.remove()
+
+    def test_inactive_user_access_token_is_rejected_immediately(self):
+        url = f"/api/v1/loans?workspace_id={self.workspace.id}"
+
+        active_response = self.client.get(
+            url,
+            headers=self.headers,
+        )
+        self.assertEqual(
+            active_response.status_code,
+            200,
+            active_response.json,
+        )
+
+        self.user.is_active = False
+        db.session.commit()
+
+        inactive_response = self.client.get(
+            url,
+            headers=self.headers,
+        )
+        self.assertEqual(
+            inactive_response.status_code,
+            401,
+            inactive_response.json,
+        )
+
+    def test_account_deletion_eligibility_allows_clean_account(self):
+        response = self.client.get(
+            "/api/v1/auth/account-deletion/eligibility",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertTrue(response.json["eligible"])
+        self.assertEqual(response.json["blockers"], [])
+
+    def test_account_deletion_eligibility_requires_authentication(self):
+        response = self.client.get(
+            "/api/v1/auth/account-deletion/eligibility"
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_account_deletion_is_blocked_by_outstanding_platform_loan(self):
+        application = self.create_approved_platform_application()
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=self.user.id,
+            product_id=application.product_id,
+            approved_principal_minor=application.approved_principal_minor,
+            principal_minor=50000,
+            outstanding_principal_minor=50000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=application.term_count,
+            status="active",
+        )
+        db.session.add(loan)
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/auth/account-deletion/eligibility",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        codes = {item["code"] for item in response.json["blockers"]}
+        self.assertIn("outstanding_platform_loan", codes)
+        self.assertFalse(response.json["eligible"])
+
+    def test_account_deletion_is_blocked_by_pending_platform_application(self):
+        product = self.create_platform_loan_product()
+        db.session.add(PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Test application",
+            status="pending",
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/auth/account-deletion/eligibility",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        codes = {item["code"] for item in response.json["blockers"]}
+        self.assertIn("pending_platform_application", codes)
+        self.assertFalse(response.json["eligible"])
+
+    def test_account_deletion_is_blocked_when_user_owns_shared_workspace(self):
+        workspace = Workspace(
+            name="Shared Business",
+            workspace_type="business",
+            functional_currency="KES",
+        )
+        db.session.add(workspace)
+        db.session.flush()
+
+        other_user = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(other_user)
+        db.session.flush()
+
+        db.session.add_all([
+            WorkspaceMember(
+                workspace_id=workspace.id,
+                user_id=self.user.id,
+                role="owner",
+            ),
+            WorkspaceMember(
+                workspace_id=workspace.id,
+                user_id=other_user.id,
+                role="member",
+            ),
+        ])
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/auth/account-deletion/eligibility",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        blockers = response.json["blockers"]
+        ownership = next(
+            item for item in blockers
+            if item["code"] == "shared_workspace_ownership"
+        )
+        self.assertEqual(
+            ownership["workspaces"][0]["workspace_id"],
+            str(workspace.id),
+        )
+        self.assertFalse(response.json["eligible"])
+
+    def test_account_deletion_is_blocked_when_user_owns_shared_personal_workspace(self):
+        other_user = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(other_user)
+        db.session.flush()
+
+        db.session.add(WorkspaceMember(
+            workspace_id=self.workspace.id,
+            user_id=other_user.id,
+            role="member",
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/auth/account-deletion/eligibility",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        ownership = next(
+            item for item in response.json["blockers"]
+            if item["code"] == "shared_workspace_ownership"
+        )
+        self.assertEqual(
+            ownership["workspaces"][0]["workspace_id"],
+            str(self.workspace.id),
+        )
+        self.assertFalse(response.json["eligible"])
+
+    def test_account_deletion_is_blocked_for_last_active_platform_admin(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/auth/account-deletion/eligibility",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        codes = {item["code"] for item in response.json["blockers"]}
+        self.assertIn("last_platform_admin", codes)
+        self.assertFalse(response.json["eligible"])
+
+    def test_account_deletion_allows_fully_paid_platform_loan(self):
+        application = self.create_approved_platform_application()
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=self.user.id,
+            product_id=application.product_id,
+            approved_principal_minor=application.approved_principal_minor,
+            principal_minor=100000,
+            outstanding_principal_minor=0,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=application.term_count,
+            status="paid",
+        )
+        db.session.add(loan)
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/auth/account-deletion/eligibility",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["eligible"], response.json)
+        self.assertEqual(response.json["blockers"], [])
+
+    def test_account_deletion_endpoint_requires_authentication(self):
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            json={"password": "test-password", "confirmation": "DELETE"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_account_deletion_endpoint_requires_exact_confirmation(self):
+        self.user.password_hash = generate_password_hash("test-password")
+        db.session.commit()
+
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "test-password", "confirmation": "delete"},
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertIsNotNone(db.session.get(User, self.user.id))
+
+    def test_account_deletion_endpoint_rejects_wrong_password(self):
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "wrong-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 401, response.json)
+        self.assertIsNotNone(db.session.get(User, self.user.id))
+
+    def test_account_deletion_endpoint_permanently_deletes_clean_account(self):
+        user_id = self.user.id
+        workspace_id = self.workspace.id
+
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "correct-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(response.json["deleted_workspace_count"], 1)
+        self.assertEqual(response.json["preserved_shared_workspace_count"], 0)
+        self.assertIsNone(db.session.get(User, user_id))
+        self.assertIsNone(db.session.get(Workspace, workspace_id))
+
+    def test_account_deletion_removes_populated_personal_workspace(self):
+        user_id = self.user.id
+        workspace_id = self.workspace.id
+
+        # A personal workspace should be removed when it has no other
+        # members, even if its membership role is unexpectedly not owner.
+        self.membership.role = "member"
+
+        today = date.today()
+        loan = PersonalLoan(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            direction="borrowed",
+            counterparty_name="Deletion Test Counterparty",
+            loan_type="interest_free",
+            principal_minor=50000,
+            currency_code="KES",
+            interest_method="none",
+            interest_rate_percent=Decimal("0"),
+            repayment_frequency="one_time",
+            term_count=1,
+            start_date=today,
+            due_date=today + timedelta(days=30),
+            status="active",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        installment = LoanInstallment(
+            workspace_id=workspace_id,
+            personal_loan_id=loan.id,
+            installment_number=1,
+            due_date=loan.due_date,
+            amount_minor=50000,
+            principal_minor=50000,
+            interest_minor=0,
+            paid_minor=0,
+            status="scheduled",
+        )
+        goal = SavingsGoal(
+            workspace_id=workspace_id,
+            name="Deletion Test Savings Goal",
+            target_amount_minor=100000,
+            currency_code="KES",
+            financial_account_id=self.source_account.id,
+            created_by=user_id,
+        )
+        db.session.add_all([installment, goal])
+        db.session.commit()
+
+        loan_id = loan.id
+        installment_id = installment.id
+        goal_id = goal.id
+        account_id = self.source_account.id
+        opening_journal_id = JournalEntry.query.filter_by(
+            workspace_id=workspace_id
+        ).first().id
+
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "correct-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(response.json["deleted_workspace_count"], 1)
+        self.assertIsNone(db.session.get(User, user_id))
+        self.assertIsNone(db.session.get(Workspace, workspace_id))
+        self.assertIsNone(db.session.get(PersonalLoan, loan_id))
+        self.assertIsNone(db.session.get(LoanInstallment, installment_id))
+        self.assertIsNone(db.session.get(SavingsGoal, goal_id))
+        self.assertIsNone(db.session.get(FinancialAccount, account_id))
+        self.assertIsNone(db.session.get(JournalEntry, opening_journal_id))
+
+    def test_account_deletion_preserves_shared_workspace_and_other_members(self):
+        user_id = self.user.id
+        personal_workspace_id = self.workspace.id
+
+        other_user = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(other_user)
+        db.session.flush()
+
+        shared_workspace = Workspace(
+            name="Shared Team Workspace",
+            workspace_type="business",
+            functional_currency="KES",
+        )
+        db.session.add(shared_workspace)
+        db.session.flush()
+
+        shared_account = FinancialAccount(
+            workspace_id=shared_workspace.id,
+            name="Shared Business Wallet",
+            account_type="mobile_money",
+            currency_code="KES",
+            is_active=True,
+        )
+        db.session.add_all([
+            shared_account,
+            WorkspaceMember(
+                workspace_id=shared_workspace.id,
+                user_id=other_user.id,
+                role="owner",
+            ),
+            WorkspaceMember(
+                workspace_id=shared_workspace.id,
+                user_id=user_id,
+                role="member",
+            ),
+        ])
+
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        shared_workspace_id = shared_workspace.id
+        shared_account_id = shared_account.id
+        other_user_id = other_user.id
+
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "correct-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["deleted_workspace_count"], 1)
+        self.assertEqual(response.json["preserved_shared_workspace_count"], 1)
+
+        self.assertIsNone(db.session.get(User, user_id))
+        self.assertIsNone(db.session.get(Workspace, personal_workspace_id))
+        self.assertIsNotNone(db.session.get(Workspace, shared_workspace_id))
+        self.assertIsNotNone(db.session.get(FinancialAccount, shared_account_id))
+
+        self.assertIsNone(WorkspaceMember.query.filter_by(
+            workspace_id=shared_workspace_id,
+            user_id=user_id,
+        ).first())
+
+        remaining_membership = WorkspaceMember.query.filter_by(
+            workspace_id=shared_workspace_id,
+            user_id=other_user_id,
+        ).first()
+        self.assertIsNotNone(remaining_membership)
+        self.assertEqual(remaining_membership.role, "owner")
+
+    def test_account_deletion_anonymises_counterparty_in_retained_loan(self):
+        user_id = self.user.id
+
+        other_user = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(other_user)
+        db.session.flush()
+
+        shared_workspace = Workspace(
+            name="Counterparty Retention Workspace",
+            workspace_type="business",
+            functional_currency="KES",
+        )
+        db.session.add(shared_workspace)
+        db.session.flush()
+
+        db.session.add_all([
+            WorkspaceMember(
+                workspace_id=shared_workspace.id,
+                user_id=other_user.id,
+                role="owner",
+            ),
+            WorkspaceMember(
+                workspace_id=shared_workspace.id,
+                user_id=user_id,
+                role="member",
+            ),
+        ])
+
+        loan = PersonalLoan(
+            workspace_id=shared_workspace.id,
+            created_by=other_user.id,
+            direction="lent",
+            counterparty_user_id=user_id,
+            counterparty_name="Account Being Deleted",
+            counterparty_phone="+254700000000",
+            loan_type="interest_free",
+            principal_minor=75000,
+            currency_code="KES",
+            interest_method="none",
+            interest_rate_percent=Decimal("0"),
+            repayment_frequency="monthly",
+            term_count=3,
+            installment_minor=25000,
+            start_date=date.today(),
+            due_date=date.today() + timedelta(days=90),
+            status="active",
+            description="Private counterparty details",
+        )
+        db.session.add(loan)
+
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        loan_id = loan.id
+        workspace_id = shared_workspace.id
+        other_user_id = other_user.id
+
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "correct-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertIsNone(db.session.get(User, user_id))
+
+        preserved_loan = db.session.get(PersonalLoan, loan_id)
+        self.assertIsNotNone(preserved_loan)
+        self.assertEqual(preserved_loan.workspace_id, workspace_id)
+        self.assertEqual(preserved_loan.created_by, other_user_id)
+        self.assertEqual(preserved_loan.principal_minor, 75000)
+        self.assertEqual(preserved_loan.installment_minor, 25000)
+        self.assertEqual(preserved_loan.status, "active")
+        self.assertIsNone(preserved_loan.counterparty_user_id)
+        self.assertEqual(preserved_loan.counterparty_name, "Deleted user")
+        self.assertIsNone(preserved_loan.counterparty_phone)
+        self.assertIsNone(preserved_loan.description)
+
+        self.assertIsNotNone(db.session.get(Workspace, workspace_id))
+        self.assertIsNotNone(db.session.get(User, other_user_id))
+
+    def test_account_deletion_endpoint_blocks_outstanding_platform_loan(self):
+        application = self.create_approved_platform_application()
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=self.user.id,
+            product_id=application.product_id,
+            approved_principal_minor=application.approved_principal_minor,
+            principal_minor=50000,
+            outstanding_principal_minor=50000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=application.term_count,
+            status="active",
+        )
+        db.session.add(loan)
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        user_id = self.user.id
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "correct-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 409, response.json)
+        codes = {item["code"] for item in response.json["blockers"]}
+        self.assertIn("outstanding_platform_loan", codes)
+        self.assertIsNotNone(db.session.get(User, user_id))
+
+    def test_account_deletion_endpoint_blocks_pending_platform_application(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Test application",
+            status="pending",
+        )
+        db.session.add(application)
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        user_id = self.user.id
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "correct-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 409, response.json)
+        codes = {item["code"] for item in response.json["blockers"]}
+        self.assertIn("pending_platform_application", codes)
+        self.assertIsNotNone(db.session.get(User, user_id))
+
+    def test_account_deletion_endpoint_blocks_pending_platform_payment(self):
+        application = self.create_approved_platform_application()
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=self.user.id,
+            product_id=application.product_id,
+            approved_principal_minor=application.approved_principal_minor,
+            principal_minor=100000,
+            outstanding_principal_minor=100000,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=application.term_count,
+            status="active",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        db.session.add(PlatformLoanPayment(
+            loan_id=loan.id,
+            currency_code="KES",
+            amount_minor=10000,
+            principal_minor=0,
+            interest_minor=0,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            status="pending",
+            recorded_by=self.user.id,
+            notes="Pending customer repayment",
+        ))
+
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        user_id = self.user.id
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "correct-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 409, response.json)
+        codes = {item["code"] for item in response.json["blockers"]}
+        self.assertIn("pending_platform_payment", codes)
+        self.assertIsNotNone(db.session.get(User, user_id))
+
+    def test_account_deletion_redacts_rejected_platform_payment_history(self):
+        application = self.create_approved_platform_application()
+        loan = PlatformLoan(
+            application_id=application.id,
+            customer_id=self.user.id,
+            product_id=application.product_id,
+            approved_principal_minor=application.approved_principal_minor,
+            principal_minor=100000,
+            outstanding_principal_minor=0,
+            currency_code="KES",
+            interest_method="reducing",
+            interest_rate_percent=Decimal("10"),
+            repayment_frequency="monthly",
+            term_count=application.term_count,
+            status="paid",
+        )
+        db.session.add(loan)
+        db.session.flush()
+
+        payment = PlatformLoanPayment(
+            loan_id=loan.id,
+            currency_code="KES",
+            amount_minor=10000,
+            principal_minor=0,
+            interest_minor=0,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            status="rejected",
+            recorded_by=self.user.id,
+            rejected_by=self.user.id,
+            rejected_at=datetime.now(timezone.utc),
+            rejection_reason="Personal information in original rejection",
+            notes="Customer-specific private notes",
+        )
+        db.session.add(payment)
+
+        self.user.password_hash = generate_password_hash("correct-password")
+        db.session.commit()
+
+        user_id = self.user.id
+        loan_id = loan.id
+        payment_id = payment.id
+
+        response = self.client.delete(
+            "/api/v1/auth/account-deletion",
+            headers=self.headers,
+            json={"password": "correct-password", "confirmation": "DELETE"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertIsNone(db.session.get(User, user_id))
+
+        retained_loan = db.session.get(PlatformLoan, loan_id)
+        self.assertIsNotNone(retained_loan)
+        self.assertIsNone(retained_loan.customer_id)
+        self.assertEqual(retained_loan.outstanding_principal_minor, 0)
+
+        retained_payment = db.session.get(PlatformLoanPayment, payment_id)
+        self.assertIsNotNone(retained_payment)
+        self.assertEqual(retained_payment.amount_minor, 10000)
+        self.assertEqual(retained_payment.status, "rejected")
+        self.assertIsNone(retained_payment.recorded_by)
+        self.assertIsNone(retained_payment.rejected_by)
+        self.assertIsNone(retained_payment.notes)
+        self.assertEqual(
+            retained_payment.rejection_reason,
+            "Redacted after account deletion",
+        )
+
+    def test_active_currency_catalogue_requires_authentication(self):
+        response = self.client.get("/api/v1/auth/currencies")
+        self.assertEqual(response.status_code, 401)
+
+    def test_active_currency_catalogue_returns_only_active_currencies(self):
+        currency = Currency.query.filter_by(code="XXX").first()
+        created_currency = currency is None
+        original_active = None
+
+        if currency is None:
+            currency = Currency(
+                code="XXX",
+                name="Inactive Currency",
+                minor_unit=2,
+                is_active=False,
+            )
+            db.session.add(currency)
+        else:
+            original_active = currency.is_active
+            currency.is_active = False
+
+        db.session.commit()
+
+        try:
+            response = self.client.get(
+                "/api/v1/auth/currencies",
+                headers=self.headers,
+            )
+
+            self.assertEqual(response.status_code, 200, response.json)
+            codes = [
+                item["code"]
+                for item in response.json["currencies"]
+            ]
+            self.assertEqual(codes, ["KES"])
+            self.assertNotIn("XXX", codes)
+        finally:
+            if created_currency:
+                db.session.delete(currency)
+            else:
+                currency.is_active = original_active
+
+            db.session.commit()
+
+    def test_profile_update_changes_details_and_records_audit(self):
+        profile = UserProfile(
+            user_id=self.user.id,
+            first_name="Henry",
+            last_name="Mushiyu",
+            timezone="Africa/Nairobi",
+            preferred_currency="KES",
+        )
+        db.session.add(profile)
+        self.user.phone = "+254700000001"
+        self.user.phone_verified = True
+        db.session.commit()
+
+        response = self.client.patch(
+            "/api/v1/auth/profile",
+            headers=self.headers,
+            json={
+                "first_name": "Henry James",
+                "last_name": "Mushiyu",
+                "phone": "+254712345678",
+                "preferred_currency": "KES",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["profile"]["first_name"], "Henry James")
+        self.assertEqual(response.json["user"]["phone"], "+254712345678")
+        self.assertFalse(response.json["user"]["phone_verified"])
+
+        audit = AuditLog.query.filter_by(
+            user_id=self.user.id,
+            action="profile_updated",
+        ).one()
+
+        self.assertIn("first_name", audit.details["changed_fields"])
+        self.assertIn("phone", audit.details["changed_fields"])
+        self.assertTrue(audit.details["phone_verification_reset"])
+
+    def test_profile_update_rejects_blank_name(self):
+        db.session.add(UserProfile(
+            user_id=self.user.id,
+            first_name="Henry",
+            last_name="Mushiyu",
+            timezone="Africa/Nairobi",
+            preferred_currency="KES",
+        ))
+        db.session.commit()
+
+        response = self.client.patch(
+            "/api/v1/auth/profile",
+            headers=self.headers,
+            json={"first_name": "   "},
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_profile_update_rejects_inactive_currency(self):
+        db.session.add(UserProfile(
+            user_id=self.user.id,
+            first_name="Henry",
+            last_name="Mushiyu",
+            timezone="Africa/Nairobi",
+            preferred_currency="KES",
+        ))
+
+        currency = Currency.query.filter_by(code="XXX").first()
+        created_currency = currency is None
+        original_active = None
+
+        if currency is None:
+            currency = Currency(
+                code="XXX",
+                name="Inactive Currency",
+                minor_unit=2,
+                is_active=False,
+            )
+            db.session.add(currency)
+        else:
+            original_active = currency.is_active
+            currency.is_active = False
+
+        db.session.commit()
+
+        try:
+            response = self.client.patch(
+                "/api/v1/auth/profile",
+                headers=self.headers,
+                json={"preferred_currency": "XXX"},
+            )
+
+            self.assertEqual(response.status_code, 400)
+        finally:
+            if created_currency:
+                db.session.delete(currency)
+            else:
+                currency.is_active = original_active
+
+            db.session.commit()
 
     def test_business_workspace_registration_creates_complete_workspace(self):
         payload = {
@@ -489,6 +1321,7 @@ class PesaPilotTestCase(unittest.TestCase):
     def platform_application_payload(self, product, **overrides):
         payload = {
             "product_id": str(product.id),
+            "customer_financial_account_id": str(self.source_account.id),
             "requested_principal_minor": 100000,
             "term_count": 6,
             "purpose": "Business stock",
@@ -8055,6 +8888,237 @@ class PesaPilotTestCase(unittest.TestCase):
             ).count(),
             0,
         )
+
+    def _set_test_password(self, password="CurrentTestPassword123"):
+        self.user.password_hash = generate_password_hash(password)
+        db.session.commit()
+        return password
+
+    def test_change_password_success_revokes_all_sessions(self):
+        current_password = self._set_test_password()
+        _, access_token, _ = self._create_session_tokens()
+        _, other_access_token, _ = self._create_session_tokens()
+
+        response = self.client.post(
+            "/api/v1/auth/change-password",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={
+                "current_password": current_password,
+                "new_password": "NewSecurePassword456",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(check_password_hash(
+            self.user.password_hash, "NewSecurePassword456"
+        ))
+
+        active_tokens = db.session.query(RefreshToken).filter(
+            RefreshToken.user_id == self.user.id,
+            RefreshToken.revoked_at.is_(None),
+        ).count()
+        self.assertEqual(active_tokens, 0)
+
+        for token in (access_token, other_access_token):
+            protected = self.client.get(
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            self.assertEqual(protected.status_code, 401)
+
+        audit = AuditLog.query.filter_by(
+            user_id=self.user.id,
+            action="password_changed",
+        ).first()
+        self.assertIsNotNone(audit)
+
+    def test_change_password_rejects_incorrect_current_password(self):
+        self._set_test_password()
+
+        response = self.client.post(
+            "/api/v1/auth/change-password",
+            headers=self.headers,
+            json={
+                "current_password": "WrongCurrentPassword123",
+                "new_password": "NewSecurePassword456",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertTrue(check_password_hash(
+            self.user.password_hash, "CurrentTestPassword123"
+        ))
+
+    def test_change_password_enforces_existing_length_policy(self):
+        current_password = self._set_test_password()
+
+        for new_password in ("TooShort1", "N" * 129):
+            response = self.client.post(
+                "/api/v1/auth/change-password",
+                headers=self.headers,
+                json={
+                    "current_password": current_password,
+                    "new_password": new_password,
+                },
+            )
+            self.assertEqual(response.status_code, 400, response.json)
+
+        self.assertTrue(check_password_hash(
+            self.user.password_hash, current_password
+        ))
+
+    def test_change_password_rejects_reusing_current_password(self):
+        current_password = self._set_test_password()
+
+        response = self.client.post(
+            "/api/v1/auth/change-password",
+            headers=self.headers,
+            json={
+                "current_password": current_password,
+                "new_password": current_password,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertTrue(check_password_hash(
+            self.user.password_hash, current_password
+        ))
+
+    def _create_session_tokens(self, session_id=None):
+        session_id = session_id or uuid4()
+        claims = {"sid": str(session_id)}
+
+        access_token = create_access_token(
+            identity=str(self.user.id),
+            additional_claims=claims,
+        )
+        refresh_token = create_refresh_token(
+            identity=str(self.user.id),
+            additional_claims=claims,
+        )
+
+        now = datetime.now(timezone.utc)
+        db.session.add(RefreshToken(
+            user_id=self.user.id,
+            token_hash=hashlib.sha256(
+                refresh_token.encode("utf-8")
+            ).hexdigest(),
+            session_id=session_id,
+            user_agent="PesaPilot test device",
+            ip_address="127.0.0.1",
+            expires_at=now + timedelta(days=30),
+        ))
+        db.session.commit()
+
+        return session_id, access_token, refresh_token
+
+    def test_active_sessions_lists_current_session(self):
+        session_id, access_token, _ = self._create_session_tokens()
+
+        response = self.client.get(
+            "/api/v1/auth/sessions",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["count"], 1)
+        self.assertEqual(
+            response.json["sessions"][0]["session_id"],
+            str(session_id),
+        )
+        self.assertTrue(response.json["sessions"][0]["is_current"])
+
+    def test_revoking_session_invalidates_its_access_token(self):
+        _, current_access_token, _ = self._create_session_tokens()
+        session_id, target_access_token, _ = self._create_session_tokens()
+
+        response = self.client.delete(
+            f"/api/v1/auth/sessions/{session_id}",
+            headers={
+                "Authorization": f"Bearer {current_access_token}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+
+        protected_response = self.client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {target_access_token}"},
+        )
+        self.assertEqual(protected_response.status_code, 401)
+
+    def test_revoke_others_preserves_current_session(self):
+        current_id, current_access, _ = self._create_session_tokens()
+        other_id, other_access, _ = self._create_session_tokens()
+
+        response = self.client.post(
+            "/api/v1/auth/sessions/revoke-others",
+            headers={"Authorization": f"Bearer {current_access}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+
+        current_response = self.client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {current_access}"},
+        )
+        other_response = self.client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {other_access}"},
+        )
+
+        self.assertEqual(current_response.status_code, 200)
+        self.assertEqual(other_response.status_code, 401)
+
+        sessions_response = self.client.get(
+            "/api/v1/auth/sessions",
+            headers={"Authorization": f"Bearer {current_access}"},
+        )
+        self.assertEqual(sessions_response.status_code, 200)
+        self.assertEqual(
+            [item["session_id"] for item in sessions_response.json["sessions"]],
+            [str(current_id)],
+        )
+
+    def test_logout_revokes_entire_current_session(self):
+        session_id, access_token, refresh_token = self._create_session_tokens()
+
+        # Add a second refresh-token record for the same session,
+        # representing a previous token created during rotation.
+        second_raw_token = create_refresh_token(
+            identity=str(self.user.id),
+            additional_claims={"sid": str(session_id)},
+        )
+        now = datetime.now(timezone.utc)
+        db.session.add(RefreshToken(
+            user_id=self.user.id,
+            token_hash=hashlib.sha256(
+                second_raw_token.encode("utf-8")
+            ).hexdigest(),
+            session_id=session_id,
+            user_agent="PesaPilot test device",
+            ip_address="127.0.0.1",
+            expires_at=now + timedelta(days=30),
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/v1/auth/logout",
+            headers={"Authorization": f"Bearer {refresh_token}"},
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+
+        remaining_active = db.session.query(RefreshToken).filter(
+            RefreshToken.session_id == session_id,
+            RefreshToken.revoked_at.is_(None),
+        ).count()
+        self.assertEqual(remaining_active, 0)
+
+        protected_response = self.client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        self.assertEqual(protected_response.status_code, 401)
 
 
 class AIManagerRulesEngineTestCase(unittest.TestCase):

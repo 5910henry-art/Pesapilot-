@@ -89,8 +89,11 @@ export default function Savings() {
   const { accounts, balances, refreshAccounts } = useAccounts();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [goalMessage, setGoalMessage] = useState(null);
+  const [accountMessage, setAccountMessage] = useState(null);
+  const [transferMessage, setTransferMessage] = useState(null);
+  const [goalNotices, setGoalNotices] = useState({});
 
   const [showCreate, setShowCreate] = useState(false);
   const [goalName, setGoalName] = useState("");
@@ -118,13 +121,13 @@ export default function Savings() {
     if (quiet) setRefreshing(true);
     else setLoading(true);
 
-    setError("");
+    setLoadError("");
 
     try {
       const goalData = await financeApi.listSavingsGoals(workspaceId);
       setGoals(goalData.goals || []);
     } catch (err) {
-      setError(err.message || "Savings information could not be loaded.");
+      setLoadError(err.message || "Savings information could not be loaded.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -201,12 +204,11 @@ export default function Savings() {
     const accountName = newSavingsAccountName.trim();
 
     if (!accountName) {
-      setError("Enter a name for your Savings account.");
+      setAccountMessage({ type: "error", text: "Enter a name for your Savings account." });
       return;
     }
 
-    setError("");
-    setNotice("");
+    setAccountMessage(null);
     setCreatingSavingsAccount(true);
 
     try {
@@ -222,10 +224,10 @@ export default function Savings() {
       }
 
       setSelectedSavingsAccount(result.account.id);
-      setNotice("Savings account created. You can now create your goal.");
+      setAccountMessage({ type: "success", text: "Savings account created. You can now create your goal." });
       await Promise.all([loadData(true), refreshAccounts()]);
     } catch (err) {
-      setError(err.message || "Could not create the Savings account.");
+      setAccountMessage({ type: "error", text: err.message || "Could not create the Savings account." });
     } finally {
       setCreatingSavingsAccount(false);
     }
@@ -233,11 +235,10 @@ export default function Savings() {
 
   async function handleCreate(event) {
     event.preventDefault();
-    setError("");
-    setNotice("");
+    setGoalMessage(null);
 
     if (!selectedSavingsAccount) {
-      setError("Select or create a Savings account before creating this goal.");
+      setGoalMessage({ type: "error", text: "Select or create a Savings account before creating this goal." });
       return;
     }
 
@@ -260,12 +261,11 @@ export default function Savings() {
       setDescription("");
       setTargetAmount("");
       setTargetDate("");
-      setShowCreate(false);
-      setNotice("Savings goal created successfully.");
+      setGoalMessage({ type: "success", text: "Savings goal created successfully." });
 
       await loadData(true);
     } catch (err) {
-      setError(err.message || "Could not create the savings goal.");
+      setGoalMessage({ type: "error", text: err.message || "Could not create the savings goal." });
     } finally {
       setCreating(false);
     }
@@ -275,20 +275,18 @@ export default function Savings() {
     setTransfer({ goal, type });
     setTransferAmount("");
     setTransferAccount(eligibleAccounts[0]?.id || "");
-    setError("");
-    setNotice("");
+    setTransferMessage(null);
   }
 
   async function handleTransfer(event) {
     event.preventDefault();
 
     if (!transfer || !transferAccount) {
-      setError("Choose an account first.");
+      setTransferMessage({ type: "error", text: "Choose an account first." });
       return;
     }
 
-    setError("");
-    setNotice("");
+    setTransferMessage(null);
 
     try {
       const amountMinor = toMinorUnits(transferAmount, currency);
@@ -306,17 +304,18 @@ export default function Savings() {
         await financeApi.withdrawFromSavings(transfer.goal.id, payload);
       }
 
+      setGoalNotices((current) => ({
+        ...current,
+        [transfer.goal.id]: transfer.type === "contribution"
+          ? "Contribution recorded successfully."
+          : "Withdrawal recorded successfully.",
+      }));
       setTransfer(null);
       setTransferAmount("");
-      setNotice(
-        transfer.type === "contribution"
-          ? "Contribution recorded successfully."
-          : "Withdrawal recorded successfully."
-      );
 
       await Promise.all([loadData(true), refreshAccounts()]);
     } catch (err) {
-      setError(err.message || "The savings transfer could not be completed.");
+      setTransferMessage({ type: "error", text: err.message || "The savings transfer could not be completed." });
     } finally {
       setTransferring(false);
     }
@@ -358,8 +357,8 @@ export default function Savings() {
             type="button"
             className="savings-primary-button"
             onClick={() => {
-              setError("");
-              setNotice("");
+              setGoalMessage(null);
+              setAccountMessage(null);
               setShowCreate(true);
             }}
           >
@@ -369,23 +368,10 @@ export default function Savings() {
         </div>
       </div>
 
-      {error && (
-        <div className="savings-alert savings-alert-error">
+      {loadError && (
+        <div className="savings-alert savings-alert-error" role="alert">
           <AlertCircle size={18} />
-          <span>{error}</span>
-          <button type="button" onClick={() => setError("")}>
-            <X size={16} />
-          </button>
-        </div>
-      )}
-
-      {notice && (
-        <div className="savings-alert savings-alert-success">
-          <CheckCircle2 size={18} />
-          <span>{notice}</span>
-          <button type="button" onClick={() => setNotice("")}>
-            <X size={16} />
-          </button>
+          <span>{loadError}</span>
         </div>
       )}
 
@@ -569,6 +555,12 @@ export default function Savings() {
                     Withdraw
                   </button>
                 </div>
+                {goalNotices[goal.id] && (
+                  <div className="savings-alert savings-alert-success" role="status">
+                    <CheckCircle2 size={18} />
+                    <span>{goalNotices[goal.id]}</span>
+                  </div>
+                )}
               </article>
             );
           })}
@@ -653,6 +645,12 @@ export default function Savings() {
                       ? "Creating account..."
                       : "Create Savings account"}
                   </button>
+                  {accountMessage && (
+                    <div className={`savings-alert ${accountMessage.type === "error" ? "savings-alert-error" : "savings-alert-success"}`} role={accountMessage.type === "error" ? "alert" : "status"}>
+                      {accountMessage.type === "error" ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
+                      <span>{accountMessage.text}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -700,6 +698,12 @@ export default function Savings() {
                 />
               </label>
 
+              {goalMessage && (
+                <div className={`savings-alert ${goalMessage.type === "error" ? "savings-alert-error" : "savings-alert-success"}`} role={goalMessage.type === "error" ? "alert" : "status"}>
+                  {goalMessage.type === "error" ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
+                  <span>{goalMessage.text}</span>
+                </div>
+              )}
               <div className="savings-modal-actions">
                 <button
                   type="button"
@@ -781,6 +785,12 @@ export default function Savings() {
                   : "The amount will be transferred from this savings goal into your selected account."}
               </div>
 
+              {transferMessage && (
+                <div className="savings-alert savings-alert-error" role="alert">
+                  <AlertCircle size={18} />
+                  <span>{transferMessage.text}</span>
+                </div>
+              )}
               <div className="savings-modal-actions">
                 <button
                   type="button"

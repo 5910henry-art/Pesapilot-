@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKey,
     ForeignKeyConstraint,
     Index,
     String,
@@ -64,9 +65,9 @@ class LoanDisbursement(db.Model):
         nullable=False,
     )
 
-    recorded_by: Mapped[uuid.UUID] = mapped_column(
-        db.Uuid(as_uuid=True),
-        nullable=False,
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     notes: Mapped[str | None] = mapped_column(
@@ -96,11 +97,6 @@ class LoanDisbursement(db.Model):
             ["workspace_id", "journal_entry_id"],
             ["journal_entries.workspace_id", "journal_entries.id"],
             name="fk_disbursement_workspace_journal",
-        ),
-        ForeignKeyConstraint(
-            ["workspace_id", "recorded_by"],
-            ["workspace_members.workspace_id", "workspace_members.user_id"],
-            name="fk_disbursement_workspace_recorder",
         ),
         UniqueConstraint(
             "workspace_id",

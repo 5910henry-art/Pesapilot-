@@ -27,6 +27,7 @@ export function AccountsProvider({ children }) {
 
   const cacheRef = useRef(new Map());
   const requestsRef = useRef(new Map());
+  const cacheGenerationRef = useRef(0);
   const currentWorkspaceRef = useRef(workspaceId);
 
   currentWorkspaceRef.current = workspaceId;
@@ -69,6 +70,7 @@ export function AccountsProvider({ children }) {
       error: "",
     }));
 
+    const requestGeneration = cacheGenerationRef.current;
     const request = Promise.all([
       financeApi.listAccounts(workspaceId),
       financeApi.getBalances(workspaceId),
@@ -78,6 +80,10 @@ export function AccountsProvider({ children }) {
           accounts: accountData.accounts || [],
           balances: balanceData.accounts || [],
         };
+
+        if (requestGeneration !== cacheGenerationRef.current) {
+          return result;
+        }
 
         cacheRef.current.set(workspaceId, result);
 
@@ -93,7 +99,10 @@ export function AccountsProvider({ children }) {
         return result;
       })
       .catch((error) => {
-        if (currentWorkspaceRef.current === workspaceId) {
+        if (
+          requestGeneration === cacheGenerationRef.current &&
+          currentWorkspaceRef.current === workspaceId
+        ) {
           setData((previous) => ({
             ...previous,
             workspaceId,
@@ -105,7 +114,9 @@ export function AccountsProvider({ children }) {
         throw error;
       })
       .finally(() => {
-        requestsRef.current.delete(workspaceId);
+        if (requestsRef.current.get(workspaceId) === request) {
+          requestsRef.current.delete(workspaceId);
+        }
       });
 
     requestsRef.current.set(workspaceId, request);
@@ -120,6 +131,22 @@ export function AccountsProvider({ children }) {
   const refreshAccounts = useCallback(() => {
     return loadAccounts(true);
   }, [loadAccounts]);
+
+  const clearAccountsCache = useCallback(() => {
+    cacheGenerationRef.current += 1;
+    cacheRef.current.clear();
+    requestsRef.current.clear();
+
+    setData({
+      workspaceId: workspaceId || null,
+      accounts: [],
+      balances: [],
+      loading: Boolean(workspaceId),
+      error: "",
+    });
+
+    return workspaceId ? loadAccounts(true) : Promise.resolve(null);
+  }, [loadAccounts, workspaceId]);
 
   const currentData = data.workspaceId === workspaceId
     ? data
@@ -136,7 +163,8 @@ export function AccountsProvider({ children }) {
     loading: currentData.loading,
     error: currentData.error,
     refreshAccounts,
-  }), [currentData, refreshAccounts]);
+    clearAccountsCache,
+  }), [currentData, refreshAccounts, clearAccountsCache]);
 
   return (
     <AccountsContext.Provider value={value}>

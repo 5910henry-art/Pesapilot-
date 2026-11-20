@@ -205,12 +205,18 @@ def list_owner_platform_collections():
                 PlatformLoanPayment,
                 PlatformLoan,
                 User.email,
+                FinancialAccount.name,
             )
             .join(
                 PlatformLoan,
                 PlatformLoan.id == PlatformLoanPayment.loan_id,
             )
             .join(User, User.id == PlatformLoan.customer_id)
+            .outerjoin(
+                FinancialAccount,
+                FinancialAccount.id
+                == PlatformLoanPayment.borrower_financial_account_id,
+            )
             .filter(
                 PlatformLoanPayment.status == "pending",
                 PlatformLoan.status.in_(["active", "overdue"]),
@@ -274,7 +280,7 @@ def list_owner_platform_collections():
 
         pending_payments = []
 
-        for payment, loan, customer_email in pending_rows:
+        for payment, loan, customer_email, borrower_account_name in pending_rows:
             pending_payments.append({
                 "id": str(payment.id),
                 "loan_id": str(loan.id),
@@ -285,6 +291,7 @@ def list_owner_platform_collections():
                 "payment_date": payment.payment_date.isoformat(),
                 "payment_method": payment.payment_method,
                 "reference": payment.reference,
+                "borrower_account_name": borrower_account_name,
                 "recorded_at": (
                     payment.created_at.isoformat()
                     if payment.created_at else None
@@ -2487,6 +2494,17 @@ def submit_platform_loan_repayment(loan_id):
             "message": "Invalid loan ID.",
         }), 400
 
+    loan = PlatformLoan.query.filter_by(
+        id=loan_uuid,
+        customer_id=customer_id,
+    ).first()
+
+    if loan is None:
+        return jsonify({
+            "success": False,
+            "message": "Platform loan not found.",
+        }), 404
+
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({
@@ -2497,6 +2515,22 @@ def submit_platform_loan_repayment(loan_id):
     amount_minor = data.get("amount_minor")
     payment_method = data.get("payment_method")
     raw_date = data.get("payment_date")
+    raw_reference = data.get("reference")
+    raw_borrower_account_id = data.get("borrower_financial_account_id")
+
+    if not isinstance(raw_reference, str) or not raw_reference.strip():
+        return jsonify({
+            "success": False,
+            "message": "Transaction reference is required.",
+        }), 400
+
+    reference = raw_reference.strip()
+
+    if len(reference) > 100:
+        return jsonify({
+            "success": False,
+            "message": "Transaction reference cannot exceed 100 characters.",
+        }), 400
 
     if type(amount_minor) is not int or amount_minor <= 0:
         return jsonify({
@@ -2527,16 +2561,43 @@ def submit_platform_loan_repayment(loan_id):
             "message": "Payment method must be cash, bank, mobile_money, or other.",
         }), 400
 
-    loan = PlatformLoan.query.filter_by(
-        id=loan_uuid,
-        customer_id=customer_id,
-    ).first()
+    borrower_financial_account_id = None
 
-    if loan is None:
-        return jsonify({
-            "success": False,
-            "message": "Platform loan not found.",
-        }), 404
+    if raw_borrower_account_id not in (None, ""):
+        try:
+            borrower_financial_account_id = UUID(
+                str(raw_borrower_account_id)
+            )
+        except (ValueError, TypeError, AttributeError):
+            return jsonify({
+                "success": False,
+                "message": "Invalid borrower financial account ID.",
+            }), 400
+
+        borrower_account = (
+            FinancialAccount.query
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id
+                == FinancialAccount.workspace_id,
+            )
+            .filter(
+                FinancialAccount.id == borrower_financial_account_id,
+                WorkspaceMember.user_id == customer_id,
+                FinancialAccount.is_active.is_(True),
+                FinancialAccount.currency_code == loan.currency_code,
+            )
+            .first()
+        )
+
+        if borrower_account is None:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Choose an active account in your workspace with "
+                    "the loan currency, or select Other (not listed)."
+                ),
+            }), 400
 
     try:
         payment = record_platform_loan_payment(
@@ -2545,8 +2606,9 @@ def submit_platform_loan_repayment(loan_id):
             payment_date=payment_date,
             payment_method=payment_method,
             recorded_by=customer_id,
-            reference=data.get("reference"),
+            reference=reference,
             notes=data.get("notes"),
+            borrower_financial_account_id=borrower_financial_account_id,
         )
         if payment is None:
             db.session.rollback()
@@ -2567,6 +2629,10 @@ def submit_platform_loan_repayment(loan_id):
                 "amount_minor": payment.amount_minor,
                 "payment_date": payment.payment_date.isoformat(),
                 "payment_method": payment.payment_method,
+                "borrower_financial_account_id": (
+                    str(payment.borrower_financial_account_id)
+                    if payment.borrower_financial_account_id else None
+                ),
                 "reference": payment.reference,
                 "status": payment.status,
                 "notes": payment.notes,

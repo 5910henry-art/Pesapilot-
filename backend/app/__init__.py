@@ -41,6 +41,46 @@ def create_app(test_config=None):
     migrate.init_app(app, db)
     jwt.init_app(app)
 
+    from uuid import UUID
+    from datetime import datetime, timezone
+    from .models import User, RefreshToken
+
+    @jwt.token_in_blocklist_loader
+    def is_user_token_revoked(jwt_header, jwt_payload):
+        identity = jwt_payload.get("sub")
+
+        try:
+            user_id = UUID(str(identity))
+        except (ValueError, TypeError, AttributeError):
+            return True
+
+        user = db.session.get(User, user_id)
+
+        if user is None or not user.is_active:
+            return True
+
+        # Legacy tokens without a session claim remain valid
+        # until their normal expiration.
+        session_claim = jwt_payload.get("sid")
+        if session_claim is None:
+            return False
+
+        try:
+            session_id = UUID(str(session_claim))
+        except (ValueError, TypeError, AttributeError):
+            return True
+
+        now = datetime.now(timezone.utc)
+
+        active_session = db.session.query(RefreshToken.id).filter(
+            RefreshToken.user_id == user_id,
+            RefreshToken.session_id == session_id,
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > now,
+        ).first()
+
+        return active_session is None
+
     app.register_blueprint(auth_bp)
     app.register_blueprint(finance_bp)
     app.register_blueprint(budgets_bp)

@@ -469,7 +469,7 @@ class JournalEntry(db.Model):
     )
 
     created_by: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
@@ -610,13 +610,13 @@ class AuditLog(db.Model):
     )
 
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("workspaces.id"),
+        ForeignKey("workspaces.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
 
     user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id"),
+        ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
@@ -671,6 +671,22 @@ class RefreshToken(db.Model):
         String(255),
         unique=True,
         nullable=False,
+    )
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
+
+    user_agent: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+    )
+
+    ip_address: Mapped[str | None] = mapped_column(
+        String(45),
+        nullable=True,
     )
 
     expires_at: Mapped[datetime] = mapped_column(
@@ -794,9 +810,9 @@ class Budget(db.Model):
         nullable=False,
     )
 
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"),
-        nullable=False,
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -880,9 +896,9 @@ class SavingsGoal(db.Model):
         nullable=False,
     )
 
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"),
-        nullable=False,
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
