@@ -46,6 +46,9 @@ from .platform_loan_records import (
     PlatformLoanDisbursement,
     PlatformLoanPayment,
     PlatformLoanPaymentAllocation,
+    PlatformLoanLateFee,
+    PlatformLoanLateFeePayment,
+    PlatformLoanLateFeePaymentAllocation,
 )
 
 from .platform_investors import (

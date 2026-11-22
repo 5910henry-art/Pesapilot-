@@ -534,6 +534,12 @@ export const platformLendingApi = {
   listProducts() {
     return apiRequest("/platform/products");
   },
+  checkEligibility(payload) {
+    return apiRequest("/platform/eligibility", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
   listReceivingAccounts(productId) {
     return apiRequest(`/platform/receiving-accounts/${encodeURIComponent(productId)}`);
   },
@@ -741,6 +747,27 @@ export const platformOwnerApi = {
   reversePayment(paymentId, payload) {
     return apiRequest(
       `/platform/owner/collections/payments/${encodeURIComponent(paymentId)}/reverse`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  confirmLateFeePayment(paymentId, payload) {
+    return apiRequest(
+      `/platform/owner/collections/late-fee-payments/${encodeURIComponent(paymentId)}/confirm`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  rejectLateFeePayment(paymentId, payload) {
+    return apiRequest(
+      `/platform/owner/collections/late-fee-payments/${encodeURIComponent(paymentId)}/reject`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  reverseLateFeePayment(paymentId, payload) {
+    return apiRequest(
+      `/platform/owner/collections/late-fee-payments/${encodeURIComponent(paymentId)}/reverse`,
       { method: "POST", body: JSON.stringify(payload) }
     );
   },

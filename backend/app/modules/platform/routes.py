@@ -19,8 +19,10 @@ from app.models import (
     PlatformLoanApplication,
     PlatformLoanProduct,
     PlatformLoanInstallment,
+    PlatformLoanLateFee,
     PlatformLoanDisbursement,
     PlatformLoanPayment,
+    PlatformLoanLateFeePayment,
     PlatformInvestor,
     PlatformInvestorContribution,
     PlatformInvestorWithdrawal,
@@ -50,6 +52,10 @@ from app.services.platform_lending import (
     reverse_platform_investor_contribution,
     reverse_platform_investor_withdrawal,
     record_platform_loan_payment,
+    record_platform_late_fee_payment,
+    confirm_platform_late_fee_payment,
+    reject_platform_late_fee_payment,
+    reverse_platform_late_fee_payment,
 )
 
 from . import platform_bp
@@ -243,6 +249,34 @@ def list_owner_platform_collections():
             )
         )
 
+        pending_fee_query = (
+            db.session.query(
+                PlatformLoanLateFeePayment,
+                PlatformLoan,
+                User.email,
+            )
+            .join(
+                PlatformLoan,
+                PlatformLoan.id == PlatformLoanLateFeePayment.loan_id,
+            )
+            .join(User, User.id == PlatformLoan.customer_id)
+            .filter(PlatformLoanLateFeePayment.status == "pending")
+        )
+
+        confirmed_fee_query = (
+            db.session.query(
+                PlatformLoanLateFeePayment,
+                PlatformLoan,
+                User.email,
+            )
+            .join(
+                PlatformLoan,
+                PlatformLoan.id == PlatformLoanLateFeePayment.loan_id,
+            )
+            .join(User, User.id == PlatformLoan.customer_id)
+            .filter(PlatformLoanLateFeePayment.status == "confirmed")
+        )
+
         if currency_code:
             pending_query = pending_query.filter(
                 PlatformLoanPayment.currency_code == currency_code
@@ -250,9 +284,17 @@ def list_owner_platform_collections():
             overdue_query = overdue_query.filter(
                 PlatformLoan.currency_code == currency_code
             )
+            pending_fee_query = pending_fee_query.filter(
+                PlatformLoanLateFeePayment.currency_code == currency_code
+            )
+            confirmed_fee_query = confirmed_fee_query.filter(
+                PlatformLoanLateFeePayment.currency_code == currency_code
+            )
 
         pending_total = pending_query.count()
         overdue_total = overdue_query.count()
+        pending_fee_total = pending_fee_query.count()
+        confirmed_fee_total = confirmed_fee_query.count()
 
         pending_rows = (
             pending_query
@@ -278,6 +320,42 @@ def list_owner_platform_collections():
             .all()
         )
 
+        pending_fee_rows = (
+            pending_fee_query
+            .order_by(
+                PlatformLoanLateFeePayment.payment_date.asc(),
+                PlatformLoanLateFeePayment.created_at.asc(),
+                PlatformLoanLateFeePayment.id.asc(),
+            )
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+
+        confirmed_fee_rows = (
+            confirmed_fee_query
+            .order_by(
+                PlatformLoanLateFeePayment.confirmed_at.desc(),
+                PlatformLoanLateFeePayment.created_at.desc(),
+                PlatformLoanLateFeePayment.id.asc(),
+            )
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+
+        installment_ids = [row[0].id for row in overdue_rows]
+        fee_by_installment = {}
+        if installment_ids:
+            fee_records = (
+                PlatformLoanLateFee.query
+                .filter(PlatformLoanLateFee.installment_id.in_(installment_ids))
+                .all()
+            )
+            fee_by_installment = {
+                fee.installment_id: fee for fee in fee_records
+            }
+
         pending_payments = []
 
         for payment, loan, customer_email, borrower_account_name in pending_rows:
@@ -298,9 +376,48 @@ def list_owner_platform_collections():
                 ),
             })
 
+        pending_late_fee_payments = []
+
+        for payment, loan, customer_email in pending_fee_rows:
+            pending_late_fee_payments.append({
+                "id": str(payment.id),
+                "loan_id": str(loan.id),
+                "customer_id": str(loan.customer_id),
+                "customer_email": customer_email,
+                "currency_code": payment.currency_code,
+                "amount_minor": payment.amount_minor,
+                "payment_date": payment.payment_date.isoformat(),
+                "payment_method": payment.payment_method,
+                "reference": payment.reference,
+                "recorded_at": (
+                    payment.created_at.isoformat()
+                    if payment.created_at else None
+                ),
+            })
+
+        confirmed_late_fee_payments = []
+
+        for payment, loan, customer_email in confirmed_fee_rows:
+            confirmed_late_fee_payments.append({
+                "id": str(payment.id),
+                "loan_id": str(loan.id),
+                "customer_id": str(loan.customer_id),
+                "customer_email": customer_email,
+                "currency_code": payment.currency_code,
+                "amount_minor": payment.amount_minor,
+                "payment_date": payment.payment_date.isoformat(),
+                "payment_method": payment.payment_method,
+                "reference": payment.reference,
+                "confirmed_at": (
+                    payment.confirmed_at.isoformat()
+                    if payment.confirmed_at else None
+                ),
+            })
+
         overdue_installments = []
 
         for installment, loan, customer_email in overdue_rows:
+            fee = fee_by_installment.get(installment.id)
             overdue_installments.append({
                 "id": str(installment.id),
                 "loan_id": str(loan.id),
@@ -314,12 +431,21 @@ def list_owner_platform_collections():
                 "remaining_minor": (
                     installment.amount_minor - installment.paid_minor
                 ),
+                "days_overdue": (today - installment.due_date).days,
+                "late_fee_amount_minor": fee.amount_minor if fee else 0,
+                "late_fee_paid_minor": fee.paid_minor if fee else 0,
+                "late_fee_outstanding_minor": (
+                    fee.amount_minor - fee.paid_minor if fee else 0
+                ),
+                "late_fee_status": fee.status if fee else None,
             })
 
         return jsonify({
             "success": True,
             "as_of_date": today.isoformat(),
             "pending_payments": pending_payments,
+            "pending_late_fee_payments": pending_late_fee_payments,
+            "confirmed_late_fee_payments": confirmed_late_fee_payments,
             "overdue_installments": overdue_installments,
             "pagination": {
                 "page": page,
@@ -327,6 +453,14 @@ def list_owner_platform_collections():
                 "pending_payments_total": pending_total,
                 "pending_payments_total_pages": (
                     pending_total + per_page - 1
+                ) // per_page,
+                "pending_late_fee_payments_total": pending_fee_total,
+                "pending_late_fee_payments_total_pages": (
+                    pending_fee_total + per_page - 1
+                ) // per_page,
+                "confirmed_late_fee_payments_total": confirmed_fee_total,
+                "confirmed_late_fee_payments_total_pages": (
+                    confirmed_fee_total + per_page - 1
                 ) // per_page,
                 "overdue_installments_total": overdue_total,
                 "overdue_installments_total_pages": (
@@ -2230,6 +2364,189 @@ def reverse_owner_platform_loan_payment(payment_id):
         }), 500
 
 
+
+@platform_bp.post("/loans/<loan_id>/late-fee-payments")
+@jwt_required()
+def submit_platform_late_fee_payment_route(loan_id):
+    customer_id = _customer_id()
+    try:
+        loan_uuid = UUID(str(loan_id))
+        loan = PlatformLoan.query.filter_by(
+            id=loan_uuid, customer_id=customer_id
+        ).first()
+        if loan is None:
+            return jsonify({"success": False, "message": "Loan not found"}), 404
+
+        data = request.get_json(silent=True) or {}
+        reference = str(data.get("reference") or "").strip()
+        if not reference:
+            return jsonify({"success": False, "message": "Transaction reference is required"}), 400
+
+        amount = int(data.get("amount_minor", 0))
+        payment_date = date.fromisoformat(str(data.get("payment_date") or ""))
+        payment_method = str(data.get("payment_method") or "").strip().lower()
+
+        payment = record_platform_late_fee_payment(
+            loan_id=loan_uuid,
+            amount_minor=amount,
+            payment_date=payment_date,
+            payment_method=payment_method,
+            recorded_by=customer_id,
+            reference=reference,
+            notes=data.get("notes"),
+        )
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "payment": {
+                "id": str(payment.id),
+                "loan_id": str(payment.loan_id),
+                "amount_minor": payment.amount_minor,
+                "payment_date": payment.payment_date.isoformat(),
+                "payment_method": payment.payment_method,
+                "reference": payment.reference,
+                "status": payment.status,
+            },
+        }), 201
+    except (ValueError, TypeError):
+        db.session.rollback()
+        return jsonify({"success": False, "message": "Invalid payment details"}), 400
+    except PlatformLendingValidationError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Late-fee payment submission failed")
+        return jsonify({"success": False, "message": "Unable to submit fee payment"}), 500
+
+
+@platform_bp.post("/owner/collections/late-fee-payments/<payment_id>/confirm")
+@platform_owner_required()
+def confirm_platform_late_fee_payment_route(payment_id):
+    try:
+        payment_uuid = UUID(str(payment_id))
+        data = request.get_json(silent=True) or {}
+        account_id = UUID(str(data.get("financial_account_id") or ""))
+        actor_id = UUID(str(get_jwt_identity()))
+
+        payment = confirm_platform_late_fee_payment(
+            payment_id=payment_uuid,
+            financial_account_id=account_id,
+            confirmed_by=actor_id,
+        )
+        if payment is None:
+            db.session.rollback()
+            return jsonify({"success": False, "message": "Fee payment not found"}), 404
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "payment": {
+                "id": str(payment.id),
+                "status": payment.status,
+                "journal_entry_id": str(payment.journal_entry_id) if payment.journal_entry_id else None,
+                "confirmed_at": payment.confirmed_at.isoformat() if payment.confirmed_at else None,
+            },
+        })
+    except (ValueError, TypeError):
+        db.session.rollback()
+        return jsonify({"success": False, "message": "Invalid payment or account ID"}), 400
+    except PlatformLendingValidationError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Late-fee payment confirmation failed")
+        return jsonify({"success": False, "message": "Unable to confirm fee payment"}), 500
+
+
+@platform_bp.post("/owner/collections/late-fee-payments/<payment_id>/reject")
+@platform_owner_required()
+def reject_platform_late_fee_payment_route(payment_id):
+    try:
+        payment_uuid = UUID(str(payment_id))
+        actor_id = UUID(str(get_jwt_identity()))
+        data = request.get_json(silent=True) or {}
+        reason = str(data.get("reason") or "").strip()
+        if not reason:
+            return jsonify({"success": False, "message": "Rejection reason is required"}), 400
+
+        payment = reject_platform_late_fee_payment(
+            payment_id=payment_uuid,
+            rejected_by=actor_id,
+            reason=reason,
+        )
+        if payment is None:
+            db.session.rollback()
+            return jsonify({"success": False, "message": "Fee payment not found"}), 404
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "payment": {"id": str(payment.id), "status": payment.status},
+        })
+    except (ValueError, TypeError):
+        db.session.rollback()
+        return jsonify({"success": False, "message": "Invalid payment ID"}), 400
+    except PlatformLendingValidationError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Late-fee payment rejection failed")
+        return jsonify({"success": False, "message": "Unable to reject fee payment"}), 500
+
+
+@platform_bp.post("/owner/collections/late-fee-payments/<payment_id>/reverse")
+@platform_owner_required()
+def reverse_platform_late_fee_payment_route(payment_id):
+    try:
+        payment_uuid = UUID(str(payment_id))
+        actor_id = UUID(str(get_jwt_identity()))
+        data = request.get_json(silent=True) or {}
+        reference = str(data.get("reference") or "").strip()
+        if not reference:
+            return jsonify({"success": False, "message": "Reversal reference is required"}), 400
+
+        transaction_date = None
+        raw_date = data.get("transaction_date")
+        if raw_date:
+            parsed = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                return jsonify({
+                    "success": False,
+                    "message": "Transaction date must include a timezone",
+                }), 400
+            transaction_date = parsed
+
+        reversal = reverse_platform_late_fee_payment(
+            payment_id=payment_uuid,
+            reversed_by=actor_id,
+            reference=reference,
+            transaction_date=transaction_date,
+        )
+        if reversal is None:
+            db.session.rollback()
+            return jsonify({"success": False, "message": "Fee payment not found"}), 404
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "reversal": {
+                "id": str(reversal.id),
+                "reference": reversal.reference,
+                "status": reversal.status,
+                "transaction_date": reversal.transaction_date.isoformat(),
+            },
+        })
+    except (ValueError, TypeError):
+        db.session.rollback()
+        return jsonify({"success": False, "message": "Invalid reversal details"}), 400
+    except PlatformLendingValidationError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Late-fee payment reversal failed")
+        return jsonify({"success": False, "message": "Unable to reverse fee payment"}), 500
+
 def _customer_id():
     try:
         return UUID(str(get_jwt_identity()))
@@ -3375,32 +3692,70 @@ def update_owner_platform_loan_product(product_id):
         }), 500
 
 
-@platform_bp.get("/products")
+@platform_bp.post("/eligibility")
 @jwt_required()
-def list_customer_platform_loan_products():
-    """List active PesaPilot lending products available to customers."""
+def check_customer_platform_eligibility():
+    """Check verified-income eligibility after explicit customer consent."""
 
-    if _customer_id() is None:
+    customer_id = _customer_id()
+    if customer_id is None:
         return jsonify({
             "success": False,
             "message": "Invalid authentication identity.",
         }), 401
 
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get("affordability_consent") is not True:
+        return jsonify({
+            "success": False,
+            "message": "Explicit consent is required before checking verified income.",
+        }), 400
+
     try:
-        products = (
-            PlatformLoanProduct.query
-            .filter_by(is_active=True)
-            .order_by(
-                PlatformLoanProduct.currency_code.asc(),
-                PlatformLoanProduct.name.asc(),
+        personal_workspaces = (
+            Workspace.query
+            .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+            .filter(
+                WorkspaceMember.user_id == customer_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type == "personal",
             )
             .all()
         )
+        if len(personal_workspaces) != 1:
+            return jsonify({
+                "success": False,
+                "message": "A single personal workspace is required for the eligibility check.",
+            }), 409
 
-        return jsonify({
-            "success": True,
-            "count": len(products),
-            "products": [
+        workspace_id = personal_workspaces[0].id
+
+        # No declarations are used to establish eligibility. The collector
+        # reads only posted income/expense entries after this consent check.
+        report = build_affordability_evidence_report(
+            customer_id=customer_id,
+            declared_monthly_income_minor=0,
+            declared_monthly_expenses_minor=0,
+            declared_existing_monthly_repayments_minor=0,
+            consent=True,
+            workspace_id=workspace_id,
+        )
+
+        evidence = report["workspace_evidence"]
+        eligible = bool(evidence["has_sufficient_records"])
+
+        products = []
+        if eligible:
+            active_products = (
+                PlatformLoanProduct.query
+                .filter_by(is_active=True)
+                .order_by(
+                    PlatformLoanProduct.currency_code.asc(),
+                    PlatformLoanProduct.name.asc(),
+                )
+                .all()
+            )
+            products = [
                 {
                     "id": str(product.id),
                     "name": product.name,
@@ -3421,19 +3776,63 @@ def list_customer_platform_loan_products():
                     "late_payment_fee_minor": product.late_payment_fee_minor,
                     "allow_early_repayment": product.allow_early_repayment,
                 }
-                for product in products
-            ],
+                for product in active_products
+            ]
+
+        return jsonify({
+            "success": True,
+            "eligible": eligible,
+            "months_with_verified_income": (
+                evidence["months_with_verified_income"]
+            ),
+            "evidence_window_months": evidence["evidence_window_months"],
+            "evidenced_average_monthly_income_minor": (
+                evidence["evidenced_average_monthly_income_minor"]
+            ),
+            "minimum_average_monthly_income_minor": (
+                evidence["minimum_average_monthly_income_minor"]
+            ),
+            "products": products,
+            "message": (
+                "Eligibility requirements met."
+                if eligible
+                else "Your verified six-month average income does not yet meet the minimum requirement."
+            ),
         }), 200
 
+    except ValueError as exc:
+        return jsonify({
+            "success": False,
+            "message": str(exc),
+        }), 400
     except Exception:
         db.session.rollback()
         current_app.logger.exception(
-            "Customer platform loan products listing failed"
+            "Customer platform eligibility check failed"
         )
         return jsonify({
             "success": False,
-            "message": "Loan products could not be loaded.",
+            "message": "Eligibility could not be checked. Please try again later.",
         }), 500
+
+
+@platform_bp.get("/products")
+@jwt_required()
+def list_customer_platform_loan_products():
+    """Keep products hidden until the customer completes eligibility checking."""
+
+    if _customer_id() is None:
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    return jsonify({
+        "success": True,
+        "count": 0,
+        "products": [],
+        "eligibility_required": True,
+    }), 200
 
 
 @platform_bp.get("/receiving-accounts/<product_id>")
@@ -3515,6 +3914,65 @@ def submit_platform_application():
             "success": False,
             "message": "A valid JSON object is required.",
         }), 400
+
+    # A customer may have only one pending application, regardless of product.
+    pending_application = PlatformLoanApplication.query.filter_by(
+        customer_id=customer_id,
+        status="pending",
+    ).first()
+
+    if pending_application is not None:
+        return jsonify({
+            "success": False,
+            "message": (
+                "You already have a pending loan application. "
+                "Wait for it to be resolved before applying again."
+            ),
+        }), 409
+
+    # Block new applications until every existing platform loan is settled.
+    customer_loans = PlatformLoan.query.filter_by(
+        customer_id=customer_id,
+    ).all()
+
+    blocking_loan_statuses = {
+        "created", "funding", "active", "overdue", "written_off",
+    }
+
+    has_blocking_loan = any(
+        loan.status in blocking_loan_statuses
+        or loan.outstanding_principal_minor > 0
+        for loan in customer_loans
+    )
+
+    loan_ids = [loan.id for loan in customer_loans]
+    has_unsettled_installment = False
+
+    if loan_ids:
+        has_unsettled_installment = (
+            PlatformLoanInstallment.query
+            .filter(
+                PlatformLoanInstallment.loan_id.in_(loan_ids),
+                PlatformLoanInstallment.status != "waived",
+                or_(
+                    PlatformLoanInstallment.status != "paid",
+                    PlatformLoanInstallment.paid_minor
+                    < PlatformLoanInstallment.amount_minor,
+                ),
+            )
+            .first()
+            is not None
+        )
+
+    if has_blocking_loan or has_unsettled_installment:
+        return jsonify({
+            "success": False,
+            "message": (
+                "You have an existing platform loan that is not fully "
+                "settled. Clear all outstanding repayments before "
+                "submitting another loan application."
+            ),
+        }), 409
 
     # Never accept an application containing an unencrypted identity number.
     if not current_app.config.get("IDENTITY_ENCRYPTION_KEY"):
@@ -3659,22 +4117,17 @@ def submit_platform_application():
             "additional_notes", "Additional notes", 5000
         )
 
-        consent = data.get("affordability_consent", False)
-        if type(consent) is not bool:
-            raise ValueError("Affordability consent must be true or false.")
+        consent = data.get("affordability_consent")
+        if consent is not True:
+            raise ValueError(
+                "Explicit consent to check verified personal-workspace income is required."
+            )
+        if data.get("affordability_workspace_id") not in (None, ""):
+            raise ValueError(
+                "The personal workspace is resolved securely by the server."
+            )
 
         workspace_id = None
-        if consent:
-            try:
-                workspace_id = UUID(str(data.get("affordability_workspace_id")))
-            except (ValueError, TypeError, AttributeError):
-                raise ValueError(
-                    "Select the personal workspace you want to share."
-                ) from None
-        elif data.get("affordability_workspace_id") not in (None, ""):
-            raise ValueError(
-                "A workspace cannot be selected without your consent."
-            )
 
         try:
             customer_financial_account_id = UUID(
@@ -3697,6 +4150,7 @@ def submit_platform_application():
             raise ValueError(
                 "A single personal workspace is required for your receiving account."
             )
+        workspace_id = personal_workspaces[0].id
 
         receiving_account = FinancialAccount.query.filter(
             FinancialAccount.id == customer_financial_account_id,
@@ -3709,6 +4163,23 @@ def submit_platform_application():
         if receiving_account is None:
             raise ValueError(
                 "The selected receiving account is unavailable or does not match the loan currency."
+            )
+
+        evidence_report = build_affordability_evidence_report(
+            customer_id=customer_id,
+            declared_monthly_income_minor=monthly_income,
+            declared_monthly_expenses_minor=monthly_expenses,
+            declared_existing_monthly_repayments_minor=existing_repayments,
+            consent=True,
+            workspace_id=workspace_id,
+        )
+
+        if not evidence_report["workspace_evidence"]["has_sufficient_records"]:
+            raise ValueError(
+                "You are not yet eligible to apply. Your verified income must "
+                "average at least KSh 1,000 per month over the six-month "
+                "evidence period, with positive verified income in at least "
+                "one month."
             )
 
         encrypted_national_id = encrypt_national_id(national_id)
@@ -3747,15 +4218,6 @@ def submit_platform_application():
         db.session.add(details)
         db.session.flush()
 
-        evidence_report = build_affordability_evidence_report(
-            customer_id=customer_id,
-            declared_monthly_income_minor=monthly_income,
-            declared_monthly_expenses_minor=monthly_expenses,
-            declared_existing_monthly_repayments_minor=existing_repayments,
-            consent=consent,
-            workspace_id=workspace_id,
-        )
-
         assessment_date = date.today()
         maturity_date = _platform_loan_due_date(
             assessment_date,
@@ -3779,10 +4241,23 @@ def submit_platform_application():
             interest_rate_percent=product.interest_rate_percent,
         )
 
-        if (
-            estimate["estimated_affordable_principal_minor"]
-            < product.min_principal_minor
-        ):
+        affordable_principal = estimate[
+            "estimated_affordable_principal_minor"
+        ]
+        if principal > affordable_principal:
+            maximum_amount = (
+                f"{affordable_principal // 100:,}."
+                f"{affordable_principal % 100:02d}"
+            )
+            raise ValueError(
+                "The amount requested is above your assessed affordability "
+                f"for this repayment term. Based on your verified financial "
+                f"information, you can request up to "
+                f"{product.currency_code} {maximum_amount}. Reduce the "
+                "requested amount to continue."
+            )
+
+        if affordable_principal < product.min_principal_minor:
             raise ValueError(
                 "You are not qualified for this loan product at the moment. "
                 "This is based on the eligibility requirements and information "
@@ -3827,7 +4302,7 @@ def submit_platform_application():
             },
             reasons=[
                 "This assessment is advisory and requires human review.",
-                "Declared income and expenses are not independently verified.",
+                "Repayment capacity uses verified six-month average income and the higher of declared or verified average expenses.",
             ],
         )
         db.session.add(assessment)

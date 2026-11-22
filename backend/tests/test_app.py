@@ -48,6 +48,9 @@ from app.models import (
     PlatformLoanDisbursement,
     PlatformLoanPayment,
     PlatformLoanPaymentAllocation,
+    PlatformLoanLateFee,
+    PlatformLoanLateFeePayment,
+    PlatformLoanLateFeePaymentAllocation,
     PlatformInvestor,
     PlatformInvestorContribution,
     PlatformInvestorWithdrawal,
@@ -62,9 +65,15 @@ from app.services.platform_lending import (
     create_platform_loan_from_application,
     disburse_platform_loan,
     record_platform_loan_payment,
+    review_loan_application,
     confirm_platform_loan_payment,
     reject_platform_loan_payment,
     reverse_platform_loan_payment,
+    assess_overdue_platform_loan_fees,
+    record_platform_late_fee_payment,
+    confirm_platform_late_fee_payment,
+    reject_platform_late_fee_payment,
+    reverse_platform_late_fee_payment,
     record_platform_investor_contribution,
     record_platform_investor_withdrawal,
     reverse_platform_investor_contribution,
@@ -1402,10 +1411,17 @@ class PesaPilotTestCase(unittest.TestCase):
             "alternative_contact_phone": None,
             "alternative_contact_relationship": None,
             "additional_notes": None,
-            "affordability_consent": False,
+            "affordability_consent": True,
         }
         payload.update(overrides)
         return payload
+
+    def create_verified_income_evidence(
+        self, amount_minor=600000, transaction_date=None
+    ):
+        return self.create_income_entry(
+            amount_minor, transaction_date or datetime.now(timezone.utc)
+        )
 
     def create_platform_loan_product(self, **overrides):
         values = {
@@ -1576,6 +1592,39 @@ class PesaPilotTestCase(unittest.TestCase):
 
         return financial_account
 
+    def create_platform_late_fee_ledgers(self):
+        definitions = (
+            (
+                "PL-LOANS-LF-REC-KES",
+                "Platform Loan Late Fee Receivable",
+                "asset",
+                "debit",
+            ),
+            (
+                "PL-LOANS-LF-INC-KES",
+                "Platform Loan Late Fee Income",
+                "income",
+                "credit",
+            ),
+        )
+        for code, name, account_class, normal_balance in definitions:
+            ledger = PlatformLedgerAccount.query.filter_by(
+                code=code,
+                currency_code="KES",
+            ).one_or_none()
+            if ledger is None:
+                db.session.add(PlatformLedgerAccount(
+                    financial_account_id=None,
+                    code=code,
+                    name=name,
+                    account_class=account_class,
+                    normal_balance=normal_balance,
+                    currency_code="KES",
+                    is_system=True,
+                    is_active=True,
+                ))
+        db.session.flush()
+
     def create_platform_investor_with_capital(
         self, financial_account, amount_minor=150000
     ):
@@ -1648,6 +1697,32 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(loan.status, "created")
         self.assertEqual(application.status, "approved")
 
+    def test_high_risk_application_cannot_be_approved_with_owner_override(self):
+        application = self.create_approved_platform_application()
+        application.status = "pending"
+
+        assessment = PlatformLoanAffordabilityAssessment.query.filter_by(
+            application_id=application.id
+        ).one()
+        assessment.status = "high_risk"
+        db.session.flush()
+
+        with self.assertRaisesRegex(
+            PlatformLendingValidationError,
+            "High-risk loan applications cannot be approved",
+        ):
+            review_loan_application(
+                application_id=application.id,
+                reviewer_id=self.user.id,
+                decision="approved",
+                approved_principal_minor=application.requested_principal_minor,
+                affordability_override=True,
+                decision_notes="Attempted override for regression test.",
+            )
+
+        db.session.refresh(application)
+        self.assertEqual(application.status, "pending")
+
     def test_platform_loan_service_requires_affordability_assessment(self):
         application = self.create_approved_platform_application()
         assessment = PlatformLoanAffordabilityAssessment.query.filter_by(
@@ -1684,6 +1759,29 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(PlatformLoan.query.filter_by(
             application_id=application.id
         ).count(), 0)
+
+    def test_high_risk_application_cannot_be_converted_into_platform_loan(self):
+        application = self.create_approved_platform_application()
+        application.decision_notes = "Reviewer notes must not bypass high-risk block."
+
+        assessment = PlatformLoanAffordabilityAssessment.query.filter_by(
+            application_id=application.id
+        ).one()
+        assessment.status = "high_risk"
+        db.session.flush()
+
+        with self.assertRaisesRegex(
+            PlatformLendingValidationError,
+            "High-risk loan applications cannot be converted",
+        ):
+            create_platform_loan_from_application(
+                application_id=application.id
+            )
+
+        self.assertEqual(
+            PlatformLoan.query.filter_by(application_id=application.id).count(),
+            0,
+        )
 
     def test_platform_loan_service_requires_documented_exception_for_nonverified_assessment(self):
         application = self.create_approved_platform_application()
@@ -2379,36 +2477,51 @@ class PesaPilotTestCase(unittest.TestCase):
                 confirmed_by=self.user.id,
             )
 
-    def test_platform_loan_repayment_confirmation_rejects_mismatched_account(self):
+    def test_platform_loan_mobile_money_repayment_can_be_received_into_bank_account(self):
         loan, account = self.create_funded_platform_loan_for_repayment()
+
+        account.account_type = "bank"
+        db.session.flush()
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id,
+            installment_number=1,
+        ).one()
 
         payment = record_platform_loan_payment(
             loan_id=loan.id,
-            amount_minor=1000,
+            amount_minor=installment.interest_minor + 100,
             payment_date=date(2026, 11, 17),
-            payment_method="cash",
+            payment_method="mobile_money",
             recorded_by=self.user.id,
-            reference="MISMATCH-001",
+            reference="MOBILE-TO-BANK-001",
         )
 
-        with self.assertRaises(PlatformLendingValidationError):
-            confirm_platform_loan_payment(
-                payment_id=payment.id,
-                financial_account_id=account.id,
-                confirmed_by=self.user.id,
-            )
+        confirmed = confirm_platform_loan_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
 
-        self.assertEqual(payment.status, "pending")
-        self.assertIsNone(payment.journal_entry_id)
-        self.assertIsNone(payment.financial_account_id)
+        db.session.flush()
+
+        self.assertEqual(confirmed.status, "confirmed")
+        self.assertEqual(confirmed.payment_method, "mobile_money")
+        self.assertEqual(confirmed.financial_account_id, account.id)
+        self.assertIsNotNone(confirmed.journal_entry_id)
+
+        journal_lines = PlatformJournalLine.query.filter_by(
+            journal_entry_id=confirmed.journal_entry_id
+        ).all()
+
         self.assertEqual(
-            PlatformLoanPaymentAllocation.query.filter_by(
-                payment_id=payment.id
-            ).count(),
-            0,
+            sum(line.debit_minor for line in journal_lines),
+            confirmed.amount_minor,
         )
-
-
+        self.assertEqual(
+            sum(line.credit_minor for line in journal_lines),
+            confirmed.amount_minor,
+        )
     def test_platform_loan_repayment_reversal_restores_balances(self):
         loan, account = self.create_funded_platform_loan_for_repayment()
 
@@ -4640,11 +4753,16 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_customer_cannot_access_platform_owner_applications(self):
         product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
 
         submitted = self.client.post(
             "/api/v1/platform/applications",
             headers=self.headers,
-            json=self.platform_application_payload(product),
+            json=self.platform_application_payload(
+                product,
+                monthly_income_minor=100000,
+                monthly_expenses_minor=0,
+            ),
         )
         self.assertEqual(submitted.status_code, 201, submitted.json)
 
@@ -4862,6 +4980,124 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertFalse(response.json["success"])
 
 
+    def test_platform_loan_snapshots_product_late_payment_fee(self):
+        product = self.create_platform_loan_product(
+            late_payment_fee_minor=375
+        )
+        application = self.create_approved_platform_application(
+            product=product
+        )
+
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        self.assertEqual(loan.late_payment_fee_minor, 375)
+
+    def test_platform_late_fee_assessment_payment_and_reversal(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+        self.create_platform_late_fee_ledgers()
+        loan.late_payment_fee_minor = 2500
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(
+            PlatformLoanInstallment.installment_number
+        ).first()
+        installment.due_date = date(2026, 11, 21)
+        as_of_date = date(2026, 11, 22)
+
+        assessed = assess_overdue_platform_loan_fees(
+            as_of_date=as_of_date,
+            assessed_by=self.user.id,
+        )
+        self.assertEqual(assessed, 1)
+        db.session.flush()
+
+        fee = PlatformLoanLateFee.query.filter_by(
+            installment_id=installment.id
+        ).one()
+        self.assertEqual(fee.amount_minor, 2500)
+        self.assertEqual(fee.paid_minor, 0)
+        self.assertEqual(fee.status, "assessed")
+        self.assertIsNotNone(fee.journal_entry_id)
+
+        # Re-running assessment must not charge the same installment twice.
+        self.assertEqual(
+            assess_overdue_platform_loan_fees(
+                as_of_date=as_of_date,
+                assessed_by=self.user.id,
+            ),
+            0,
+        )
+        self.assertEqual(
+            PlatformLoanLateFee.query.filter_by(
+                installment_id=installment.id
+            ).count(),
+            1,
+        )
+
+        payment = record_platform_late_fee_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=as_of_date,
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"FEE-PAY-{uuid4().hex[:12]}",
+        )
+        self.assertEqual(payment.status, "pending")
+
+        confirmed = confirm_platform_late_fee_payment(
+            payment_id=payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+        self.assertEqual(confirmed.status, "confirmed")
+        self.assertIsNotNone(confirmed.journal_entry_id)
+        self.assertEqual(fee.paid_minor, 1000)
+        self.assertEqual(fee.status, "partially_paid")
+
+        allocation = PlatformLoanLateFeePaymentAllocation.query.filter_by(
+            payment_id=payment.id
+        ).one()
+        self.assertEqual(allocation.late_fee_id, fee.id)
+        self.assertEqual(allocation.amount_minor, 1000)
+
+        reversal = reverse_platform_late_fee_payment(
+            payment_id=payment.id,
+            reversed_by=self.user.id,
+            reference=f"FEE-REV-{uuid4().hex[:12]}",
+            transaction_date=datetime(
+                2026, 11, 22, 12, 0, tzinfo=timezone.utc
+            ),
+        )
+        self.assertIsNotNone(reversal)
+        self.assertEqual(payment.status, "reversed")
+        self.assertEqual(fee.paid_minor, 0)
+        self.assertEqual(fee.status, "assessed")
+
+        rejected_payment = record_platform_late_fee_payment(
+            loan_id=loan.id,
+            amount_minor=500,
+            payment_date=as_of_date,
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"FEE-REJ-{uuid4().hex[:12]}",
+        )
+        rejected = reject_platform_late_fee_payment(
+            payment_id=rejected_payment.id,
+            rejected_by=self.user.id,
+            reason="Payment reference could not be verified.",
+        )
+        self.assertEqual(rejected.status, "rejected")
+        self.assertEqual(fee.paid_minor, 0)
+        self.assertEqual(
+            PlatformLoanLateFeePaymentAllocation.query.filter_by(
+                payment_id=rejected_payment.id
+            ).count(),
+            0,
+        )
+
     def test_platform_owner_can_view_collections_queue(self):
         loan, _account = self.create_funded_platform_loan_for_repayment()
 
@@ -4919,6 +5155,79 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
         )
         self.assertEqual(invalid_page.status_code, 400)
+
+    def test_platform_owner_collections_include_pending_and_confirmed_fee_payments(self):
+        loan, account = self.create_funded_platform_loan_for_repayment()
+        self.create_platform_late_fee_ledgers()
+        loan.late_payment_fee_minor = 2500
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(
+            PlatformLoanInstallment.installment_number
+        ).first()
+        installment.due_date = date.today() - timedelta(days=1)
+
+        assessed = assess_overdue_platform_loan_fees(
+            as_of_date=date.today(),
+            assessed_by=self.user.id,
+        )
+        self.assertEqual(assessed, 1)
+
+        confirmed_payment = record_platform_late_fee_payment(
+            loan_id=loan.id,
+            amount_minor=1000,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"FEE-CONF-{uuid4().hex[:12]}",
+        )
+        confirm_platform_late_fee_payment(
+            payment_id=confirmed_payment.id,
+            financial_account_id=account.id,
+            confirmed_by=self.user.id,
+        )
+
+        pending_payment = record_platform_late_fee_payment(
+            loan_id=loan.id,
+            amount_minor=500,
+            payment_date=date.today(),
+            payment_method="mobile_money",
+            recorded_by=self.user.id,
+            reference=f"FEE-PEND-{uuid4().hex[:12]}",
+        )
+
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/collections",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+
+        pending = response.json["pending_late_fee_payments"]
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["id"], str(pending_payment.id))
+        self.assertEqual(pending[0]["loan_id"], str(loan.id))
+        self.assertEqual(pending[0]["amount_minor"], 500)
+
+        confirmed = response.json["confirmed_late_fee_payments"]
+        self.assertEqual(len(confirmed), 1)
+        self.assertEqual(confirmed[0]["id"], str(confirmed_payment.id))
+        self.assertEqual(confirmed[0]["loan_id"], str(loan.id))
+        self.assertEqual(confirmed[0]["amount_minor"], 1000)
+        self.assertIsNotNone(confirmed[0]["confirmed_at"])
+
+        pagination = response.json["pagination"]
+        self.assertEqual(pagination["pending_late_fee_payments_total"], 1)
+        self.assertEqual(pagination["confirmed_late_fee_payments_total"], 1)
 
     def test_customer_cannot_access_platform_collections_queue(self):
         response = self.client.get(
@@ -5462,11 +5771,14 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_platform_owner_can_view_application_details_and_affordability_without_national_id(self):
         product = self.create_platform_loan_product()
-
+        self.create_verified_income_evidence(600000)
         submitted = self.client.post(
             "/api/v1/platform/applications",
             headers=self.headers,
-            json=self.platform_application_payload(product),
+            json=self.platform_application_payload(
+                product, monthly_income_minor=600000,
+                monthly_expenses_minor=0,
+            ),
         )
         self.assertEqual(submitted.status_code, 201, submitted.json)
 
@@ -5506,18 +5818,17 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(applicant["residential_address"], "Nairobi, Kenya")
         self.assertEqual(applicant["employment_status"], "employed")
         self.assertEqual(applicant["employer_business_name"], "Test Employer")
-        self.assertEqual(applicant["monthly_income_minor"], 4000000)
-        self.assertEqual(applicant["monthly_expenses_minor"], 2000000)
+        self.assertEqual(applicant["monthly_income_minor"], 600000)
+        self.assertEqual(applicant["monthly_expenses_minor"], 0)
         self.assertEqual(applicant["existing_monthly_repayments_minor"], 0)
-        self.assertFalse(applicant["affordability_consent"])
+        self.assertTrue(applicant["affordability_consent"])
 
         assessment = item["affordability_assessment"]
         self.assertIsNotNone(assessment)
         self.assertEqual(assessment["version"], 1)
-        self.assertEqual(assessment["status"], "insufficient_records")
+        self.assertEqual(assessment["status"], "verified")
         self.assertEqual(
-            assessment["recommended_monthly_instalment_minor"],
-            1400000,
+            assessment["recommended_monthly_instalment_minor"], 210000
         )
 
         self.assertNotIn("national_id", applicant)
@@ -6049,31 +6360,99 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(application.status, "pending")
         self.assertIsNone(application.reviewed_at)
 
-    def test_customer_can_list_only_active_platform_loan_products(self):
-        active_product = self.create_platform_loan_product()
+    def test_customer_products_are_locked_until_eligibility_check(self):
+        self.create_platform_loan_product()
         self.create_platform_loan_product(is_active=False)
-
         response = self.client.get(
-            "/api/v1/platform/products",
+            "/api/v1/platform/products", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(response.json["count"], 0)
+        self.assertEqual(response.json["products"], [])
+        self.assertTrue(response.json["eligibility_required"])
+
+    def test_customer_eligibility_requires_explicit_consent(self):
+        response = self.client.post(
+            "/api/v1/platform/eligibility",
             headers=self.headers,
+            json={"affordability_consent": False},
+        )
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertIn("consent", response.json["message"].lower())
+
+    def test_customer_without_verified_income_is_not_eligible(self):
+        self.create_platform_loan_product()
+        response = self.client.post(
+            "/api/v1/platform/eligibility",
+            headers=self.headers,
+            json={"affordability_consent": True},
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertFalse(response.json["eligible"])
+        self.assertEqual(response.json["months_with_verified_income"], 0)
+        self.assertEqual(response.json["evidence_window_months"], 6)
+        self.assertEqual(response.json["products"], [])
+
+    def test_customer_with_one_month_at_minimum_verified_average_can_see_products(self):
+        product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
+        response = self.client.post(
+            "/api/v1/platform/eligibility",
+            headers=self.headers,
+            json={"affordability_consent": True},
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["eligible"])
+        self.assertEqual(response.json["months_with_verified_income"], 1)
+        self.assertEqual(
+            response.json["evidenced_average_monthly_income_minor"], 600000
+        )
+        self.assertEqual(
+            response.json["minimum_average_monthly_income_minor"], 100000
+        )
+        self.assertEqual(len(response.json["products"]), 1)
+        self.assertEqual(response.json["products"][0]["id"], str(product.id))
+
+    def test_verified_income_average_uses_months_with_income_records(self):
+        self.create_platform_loan_product()
+        now = datetime.now(timezone.utc)
+        self.create_verified_income_evidence(600000, now)
+        self.create_verified_income_evidence(
+            600000, now - timedelta(days=35)
+        )
+
+        response = self.client.post(
+            "/api/v1/platform/eligibility",
+            headers=self.headers,
+            json={"affordability_consent": True},
         )
 
         self.assertEqual(response.status_code, 200, response.json)
-        self.assertTrue(response.json["success"])
-        self.assertEqual(response.json["count"], 1)
+        self.assertEqual(response.json["months_with_verified_income"], 2)
+        self.assertEqual(
+            response.json["evidenced_average_monthly_income_minor"], 600000
+        )
 
-        products = response.json["products"]
-        self.assertEqual(len(products), 1)
-        self.assertEqual(products[0]["id"], str(active_product.id))
-        self.assertEqual(products[0]["name"], active_product.name)
-        self.assertEqual(products[0]["currency_code"], "KES")
-        self.assertEqual(products[0]["min_principal_minor"], 50000)
-        self.assertEqual(products[0]["max_principal_minor"], 5000000)
-        self.assertEqual(products[0]["interest_method"], "reducing")
-        self.assertEqual(products[0]["interest_rate_percent"], "10")
-        self.assertNotIn("created_by", products[0])
-        self.assertNotIn("updated_by", products[0])
-        self.assertNotIn("is_active", products[0])
+    def test_verified_income_older_than_six_months_is_excluded(self):
+        self.create_platform_loan_product()
+        now = datetime.now(timezone.utc)
+        self.create_verified_income_evidence(
+            900000, now - timedelta(days=220)
+        )
+        self.create_verified_income_evidence(600000, now)
+
+        response = self.client.post(
+            "/api/v1/platform/eligibility",
+            headers=self.headers,
+            json={"affordability_consent": True},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["months_with_verified_income"], 1)
+        self.assertEqual(
+            response.json["evidenced_average_monthly_income_minor"], 600000
+        )
 
     def test_customer_platform_products_require_authentication(self):
         response = self.client.get("/api/v1/platform/products")
@@ -6120,7 +6499,7 @@ class PesaPilotTestCase(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400, response.json)
-        self.assertIn("not qualified", response.json["message"].lower())
+        self.assertIn("not yet eligible", response.json["message"].lower())
         self.assertEqual(
             PlatformLoanApplication.query.filter_by(
                 customer_id=self.user.id
@@ -6136,13 +6515,52 @@ class PesaPilotTestCase(unittest.TestCase):
             assessments_before,
         )
 
-    def test_customer_can_submit_platform_loan_application(self):
+    def test_application_above_personal_affordability_is_rejected_without_records(self):
         product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
+        applications_before = PlatformLoanApplication.query.filter_by(
+            customer_id=self.user.id
+        ).count()
+        details_before = PlatformLoanApplicationDetails.query.count()
+        assessments_before = PlatformLoanAffordabilityAssessment.query.count()
 
         response = self.client.post(
             "/api/v1/platform/applications",
             headers=self.headers,
-            json=self.platform_application_payload(product),
+            json=self.platform_application_payload(
+                product,
+                requested_principal_minor=product.max_principal_minor,
+                monthly_income_minor=100000,
+                monthly_expenses_minor=0,
+            ),
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertIn("above your assessed affordability", response.json["message"])
+        self.assertIn(product.currency_code, response.json["message"])
+        self.assertIn("Reduce the requested amount", response.json["message"])
+        self.assertEqual(
+            PlatformLoanApplication.query.filter_by(
+                customer_id=self.user.id
+            ).count(),
+            applications_before,
+        )
+        self.assertEqual(PlatformLoanApplicationDetails.query.count(), details_before)
+        self.assertEqual(
+            PlatformLoanAffordabilityAssessment.query.count(),
+            assessments_before,
+        )
+
+    def test_customer_can_submit_platform_loan_application(self):
+        product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
+        response = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=self.platform_application_payload(
+                product, monthly_income_minor=600000,
+                monthly_expenses_minor=0,
+            ),
         )
 
         self.assertEqual(response.status_code, 201, response.json)
@@ -6167,10 +6585,9 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(application.product_id, product.id)
 
         assessment_data = response.json["affordability_assessment"]
-        self.assertEqual(assessment_data["status"], "insufficient_records")
+        self.assertEqual(assessment_data["status"], "verified")
         self.assertEqual(
-            assessment_data["recommended_monthly_instalment_minor"],
-            1400000,
+            assessment_data["recommended_monthly_instalment_minor"], 210000
         )
         self.assertGreaterEqual(
             assessment_data["estimated_affordable_principal_minor"],
@@ -6191,7 +6608,11 @@ class PesaPilotTestCase(unittest.TestCase):
             application_id=application.id,
             version=1,
         ).one()
-        self.assertEqual(assessment.status, "insufficient_records")
+        self.assertEqual(assessment.status, "verified")
+        self.assertEqual(
+            assessment.report["capacity_verified_monthly_income_minor"],
+            600000,
+        )
         self.assertTrue(assessment.report["assessment_is_advisory"])
         self.assertFalse(
             assessment.report["automatic_approval_or_rejection"]
@@ -6199,8 +6620,10 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_customer_cannot_submit_second_pending_application(self):
         product = self.create_platform_loan_product()
-
-        payload = self.platform_application_payload(product)
+        self.create_verified_income_evidence(600000)
+        payload = self.platform_application_payload(
+            product, monthly_income_minor=100000, monthly_expenses_minor=0
+        )
 
         first = self.client.post(
             "/api/v1/platform/applications",
@@ -6215,7 +6638,7 @@ class PesaPilotTestCase(unittest.TestCase):
             json=payload,
         )
 
-        self.assertEqual(second.status_code, 400, second.json)
+        self.assertEqual(second.status_code, 409, second.json)
         self.assertIn("pending", second.json["message"].lower())
         self.assertEqual(
             PlatformLoanApplication.query.filter_by(
@@ -6225,13 +6648,122 @@ class PesaPilotTestCase(unittest.TestCase):
             1,
         )
 
+    def test_customer_cannot_apply_for_different_product_while_pending(self):
+        first_product = self.create_platform_loan_product()
+        second_product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
+
+        first = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=self.platform_application_payload(
+                first_product,
+                monthly_income_minor=100000,
+                monthly_expenses_minor=0,
+            ),
+        )
+        self.assertEqual(first.status_code, 201, first.json)
+
+        second = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=self.platform_application_payload(
+                second_product,
+                monthly_income_minor=100000,
+                monthly_expenses_minor=0,
+            ),
+        )
+
+        self.assertEqual(second.status_code, 409, second.json)
+        self.assertIn("pending", second.json["message"].lower())
+        self.assertEqual(
+            PlatformLoanApplication.query.filter_by(
+                customer_id=self.user.id,
+                status="pending",
+            ).count(),
+            1,
+        )
+
+    def test_customer_cannot_apply_while_platform_loan_is_outstanding(self):
+        approved_application = self.create_approved_platform_application()
+        loan = create_platform_loan_from_application(
+            application_id=approved_application.id
+        )
+        loan.status = "active"
+        loan.principal_minor = 100000
+        loan.outstanding_principal_minor = 100000
+
+        new_product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=self.platform_application_payload(
+                new_product,
+                monthly_income_minor=100000,
+                monthly_expenses_minor=0,
+            ),
+        )
+
+        self.assertEqual(response.status_code, 409, response.json)
+        self.assertIn("not fully settled", response.json["message"].lower())
+        self.assertEqual(
+            PlatformLoanApplication.query.filter_by(
+                customer_id=self.user.id,
+                status="pending",
+            ).count(),
+            0,
+        )
+
+    def test_customer_can_apply_after_platform_loan_is_fully_settled(self):
+        approved_application = self.create_approved_platform_application()
+        loan = create_platform_loan_from_application(
+            application_id=approved_application.id
+        )
+        loan.status = "paid"
+        loan.principal_minor = 100000
+        loan.outstanding_principal_minor = 0
+
+        db.session.add(PlatformLoanInstallment(
+            loan_id=loan.id,
+            installment_number=1,
+            due_date=date.today(),
+            amount_minor=100000,
+            principal_minor=100000,
+            interest_minor=0,
+            paid_minor=100000,
+            status="paid",
+        ))
+
+        new_product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=self.platform_application_payload(
+                new_product,
+                monthly_income_minor=100000,
+                monthly_expenses_minor=0,
+            ),
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertTrue(response.json["success"])
+
     def test_customer_can_withdraw_pending_application(self):
         product = self.create_platform_loan_product()
-
+        self.create_verified_income_evidence(600000)
         submitted = self.client.post(
             "/api/v1/platform/applications",
             headers=self.headers,
-            json=self.platform_application_payload(product),
+            json=self.platform_application_payload(
+                product, monthly_income_minor=100000,
+                monthly_expenses_minor=0,
+            ),
         )
         self.assertEqual(submitted.status_code, 201, submitted.json)
 
@@ -7270,11 +7802,42 @@ class PesaPilotTestCase(unittest.TestCase):
 
         self.assertEqual(total_principal, 120000)
         self.assertGreater(total_interest, 0)
-        self.assertAlmostEqual(total_interest, 14400, delta=12)
+        self.assertAlmostEqual(total_interest, 175200, delta=12)
         self.assertGreater(
             max(item["interest_minor"] for item in schedule),
             min(item["interest_minor"] for item in schedule),
         )
+
+    def test_monthly_rate_is_prorated_over_thirty_days(self):
+        for method in ("flat", "reducing"):
+            with self.subTest(interest_method=method):
+                loan = self.make_schedule_loan(
+                    principal_minor=200000,
+                    interest_method=method,
+                    interest_rate_percent=Decimal("8"),
+                    repayment_frequency="one_time",
+                    term_count=1,
+                    start_date=date(2026, 1, 1),
+                    due_date=date(2026, 1, 31),
+                )
+                schedule = build_repayment_schedule(loan)
+
+                self.assertEqual(schedule[0]["interest_minor"], 16000)
+                self.assertEqual(schedule[0]["amount_minor"], 216000)
+
+    def test_weekly_interest_uses_actual_days_over_thirty(self):
+        loan = self.make_schedule_loan(
+            principal_minor=200000,
+            interest_method="flat",
+            interest_rate_percent=Decimal("8"),
+            repayment_frequency="weekly",
+            term_count=1,
+            start_date=date(2026, 1, 1),
+            due_date=date(2026, 1, 8),
+        )
+        schedule = build_repayment_schedule(loan)
+
+        self.assertEqual(schedule[0]["interest_minor"], 3733)
 
     def test_reducing_schedule_has_declining_interest(self):
         loan = self.make_schedule_loan(

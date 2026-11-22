@@ -20673,3 +20673,32 @@ button { font: inherit; cursor: pointer; }
   background: #eaf7ef;
   border-color: #d4eddf;
 }
+
+
+/* Explicit owner acknowledgement for non-verified affordability decisions */
+.loan-applications-page .platform-owner-override-panel {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid #e8c98b;
+  border-radius: 11px;
+  background: #fffaf0;
+}
+
+.loan-applications-page .platform-owner-override-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: #684b19;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.loan-applications-page .platform-owner-override-checkbox input {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin: 1px 0 0;
+  accent-color: #176c45;
+}

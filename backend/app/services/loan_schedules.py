@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 
-DAYS_PER_YEAR = Decimal("365")
+DAYS_PER_MONTH = Decimal("30")
 ZERO = Decimal("0")
 ONE = Decimal("1")
 
@@ -57,13 +57,13 @@ def _installment_dates(loan):
     return dates
 
 
-def _period_interest(principal, annual_rate, days):
+def _period_interest(principal, monthly_rate, days):
     return _round_minor(
-        principal * annual_rate * Decimal(days) / DAYS_PER_YEAR
+        principal * monthly_rate * Decimal(days) / DAYS_PER_MONTH
     )
 
 
-def _flat_schedule(loan, dates, annual_rate):
+def _flat_schedule(loan, dates, monthly_rate):
     principal = loan.principal_minor
     previous_date = loan.start_date
     interests = []
@@ -77,7 +77,7 @@ def _flat_schedule(loan, dates, annual_rate):
         interests.append(
             _period_interest(
                 Decimal(principal),
-                annual_rate,
+                monthly_rate,
                 days,
             )
         )
@@ -121,7 +121,7 @@ def _flat_schedule(loan, dates, annual_rate):
     return schedule
 
 
-def _reducing_schedule(loan, dates, annual_rate):
+def _reducing_schedule(loan, dates, monthly_rate):
     principal = loan.principal_minor
     period_rates = []
     previous_date = loan.start_date
@@ -132,7 +132,7 @@ def _reducing_schedule(loan, dates, annual_rate):
         if days <= 0:
             raise ValueError("Installment dates must be increasing.")
 
-        period_rates.append(annual_rate * Decimal(days) / DAYS_PER_YEAR)
+        period_rates.append(monthly_rate * Decimal(days) / DAYS_PER_MONTH)
         previous_date = due_date
 
     # Present-value factors for equal payments over unequal periods.
@@ -191,8 +191,8 @@ def build_repayment_schedule(loan):
     """
     Build a repayment schedule without writing to the database.
 
-    Interest rates are annual percentages. Interest uses actual period
-    days divided by 365. All returned amounts are integer minor units.
+    Interest rates are monthly percentages. Interest is prorated using
+    actual period days divided by 30. All amounts are integer minor units.
     """
 
     if isinstance(loan.principal_minor, bool) or loan.principal_minor <= 0:
@@ -204,10 +204,10 @@ def build_repayment_schedule(loan):
     if loan.due_date < loan.start_date:
         raise ValueError("Final due date cannot precede the start date.")
 
-    annual_rate = Decimal(str(loan.interest_rate_percent)) / Decimal("100")
+    monthly_rate = Decimal(str(loan.interest_rate_percent)) / Decimal("100")
 
-    if not annual_rate.is_finite() or annual_rate < ZERO:
-        raise ValueError("Annual interest rate must be valid and non-negative.")
+    if not monthly_rate.is_finite() or monthly_rate < ZERO:
+        raise ValueError("Monthly interest rate must be valid and non-negative.")
 
     dates = _installment_dates(loan)
 
@@ -217,9 +217,9 @@ def build_repayment_schedule(loan):
         if loan.interest_method == "none":
             schedule = _flat_schedule(loan, dates, ZERO)
         elif loan.interest_method == "flat":
-            schedule = _flat_schedule(loan, dates, annual_rate)
+            schedule = _flat_schedule(loan, dates, monthly_rate)
         elif loan.interest_method == "reducing":
-            schedule = _reducing_schedule(loan, dates, annual_rate)
+            schedule = _reducing_schedule(loan, dates, monthly_rate)
         else:
             raise ValueError("Unsupported interest method.")
 

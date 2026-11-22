@@ -54,6 +54,12 @@ class PlatformLoan(db.Model):
         nullable=False,
     )
 
+    late_payment_fee_minor: Mapped[int] = mapped_column(
+        BigInteger,
+        default=0,
+        nullable=False,
+    )
+
     approved_principal_minor: Mapped[int] = mapped_column(
         BigInteger,
         nullable=False,
@@ -132,6 +138,10 @@ class PlatformLoan(db.Model):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "late_payment_fee_minor >= 0",
+            name="ck_platform_loan_late_fee_snapshot",
+        ),
         CheckConstraint(
             "approved_principal_minor > 0",
             name="ck_platform_loan_approved_principal",
@@ -720,4 +730,206 @@ class PlatformLoanPaymentAllocation(db.Model):
             "ix_platform_allocation_loan",
             "loan_id",
         ),
+    )
+
+class PlatformLoanLateFee(db.Model):
+    """One-time late fee assessed against an overdue installment."""
+
+    __tablename__ = "platform_loan_late_fees"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        primary_key=True,
+        default=new_uuid,
+    )
+
+    loan_id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=False,
+    )
+
+    installment_id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=False,
+    )
+
+    currency_code: Mapped[str] = mapped_column(
+        ForeignKey("currencies.code", name="fk_platform_late_fee_currency"),
+        nullable=False,
+    )
+
+    amount_minor: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    paid_minor: Mapped[int] = mapped_column(
+        BigInteger,
+        default=0,
+        nullable=False,
+    )
+
+    assessed_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+    )
+
+    journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_journal_entries.id", name="fk_platform_late_fee_journal", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="assessed",
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        onupdate=_utc_now,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["loan_id"],
+            ["platform_loans.id"],
+            name="fk_platform_late_fee_loan",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["loan_id", "installment_id"],
+            [
+                "platform_loan_installments.loan_id",
+                "platform_loan_installments.id",
+            ],
+            name="fk_platform_late_fee_installment_loan",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "loan_id", "id",
+            name="uq_platform_late_fee_loan_id",
+        ),
+        UniqueConstraint(
+            "installment_id",
+            name="uq_platform_late_fee_installment",
+        ),
+        UniqueConstraint(
+            "journal_entry_id",
+            name="uq_platform_late_fee_journal",
+        ),
+        CheckConstraint(
+            "amount_minor > 0",
+            name="ck_platform_late_fee_amount",
+        ),
+        CheckConstraint(
+            "paid_minor >= 0 AND paid_minor <= amount_minor",
+            name="ck_platform_late_fee_paid",
+        ),
+        CheckConstraint(
+            "status IN ('assessed', 'partially_paid', 'paid')",
+            name="ck_platform_late_fee_status",
+        ),
+        Index(
+            "ix_platform_loan_late_fees_loan_status",
+            "loan_id",
+            "status",
+        ),
+    )
+
+class PlatformLoanLateFeePayment(db.Model):
+    """A separately recorded payment against assessed late fees."""
+
+    __tablename__ = "platform_loan_late_fee_payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(db.Uuid(as_uuid=True), primary_key=True, default=new_uuid)
+    loan_id: Mapped[uuid.UUID] = mapped_column(db.Uuid(as_uuid=True), nullable=False)
+    financial_account_id: Mapped[uuid.UUID | None] = mapped_column(db.Uuid(as_uuid=True), nullable=True)
+    journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("platform_journal_entries.id", ondelete="RESTRICT"), nullable=True)
+    currency_code: Mapped[str] = mapped_column(ForeignKey("currencies.code"), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    payment_date: Mapped[date] = mapped_column(Date, nullable=False)
+    payment_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    confirmed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    rejected_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["loan_id", "currency_code"],
+            ["platform_loans.id", "platform_loans.currency_code"],
+            name="fk_platform_late_fee_payment_loan_currency",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["financial_account_id", "currency_code"],
+            ["platform_financial_accounts.id", "platform_financial_accounts.currency_code"],
+            name="fk_platform_late_fee_payment_account_currency",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("loan_id", "id", name="uq_platform_late_fee_payment_loan_id"),
+        UniqueConstraint("loan_id", "reference", name="uq_platform_late_fee_payment_loan_reference"),
+        UniqueConstraint("journal_entry_id", name="uq_platform_late_fee_payment_journal"),
+        CheckConstraint("amount_minor > 0", name="ck_platform_late_fee_payment_amount"),
+        CheckConstraint("payment_method IN ('cash', 'bank', 'mobile_money', 'other')", name="ck_platform_late_fee_payment_method"),
+        CheckConstraint("status IN ('pending', 'confirmed', 'reversed', 'rejected')", name="ck_platform_late_fee_payment_status"),
+        CheckConstraint(
+            "status != 'rejected' OR (rejected_at IS NOT NULL AND rejection_reason IS NOT NULL AND length(trim(rejection_reason)) > 0)",
+            name="ck_platform_late_fee_payment_rejection",
+        ),
+        CheckConstraint(
+            "status NOT IN ('confirmed', 'reversed') OR (financial_account_id IS NOT NULL AND journal_entry_id IS NOT NULL AND confirmed_at IS NOT NULL)",
+            name="ck_platform_late_fee_payment_confirmation",
+        ),
+        Index("ix_platform_late_fee_payment_loan_date", "loan_id", "payment_date"),
+        Index("ix_platform_late_fee_payment_status_date", "status", "payment_date"),
+    )
+
+
+class PlatformLoanLateFeePaymentAllocation(db.Model):
+    """Allocation of a fee payment to assessed fee records."""
+
+    __tablename__ = "platform_loan_late_fee_payment_allocations"
+
+    id: Mapped[uuid.UUID] = mapped_column(db.Uuid(as_uuid=True), primary_key=True, default=new_uuid)
+    loan_id: Mapped[uuid.UUID] = mapped_column(db.Uuid(as_uuid=True), nullable=False)
+    payment_id: Mapped[uuid.UUID] = mapped_column(db.Uuid(as_uuid=True), nullable=False)
+    late_fee_id: Mapped[uuid.UUID] = mapped_column(db.Uuid(as_uuid=True), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["loan_id", "payment_id"],
+            ["platform_loan_late_fee_payments.loan_id", "platform_loan_late_fee_payments.id"],
+            name="fk_platform_late_fee_allocation_payment_loan",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["loan_id", "late_fee_id"],
+            ["platform_loan_late_fees.loan_id", "platform_loan_late_fees.id"],
+            name="fk_platform_late_fee_allocation_fee_loan",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("payment_id", "late_fee_id", name="uq_platform_late_fee_payment_allocation"),
+        CheckConstraint("amount_minor > 0", name="ck_platform_late_fee_allocation_amount"),
+        Index("ix_platform_late_fee_allocation_loan", "loan_id"),
     )

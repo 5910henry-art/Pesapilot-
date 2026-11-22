@@ -42,7 +42,8 @@ def create_app(test_config=None):
     jwt.init_app(app)
 
     from uuid import UUID
-    from datetime import datetime, timezone
+    from datetime import date, datetime, timezone
+    import click
     from .models import User, RefreshToken
 
     @jwt.token_in_blocklist_loader
@@ -89,6 +90,47 @@ def create_app(test_config=None):
     app.register_blueprint(bills_bp)
     app.register_blueprint(ai_manager_bp)
     app.register_blueprint(platform_bp)
+
+    @app.cli.command("platform-assess-late-fees")
+    @click.option(
+        "--as-of-date",
+        required=True,
+        help="Assessment date in YYYY-MM-DD format.",
+    )
+    @click.option(
+        "--actor-id",
+        required=True,
+        help="UUID of the owner/operator recording the accounting entries.",
+    )
+    @click.option(
+        "--batch-size",
+        default=500,
+        type=click.IntRange(1, 5000),
+        show_default=True,
+    )
+    def platform_assess_late_fees(as_of_date, actor_id, batch_size):
+        """Assess configured one-time fees on overdue installments."""
+        from .services.platform_lending import (
+            assess_overdue_platform_loan_fees,
+        )
+
+        try:
+            assessment_date = date.fromisoformat(as_of_date)
+            actor_uuid = UUID(actor_id)
+
+            count = assess_overdue_platform_loan_fees(
+                as_of_date=assessment_date,
+                assessed_by=actor_uuid,
+                batch_size=batch_size,
+            )
+            db.session.commit()
+            click.echo(
+                f"Assessed {count} late fee(s) as of "
+                f"{assessment_date.isoformat()}."
+            )
+        except Exception:
+            db.session.rollback()
+            raise
 
     cors.init_app(
         app,

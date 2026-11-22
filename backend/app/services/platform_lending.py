@@ -19,6 +19,9 @@ from ..models import (
     PlatformLoanInstallment,
     PlatformLoanPayment,
     PlatformLoanPaymentAllocation,
+    PlatformLoanLateFee,
+    PlatformLoanLateFeePayment,
+    PlatformLoanLateFeePaymentAllocation,
     PlatformLoanProduct,
     PlatformInvestor,
     PlatformInvestorContribution,
@@ -235,6 +238,11 @@ def review_loan_application(
                 "A completed affordability assessment is required before approval."
             )
 
+        if assessment.status == "high_risk":
+            raise PlatformLendingValidationError(
+                "High-risk loan applications cannot be approved."
+            )
+
         affordable_principal = assessment.estimated_affordable_principal_minor
         if type(affordable_principal) is not int or affordable_principal <= 0:
             raise PlatformLendingValidationError(
@@ -312,6 +320,11 @@ def create_platform_loan_from_application(*, application_id):
             "A completed affordability assessment is required before loan creation."
         )
 
+    if assessment.status == "high_risk":
+        raise PlatformLendingValidationError(
+            "High-risk loan applications cannot be converted into platform loans."
+        )
+
     affordable_principal = assessment.estimated_affordable_principal_minor
     if (
         type(affordable_principal) is not int
@@ -359,6 +372,7 @@ def create_platform_loan_from_application(*, application_id):
         application_id=application.id,
         customer_id=application.customer_id,
         product_id=product.id,
+        late_payment_fee_minor=product.late_payment_fee_minor,
         approved_principal_minor=approved_principal,
         principal_minor=0,
         outstanding_principal_minor=0,
@@ -1599,14 +1613,6 @@ def confirm_platform_loan_payment(
             "Repayments require a cash, bank, or mobile-money account."
         )
 
-    if (
-        payment.payment_method != "other"
-        and payment.payment_method != account.account_type
-    ):
-        raise PlatformLendingValidationError(
-            "Payment method does not match the selected financial account."
-        )
-
     if not (
         loan.currency_code
         == payment.currency_code
@@ -2300,3 +2306,619 @@ def reject_platform_loan_payment(
 
     db.session.flush()
     return payment
+
+def assess_overdue_platform_loan_fees(
+    *,
+    as_of_date: date,
+    assessed_by: UUID,
+    batch_size: int = 500,
+):
+    """Assess each configured late fee once for an unpaid overdue installment.
+
+    The caller owns the transaction and must commit or roll back.
+    """
+
+    if not isinstance(as_of_date, date):
+        raise PlatformLendingValidationError(
+            "A valid assessment date is required."
+        )
+
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool):
+        raise PlatformLendingValidationError("Invalid batch size.")
+
+    if batch_size < 1 or batch_size > 5000:
+        raise PlatformLendingValidationError(
+            "Batch size must be between 1 and 5000."
+        )
+
+    candidates = db.session.execute(
+        select(PlatformLoanInstallment, PlatformLoan)
+        .join(
+            PlatformLoan,
+            PlatformLoan.id == PlatformLoanInstallment.loan_id,
+        )
+        .outerjoin(
+            PlatformLoanLateFee,
+            PlatformLoanLateFee.installment_id
+            == PlatformLoanInstallment.id,
+        )
+        .where(
+            PlatformLoanInstallment.due_date < as_of_date,
+            PlatformLoanInstallment.status != "waived",
+            PlatformLoanInstallment.paid_minor
+            < PlatformLoanInstallment.amount_minor,
+            PlatformLoan.status.in_(["active", "overdue"]),
+            PlatformLoan.late_payment_fee_minor > 0,
+            PlatformLoanLateFee.id.is_(None),
+        )
+        .order_by(
+            PlatformLoanInstallment.due_date.asc(),
+            PlatformLoanInstallment.id.asc(),
+        )
+        .limit(batch_size)
+        .with_for_update(skip_locked=True, of=PlatformLoanInstallment)
+    ).all()
+
+    ledger_cache = {}
+    assessed_count = 0
+
+    for installment, loan in candidates:
+        # Recheck while holding the installment lock. The unique
+        # installment constraint is the final duplicate-prevention guard.
+        existing = db.session.execute(
+            select(PlatformLoanLateFee.id).where(
+                PlatformLoanLateFee.installment_id == installment.id
+            )
+        ).scalar_one_or_none()
+
+        if existing is not None:
+            continue
+
+        currency = loan.currency_code
+
+        if currency not in ledger_cache:
+            receivable = db.session.execute(
+                select(PlatformLedgerAccount)
+                .where(
+                    PlatformLedgerAccount.code
+                    == f"PL-LOANS-LF-REC-{currency}",
+                    PlatformLedgerAccount.financial_account_id.is_(None),
+                    PlatformLedgerAccount.currency_code == currency,
+                    PlatformLedgerAccount.account_class == "asset",
+                    PlatformLedgerAccount.normal_balance == "debit",
+                    PlatformLedgerAccount.is_system.is_(True),
+                    PlatformLedgerAccount.is_active.is_(True),
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+
+            income = db.session.execute(
+                select(PlatformLedgerAccount)
+                .where(
+                    PlatformLedgerAccount.code
+                    == f"PL-LOANS-LF-INC-{currency}",
+                    PlatformLedgerAccount.financial_account_id.is_(None),
+                    PlatformLedgerAccount.currency_code == currency,
+                    PlatformLedgerAccount.account_class == "income",
+                    PlatformLedgerAccount.normal_balance == "credit",
+                    PlatformLedgerAccount.is_system.is_(True),
+                    PlatformLedgerAccount.is_active.is_(True),
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+
+            if receivable is None or income is None:
+                raise PlatformLendingValidationError(
+                    f"Late-fee accounting ledgers are not configured "
+                    f"for {currency}."
+                )
+
+            ledger_cache[currency] = (receivable, income)
+
+        receivable, income = ledger_cache[currency]
+        amount = loan.late_payment_fee_minor
+
+        fee = PlatformLoanLateFee(
+            loan_id=loan.id,
+            installment_id=installment.id,
+            currency_code=currency,
+            amount_minor=amount,
+            paid_minor=0,
+            assessed_date=as_of_date,
+            status="assessed",
+        )
+        db.session.add(fee)
+        db.session.flush()
+
+        journal = create_draft_entry(
+            created_by=assessed_by,
+            reference=f"PL-LATE-FEE-{fee.id}",
+            description=(
+                f"Late fee assessed for loan {loan.id}, "
+                f"installment {installment.installment_number}"
+            ),
+            transaction_date=datetime.combine(
+                as_of_date,
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            ),
+            lines=[
+                {
+                    "ledger_account_id": receivable.id,
+                    "debit_minor": amount,
+                    "credit_minor": 0,
+                    "memo": "Late fee receivable assessed",
+                },
+                {
+                    "ledger_account_id": income.id,
+                    "debit_minor": 0,
+                    "credit_minor": amount,
+                    "memo": "Late fee income recognized",
+                },
+            ],
+        )
+
+        post_entry(
+            entry_id=journal.id,
+            posted_by=assessed_by,
+        )
+
+        fee.journal_entry_id = journal.id
+        assessed_count += 1
+
+    db.session.flush()
+    return assessed_count
+
+def record_platform_late_fee_payment(
+    *,
+    loan_id,
+    amount_minor,
+    payment_date,
+    payment_method,
+    recorded_by,
+    reference=None,
+    notes=None,
+):
+    """Record a pending payment specifically against assessed late fees."""
+
+    if type(amount_minor) is not int or amount_minor <= 0:
+        raise PlatformLendingValidationError(
+            "Fee payment amount must be a positive integer."
+        )
+    if type(payment_date) is not date:
+        raise PlatformLendingValidationError("A valid payment date is required.")
+    if payment_method not in {"cash", "bank", "mobile_money", "other"}:
+        raise PlatformLendingValidationError("Invalid fee payment method.")
+
+    if reference is not None:
+        if not isinstance(reference, str) or not reference.strip():
+            raise PlatformLendingValidationError(
+                "Payment reference must be non-empty text."
+            )
+        reference = reference.strip()
+        if len(reference) > 100:
+            raise PlatformLendingValidationError(
+                "Payment reference cannot exceed 100 characters."
+            )
+
+    if notes is not None:
+        if not isinstance(notes, str):
+            raise PlatformLendingValidationError("Payment notes must be text.")
+        notes = notes.strip()
+        if len(notes) > 5000:
+            raise PlatformLendingValidationError(
+                "Payment notes cannot exceed 5000 characters."
+            )
+
+    loan = db.session.execute(
+        select(PlatformLoan)
+        .where(PlatformLoan.id == loan_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if loan is None:
+        return None
+    if loan.status not in {"active", "overdue", "paid"}:
+        raise PlatformLendingValidationError(
+            "Late-fee payments cannot be recorded for this loan."
+        )
+
+    fees = db.session.execute(
+        select(PlatformLoanLateFee)
+        .where(
+            PlatformLoanLateFee.loan_id == loan.id,
+            PlatformLoanLateFee.paid_minor < PlatformLoanLateFee.amount_minor,
+        )
+        .with_for_update()
+    ).scalars().all()
+
+    outstanding = sum(item.amount_minor - item.paid_minor for item in fees)
+    if outstanding <= 0:
+        raise PlatformLendingValidationError(
+            "This loan has no outstanding assessed late fees."
+        )
+    if amount_minor > outstanding:
+        raise PlatformLendingValidationError(
+            "Payment exceeds the outstanding late-fee balance."
+        )
+
+    payment = PlatformLoanLateFeePayment(
+        loan_id=loan.id,
+        currency_code=loan.currency_code,
+        amount_minor=amount_minor,
+        payment_date=payment_date,
+        payment_method=payment_method,
+        reference=reference,
+        status="pending",
+        recorded_by=recorded_by,
+        notes=notes,
+    )
+    db.session.add(payment)
+
+    try:
+        db.session.flush()
+    except IntegrityError as exc:
+        raise PlatformLendingValidationError(
+            "A fee payment with this reference already exists for the loan."
+        ) from exc
+
+    return payment
+
+
+def confirm_platform_late_fee_payment(
+    *,
+    payment_id,
+    financial_account_id,
+    confirmed_by,
+):
+    """Confirm a pending fee payment, allocate it FIFO, and post its journal."""
+
+    payment = db.session.execute(
+        select(PlatformLoanLateFeePayment)
+        .where(PlatformLoanLateFeePayment.id == payment_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if payment is None:
+        return None
+    if payment.status != "pending":
+        raise PlatformLendingValidationError(
+            "Only pending late-fee payments can be confirmed."
+        )
+
+    loan = db.session.execute(
+        select(PlatformLoan)
+        .where(PlatformLoan.id == payment.loan_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if loan is None:
+        raise PlatformLendingValidationError("Platform loan not found.")
+
+    account = db.session.execute(
+        select(PlatformFinancialAccount)
+        .where(PlatformFinancialAccount.id == financial_account_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if account is None or not account.is_active:
+        raise PlatformLendingValidationError(
+            "An active platform financial account is required."
+        )
+    if account.account_type not in {"cash", "bank", "mobile_money"}:
+        raise PlatformLendingValidationError(
+            "Fee payments require a cash, bank, or mobile-money account."
+        )
+    if not (
+        loan.currency_code == payment.currency_code == account.currency_code
+    ):
+        raise PlatformLendingValidationError(
+            "Loan, payment, and account currencies must match."
+        )
+
+    cash_ledger = db.session.execute(
+        select(PlatformLedgerAccount)
+        .where(
+            PlatformLedgerAccount.financial_account_id == account.id,
+            PlatformLedgerAccount.currency_code == loan.currency_code,
+            PlatformLedgerAccount.is_active.is_(True),
+            PlatformLedgerAccount.account_class == "asset",
+            PlatformLedgerAccount.normal_balance == "debit",
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if cash_ledger is None:
+        raise PlatformLendingValidationError(
+            "The selected account has no active debit-balance asset ledger."
+        )
+
+    receivable = db.session.execute(
+        select(PlatformLedgerAccount)
+        .where(
+            PlatformLedgerAccount.code
+            == f"PL-LOANS-LF-REC-{loan.currency_code}",
+            PlatformLedgerAccount.financial_account_id.is_(None),
+            PlatformLedgerAccount.currency_code == loan.currency_code,
+            PlatformLedgerAccount.account_class == "asset",
+            PlatformLedgerAccount.normal_balance == "debit",
+            PlatformLedgerAccount.is_system.is_(True),
+            PlatformLedgerAccount.is_active.is_(True),
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if receivable is None:
+        raise PlatformLendingValidationError(
+            "The active late-fee receivable ledger is not configured."
+        )
+
+    fees = db.session.execute(
+        select(PlatformLoanLateFee)
+        .where(
+            PlatformLoanLateFee.loan_id == loan.id,
+            PlatformLoanLateFee.paid_minor < PlatformLoanLateFee.amount_minor,
+        )
+        .order_by(
+            PlatformLoanLateFee.assessed_date.asc(),
+            PlatformLoanLateFee.id.asc(),
+        )
+        .with_for_update()
+    ).scalars().all()
+
+    outstanding = sum(item.amount_minor - item.paid_minor for item in fees)
+    if payment.amount_minor > outstanding:
+        raise PlatformLendingValidationError(
+            "The fee payment exceeds the remaining assessed fee balance."
+        )
+
+    remaining = payment.amount_minor
+    allocations = []
+
+    for fee in fees:
+        if remaining <= 0:
+            break
+        available = fee.amount_minor - fee.paid_minor
+        allocated = min(remaining, available)
+        if allocated:
+            allocations.append((fee, allocated))
+            remaining -= allocated
+
+    if remaining != 0:
+        raise PlatformLendingValidationError(
+            "The fee payment could not be fully allocated."
+        )
+
+    journal = create_draft_entry(
+        created_by=confirmed_by,
+        reference=f"PL-LATE-FEE-PAYMENT-{payment.id}",
+        description=f"Late-fee payment for platform loan {loan.id}",
+        transaction_date=datetime.combine(
+            payment.payment_date,
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        ),
+        lines=[
+            {
+                "ledger_account_id": cash_ledger.id,
+                "debit_minor": payment.amount_minor,
+                "credit_minor": 0,
+                "memo": "Late-fee payment received",
+            },
+            {
+                "ledger_account_id": receivable.id,
+                "debit_minor": 0,
+                "credit_minor": payment.amount_minor,
+                "memo": "Late-fee receivable settled",
+            },
+        ],
+    )
+    post_entry(entry_id=journal.id, posted_by=confirmed_by)
+
+    for fee, allocated in allocations:
+        db.session.add(PlatformLoanLateFeePaymentAllocation(
+            loan_id=loan.id,
+            payment_id=payment.id,
+            late_fee_id=fee.id,
+            amount_minor=allocated,
+        ))
+        fee.paid_minor += allocated
+        fee.status = (
+            "paid" if fee.paid_minor == fee.amount_minor
+            else "partially_paid"
+        )
+
+    payment.financial_account_id = account.id
+    payment.journal_entry_id = journal.id
+    payment.confirmed_by = confirmed_by
+    payment.confirmed_at = datetime.now(timezone.utc)
+    payment.status = "confirmed"
+
+    db.session.flush()
+    return payment
+
+
+def reject_platform_late_fee_payment(
+    *,
+    payment_id,
+    rejected_by,
+    reason,
+):
+    """Reject a pending fee payment without accounting effects."""
+
+    if not isinstance(reason, str) or not reason.strip():
+        raise PlatformLendingValidationError("A rejection reason is required.")
+    reason = reason.strip()
+    if len(reason) > 500:
+        raise PlatformLendingValidationError(
+            "Rejection reason cannot exceed 500 characters."
+        )
+
+    payment = db.session.execute(
+        select(PlatformLoanLateFeePayment)
+        .where(PlatformLoanLateFeePayment.id == payment_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if payment is None:
+        return None
+    if payment.status != "pending":
+        raise PlatformLendingValidationError(
+            "Only pending late-fee payments can be rejected."
+        )
+    if (
+        payment.financial_account_id is not None
+        or payment.journal_entry_id is not None
+        or payment.confirmed_by is not None
+        or payment.confirmed_at is not None
+    ):
+        raise PlatformLendingValidationError(
+            "This pending fee payment has accounting data and cannot be rejected."
+        )
+
+    existing = db.session.execute(
+        select(PlatformLoanLateFeePaymentAllocation.id)
+        .where(PlatformLoanLateFeePaymentAllocation.payment_id == payment.id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise PlatformLendingValidationError(
+            "This pending fee payment already has allocations."
+        )
+
+    payment.status = "rejected"
+    payment.rejected_by = rejected_by
+    payment.rejected_at = datetime.now(timezone.utc)
+    payment.rejection_reason = reason
+    db.session.flush()
+    return payment
+
+
+def reverse_platform_late_fee_payment(
+    *,
+    payment_id,
+    reversed_by,
+    reference,
+    transaction_date=None,
+):
+    """Reverse a fee-only payment and restore its fee balances."""
+
+    if not isinstance(reference, str) or not reference.strip():
+        raise PlatformLendingValidationError(
+            "A reversal reference is required."
+        )
+    reference = reference.strip()
+    if len(reference) > 100:
+        raise PlatformLendingValidationError(
+            "Reversal reference cannot exceed 100 characters."
+        )
+
+    if transaction_date is None:
+        transaction_date = datetime.now(timezone.utc)
+    if (
+        not isinstance(transaction_date, datetime)
+        or transaction_date.tzinfo is None
+    ):
+        raise PlatformLendingValidationError(
+            "A timezone-aware reversal date is required."
+        )
+
+    payment = db.session.execute(
+        select(PlatformLoanLateFeePayment)
+        .where(PlatformLoanLateFeePayment.id == payment_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if payment is None:
+        return None
+    if payment.status != "confirmed":
+        raise PlatformLendingValidationError(
+            "Only confirmed late-fee payments can be reversed."
+        )
+    if payment.journal_entry_id is None:
+        raise PlatformLendingValidationError(
+            "The confirmed fee payment has no accounting journal."
+        )
+
+    loan = db.session.execute(
+        select(PlatformLoan)
+        .where(PlatformLoan.id == payment.loan_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if loan is None:
+        raise PlatformLendingValidationError("Platform loan not found.")
+
+    later_payment = db.session.execute(
+        select(PlatformLoanLateFeePayment.id)
+        .where(
+            PlatformLoanLateFeePayment.loan_id == loan.id,
+            PlatformLoanLateFeePayment.status == "confirmed",
+            PlatformLoanLateFeePayment.id != payment.id,
+            PlatformLoanLateFeePayment.confirmed_at >= payment.confirmed_at,
+        )
+        .order_by(PlatformLoanLateFeePayment.confirmed_at.asc())
+        .limit(1)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if later_payment is not None:
+        raise PlatformLendingValidationError(
+            "A later confirmed fee payment exists. Reverse later payments first."
+        )
+
+    allocations = db.session.execute(
+        select(PlatformLoanLateFeePaymentAllocation)
+        .where(
+            PlatformLoanLateFeePaymentAllocation.payment_id == payment.id,
+            PlatformLoanLateFeePaymentAllocation.loan_id == loan.id,
+        )
+        .with_for_update()
+    ).scalars().all()
+
+    if not allocations or sum(item.amount_minor for item in allocations) != payment.amount_minor:
+        raise PlatformLendingValidationError(
+            "Fee payment totals do not match its allocations."
+        )
+
+    fees = db.session.execute(
+        select(PlatformLoanLateFee)
+        .where(
+            PlatformLoanLateFee.loan_id == loan.id,
+            PlatformLoanLateFee.id.in_(
+                [item.late_fee_id for item in allocations]
+            ),
+        )
+        .order_by(PlatformLoanLateFee.id)
+        .with_for_update()
+    ).scalars().all()
+    fee_by_id = {item.id: item for item in fees}
+
+    if len(fee_by_id) != len({item.late_fee_id for item in allocations}):
+        raise PlatformLendingValidationError(
+            "A fee allocation references a missing fee record."
+        )
+
+    for allocation in allocations:
+        fee = fee_by_id[allocation.late_fee_id]
+        if fee.paid_minor < allocation.amount_minor:
+            raise PlatformLendingValidationError(
+                "The fee balance is insufficient for this reversal."
+            )
+
+    reversal = reverse_entry(
+        entry_id=payment.journal_entry_id,
+        reversed_by=reversed_by,
+        reference=reference,
+        description=f"Reversal of late-fee payment {payment.id}",
+        transaction_date=transaction_date,
+    )
+
+    for allocation in allocations:
+        fee = fee_by_id[allocation.late_fee_id]
+        fee.paid_minor -= allocation.amount_minor
+        fee.status = "assessed" if fee.paid_minor == 0 else "partially_paid"
+
+    payment.status = "reversed"
+    payment.reversed_at = datetime.now(timezone.utc)
+    db.session.flush()
+    return reversal

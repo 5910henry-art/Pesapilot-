@@ -96,6 +96,10 @@ export default function PlatformLending() {
   const { activeWorkspace } = useAuth();
   const workspaceId = activeWorkspace?.id;
   const [products, setProducts] = useState([]);
+  const [eligibility, setEligibility] = useState(null);
+  const [eligibilityConsent, setEligibilityConsent] = useState(false);
+  const [checkingEligibility, setCheckingEligibility] = useState(false);
+  const [eligibilityError, setEligibilityError] = useState("");
   const [applications, setApplications] = useState([]);
   const [loans, setLoans] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -158,14 +162,11 @@ export default function PlatformLending() {
     setLoadError("");
 
     try {
-      const [productResult, applicationResult, loanResult] =
-        await Promise.all([
-          platformLendingApi.listProducts(),
-          platformLendingApi.listApplications(),
-          platformLendingApi.listLoans({ per_page: 100 }),
-        ]);
+      const [applicationResult, loanResult] = await Promise.all([
+        platformLendingApi.listApplications(),
+        platformLendingApi.listLoans({ per_page: 100 }),
+      ]);
 
-      setProducts(productResult.products || []);
       setApplications(applicationResult.applications || []);
       setLoans(loanResult.loans || []);
     } catch (err) {
@@ -179,6 +180,29 @@ export default function PlatformLending() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  async function checkEligibility() {
+    if (!eligibilityConsent || checkingEligibility) return;
+
+    setCheckingEligibility(true);
+    setEligibilityError("");
+    setEligibility(null);
+    setProducts([]);
+
+    try {
+      const result = await platformLendingApi.checkEligibility({
+        affordability_consent: true,
+      });
+      setEligibility(result);
+      setProducts(result.products || []);
+    } catch (err) {
+      setEligibilityError(
+        err.message || "Your eligibility could not be checked. Please try again."
+      );
+    } finally {
+      setCheckingEligibility(false);
+    }
+  }
 
   const pendingApplication = useMemo(
     () => applications.find((item) => item.status === "pending"),
@@ -337,6 +361,7 @@ export default function PlatformLending() {
         alternative_contact_relationship:
           applicationForm.alternative_contact_relationship.trim() || null,
         additional_notes: applicationForm.additional_notes.trim() || null,
+        affordability_consent: true,
       });
 
       setShowApply(false);
@@ -692,7 +717,7 @@ export default function PlatformLending() {
                       <h3>{product.name}</h3>
                       <p>{product.description || "A PesaPilot lending product."}</p>
                       <div className="lending-product-amount">
-                        <span>Available amount</span>
+                        <span>Product range (subject to affordability)</span>
                         <strong>
                           {money(product.min_principal_minor, product.currency_code)}
                           {" – "}
@@ -716,11 +741,85 @@ export default function PlatformLending() {
                     </article>
                   ))}
                 </div>
+              ) : eligibility === null ? (
+                <div className="lending-panel lending-eligibility-panel">
+                  <div className="lending-product-icon"><Landmark size={22} /></div>
+                  <h3>Check your loan eligibility</h3>
+                  <p>
+                    Before showing loan products, PesaPilot must verify income
+                    recorded in your personal workspace over the last six months.
+                    Declared income on this application will not be used to qualify you.
+                  </p>
+                  <p>
+                    We will review posted income and expense records to calculate
+                    your verified average monthly income and affordability.
+                    You need at least one month with verified income and an average
+                    of at least KSh 1,000 per month across the six-month period.
+                  </p>
+                  <label className="lending-consent" style={{ display: "flex", gap: "10px", alignItems: "flex-start", margin: "18px 0" }}>
+                    <input
+                      type="checkbox"
+                      checked={eligibilityConsent}
+                      onChange={(event) => setEligibilityConsent(event.target.checked)}
+                      disabled={checkingEligibility}
+                    />
+                    <span>
+                      I consent to PesaPilot accessing my personal workspace's
+                      posted financial records for this eligibility and affordability
+                      assessment. I understand that my records will be used to
+                      calculate verified income and expenses.
+                    </span>
+                  </label>
+                  {eligibilityError && (
+                    <div className="lending-alert lending-alert-error" role="alert">
+                      {eligibilityError}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="lending-button lending-button-primary"
+                    disabled={!eligibilityConsent || checkingEligibility}
+                    onClick={checkEligibility}
+                  >
+                    {checkingEligibility ? "Checking eligibility…" : "Consent and check eligibility"}
+                  </button>
+                </div>
+              ) : !eligibility.eligible ? (
+                <div className="lending-empty">
+                  <AlertCircle size={34} />
+                  <h3>You are not currently eligible</h3>
+                  <p>{eligibility.message}</p>
+                  <p>
+                    Verified average monthly income: {money(
+                      eligibility.evidenced_average_monthly_income_minor,
+                      "KES"
+                    )}. Minimum required: {money(
+                      eligibility.minimum_average_monthly_income_minor,
+                      "KES"
+                    )}.
+                  </p>
+                  <p>
+                    Months with verified income: {eligibility.months_with_verified_income}
+                    {" of "}{eligibility.evidence_window_months}.
+                  </p>
+                  <button
+                    type="button"
+                    className="lending-button lending-button-secondary"
+                    onClick={() => {
+                      setEligibility(null);
+                      setProducts([]);
+                      setEligibilityConsent(false);
+                      setEligibilityError("");
+                    }}
+                  >
+                    Check again
+                  </button>
+                </div>
               ) : (
                 <div className="lending-empty">
                   <Landmark size={34} />
                   <h3>No loan products available</h3>
-                  <p>There are currently no active loan products. Please check again later.</p>
+                  <p>You meet the income evidence requirement, but there are currently no active loan products. Please check again later.</p>
                 </div>
               )}
             </>
@@ -859,19 +958,14 @@ export default function PlatformLending() {
             </div>
 
             <p className="lending-muted">
-              Request between {money(selectedProduct.min_principal_minor, activeCurrency)}
-              {" and "}{money(selectedProduct.max_principal_minor, activeCurrency)}.
+              Product range: {money(selectedProduct.min_principal_minor, activeCurrency)}
+              {" – "}{money(selectedProduct.max_principal_minor, activeCurrency)}.
+              Your personal borrowing limit is calculated from your verified
+              workspace records and the repayment term you select. The product
+              maximum is not guaranteed. If your requested amount exceeds your
+              assessed limit, we will show you the maximum amount you qualify for.
               All financial figures below must use {activeCurrency}.
             </p>
-
-            {applicationMessage && (
-              <div className="lending-alert lending-alert-error" role="alert">
-                <AlertCircle size={18} /> {applicationMessage}
-                <button type="button" onClick={() => setApplicationMessage("")} aria-label="Dismiss">
-                  <X size={16} />
-                </button>
-              </div>
-            )}
 
             <h3>1. Personal information</h3>
 
@@ -992,11 +1086,18 @@ export default function PlatformLending() {
             </Field>
 
             <Field label={`Requested amount (${activeCurrency})`}>
-              <input type="number" min="0"
+              <input type="number"
+                min={selectedProduct.min_principal_minor / (10 ** digitsFor(activeCurrency))}
+                max={selectedProduct.max_principal_minor / (10 ** digitsFor(activeCurrency))}
                 step={digitsFor(activeCurrency) ? "0.01" : "1"}
                 required value={applicationForm.amount}
                 onChange={(e) => updateApplicationField("amount", e.target.value)}
                 placeholder="Enter amount" />
+              <small>
+                You may request less than your personal qualified maximum,
+                but not more. Your exact limit depends on this repayment term
+                and your verified affordability assessment.
+              </small>
             </Field>
 
             <Field label={`Repayment term (${selectedProduct.repayment_frequency})`}>
@@ -1070,6 +1171,16 @@ export default function PlatformLending() {
                 {savingApplication ? "Submitting…" : "Submit application"}
               </button>
             </div>
+
+            {applicationMessage && (
+              <div className="lending-alert lending-alert-error" role="alert">
+                <AlertCircle size={18} /> {applicationMessage}
+                <button type="button" onClick={() => setApplicationMessage("")} aria-label="Dismiss">
+                  <X size={16} />
+                </button>
+              </div>
+            )}
+
           </form>
         </div>
       )}

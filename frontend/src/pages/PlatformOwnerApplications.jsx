@@ -66,17 +66,45 @@ function DecisionModal({ application, onClose, onSubmit, saving, error }) {
   const [notes, setNotes] = useState("");
   const [customerMessage, setCustomerMessage] = useState("");
   const [amountError, setAmountError] = useState("");
+  const [affordabilityOverride, setAffordabilityOverride] = useState(false);
+  const [overrideError, setOverrideError] = useState("");
 
   const applicant = application.applicant || null;
   const assessment = application.affordability_assessment || null;
+  const requiresAffordabilityOverride = Boolean(
+    assessment &&
+    assessment.status !== "verified" &&
+    assessment.status !== "high_risk"
+  );
 
   async function submit(event) {
     event.preventDefault();
 
+    if (decision === "approved" && requiresAffordabilityOverride) {
+      if (!affordabilityOverride) {
+        setOverrideError(
+          "Review the non-verified affordability result and explicitly acknowledge the override."
+        );
+        return;
+      }
+      if (!notes.trim()) {
+        setOverrideError(
+          "Internal reviewer notes are required when overriding an affordability result."
+        );
+        return;
+      }
+    }
+
+    setOverrideError("");
     const payload = {
       decision,
       decision_notes: notes.trim() || null,
       customer_decision_message: customerMessage.trim() || null,
+      affordability_override: Boolean(
+        decision === "approved" &&
+        requiresAffordabilityOverride &&
+        affordabilityOverride
+      ),
     };
 
     if (decision === "approved") {
@@ -331,6 +359,30 @@ function DecisionModal({ application, onClose, onSubmit, saving, error }) {
             </select>
           </label>
 
+          {decision === "approved" && requiresAffordabilityOverride && (
+            <div className="platform-owner-override-panel">
+              <label className="platform-owner-override-checkbox">
+                <input
+                  type="checkbox"
+                  checked={affordabilityOverride}
+                  onChange={(event) => {
+                    setAffordabilityOverride(event.target.checked);
+                    setOverrideError("");
+                  }}
+                />
+                <span>
+                  I have reviewed the affordability discrepancies and explicitly authorize this approval despite the non-verified assessment.
+                </span>
+              </label>
+              {overrideError && (
+                <div className="platform-owner-notice error" role="alert">
+                  <AlertCircle size={15} />
+                  <span>{overrideError}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {decision === "approved" && (
             <label>
               Approved principal (minor currency units)
@@ -374,7 +426,11 @@ function DecisionModal({ application, onClose, onSubmit, saving, error }) {
               rows="4"
               maxLength="2000"
               value={notes}
-              onChange={(event) => setNotes(event.target.value)}
+              required={decision === "approved" && requiresAffordabilityOverride}
+              onChange={(event) => {
+                setNotes(event.target.value);
+                if (event.target.value.trim()) setOverrideError("");
+              }}
               placeholder="Enter private review comments..."
             />
           </label>

@@ -23,6 +23,7 @@ from ..models.platform_loan_records import (
 )
 from .platform_affordability import (
     EVIDENCE_WINDOW_MONTHS,
+    MIN_VERIFIED_MONTHLY_INCOME_MINOR,
     calculate_affordability_capacity,
     classify_affordability,
 )
@@ -137,17 +138,25 @@ def collect_personal_workspace_evidence(
     income_total = sum(max(0, item["income"]) for item in monthly.values())
     expenses_total = sum(max(0, item["expenses"]) for item in monthly.values())
     months_with_records = len(monthly)
+    months_with_verified_income = sum(
+        1 for item in monthly.values() if item["income"] > 0
+    )
 
-    evidenced_income = income_total // EVIDENCE_WINDOW_MONTHS
+    # Average income only across months with positive verified income,
+    # while keeping the evidence query restricted to the latest six months.
+    evidenced_income = (
+        income_total // months_with_verified_income
+        if months_with_verified_income
+        else 0
+    )
     evidenced_expenses = expenses_total // EVIDENCE_WINDOW_MONTHS
 
     declared_income = int(declared_monthly_income_minor)
     declared_expenses = int(declared_monthly_expenses_minor)
 
     sufficient = (
-        months_with_records >= 3
-        and any(item["income"] > 0 for item in monthly.values())
-        and any(item["expenses"] > 0 for item in monthly.values())
+        months_with_verified_income >= 1
+        and evidenced_income >= MIN_VERIFIED_MONTHLY_INCOME_MINOR
     )
 
     discrepancy = sufficient and (
@@ -159,6 +168,10 @@ def collect_personal_workspace_evidence(
         "workspace_id": str(workspace_id),
         "evidence_window_months": EVIDENCE_WINDOW_MONTHS,
         "months_with_records": months_with_records,
+        "months_with_verified_income": months_with_verified_income,
+        "minimum_average_monthly_income_minor": (
+            MIN_VERIFIED_MONTHLY_INCOME_MINOR
+        ),
         "record_count": len(rows),
         "declared_monthly_income_minor": declared_income,
         "declared_monthly_expenses_minor": declared_expenses,
@@ -327,6 +340,10 @@ def build_affordability_evidence_report(
             "workspace_id": None,
             "evidence_window_months": EVIDENCE_WINDOW_MONTHS,
             "months_with_records": 0,
+            "months_with_verified_income": 0,
+            "minimum_average_monthly_income_minor": (
+                MIN_VERIFIED_MONTHLY_INCOME_MINOR
+            ),
             "record_count": 0,
             "declared_monthly_income_minor": int(declared_monthly_income_minor),
             "declared_monthly_expenses_minor": int(declared_monthly_expenses_minor),
@@ -348,9 +365,20 @@ def build_affordability_evidence_report(
     known_existing = debt_evidence["existing_monthly_repayments_minor"]
     effective_existing = max(declared_existing, known_existing)
 
+    verified_income = (
+        workspace_evidence["evidenced_average_monthly_income_minor"] or 0
+    )
+    verified_expenses = (
+        workspace_evidence["evidenced_average_monthly_expenses_minor"] or 0
+    )
+    capacity_expenses = max(
+        int(declared_monthly_expenses_minor),
+        int(verified_expenses),
+    )
+
     capacity = calculate_affordability_capacity(
-        monthly_income_minor=declared_monthly_income_minor,
-        monthly_expenses_minor=declared_monthly_expenses_minor,
+        monthly_income_minor=verified_income,
+        monthly_expenses_minor=capacity_expenses,
         existing_monthly_repayments_minor=effective_existing,
     )
 
@@ -363,6 +391,10 @@ def build_affordability_evidence_report(
     return {
         "status": status,
         "capacity": capacity,
+        "capacity_income_source": "verified_six_month_average",
+        "capacity_expenses_source": "higher_of_declared_or_verified_average",
+        "capacity_verified_monthly_income_minor": verified_income,
+        "capacity_monthly_expenses_minor": capacity_expenses,
         "workspace_evidence": workspace_evidence,
         "debt_evidence": debt_evidence,
         "declared_existing_monthly_repayments_minor": declared_existing,
