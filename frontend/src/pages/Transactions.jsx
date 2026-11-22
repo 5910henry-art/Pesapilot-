@@ -487,10 +487,6 @@ export default function Transactions() {
         )}
       </section>
 
-      <p className="transaction-footnote">
-        Transactions use double-entry accounting. Reversals create a separate
-        correcting entry; they do not erase the original record.
-      </p>
     </div>
   );
 }

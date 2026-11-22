@@ -15,6 +15,7 @@ from app.models import (
     JournalEntry,
     JournalLine,
     ExpenseCategory,
+    BudgetCategoryAllocation,
     Budget,
     SavingsGoal,
     SavingsGoalMovement,
@@ -30,6 +31,36 @@ from app.models import (
 
 POSTED_STATUSES = ("posted", "reversed")
 
+def _budget_actual_minor(workspace_id, ledger_id, period_start, period_end, user_timezone):
+    start_local = datetime.combine(period_start, time.min, tzinfo=user_timezone)
+    end_local = datetime.combine(
+        period_end + timedelta(days=1),
+        time.min,
+        tzinfo=user_timezone,
+    )
+
+    actual = (
+        db.session.query(
+            func.coalesce(
+                func.sum(
+                    JournalLine.functional_debit_minor
+                    - JournalLine.functional_credit_minor
+                ),
+                0,
+            )
+        )
+        .join(JournalEntry, JournalEntry.id == JournalLine.journal_entry_id)
+        .filter(
+            JournalEntry.workspace_id == workspace_id,
+            JournalEntry.status.in_(POSTED_STATUSES),
+            JournalEntry.transaction_date >= start_local.astimezone(timezone.utc),
+            JournalEntry.transaction_date < end_local.astimezone(timezone.utc),
+            JournalLine.ledger_account_id == ledger_id,
+        )
+        .scalar()
+    )
+
+    return int(actual or 0)
 
 def _safe_timezone(timezone_name):
     try:
@@ -418,73 +449,74 @@ def build_financial_snapshot(workspace_id, user_id, as_of=None):
     budget_data = []
 
     for budget in budgets:
-        category = ExpenseCategory.query.filter_by(
-            id=budget.category_id,
+        allocations = BudgetCategoryAllocation.query.filter_by(
             workspace_id=workspace_id,
-        ).first()
+            budget_id=budget.id,
+        ).all()
 
-        if category is None:
+        category_data = []
+
+        for allocation in allocations:
+            category = ExpenseCategory.query.filter_by(
+                id=allocation.category_id,
+                workspace_id=workspace_id,
+            ).first()
+
+            if category is None:
+                continue
+
+            ledger = LedgerAccount.query.filter_by(
+                id=category.ledger_account_id,
+                workspace_id=workspace_id,
+                account_class="expense",
+            ).first()
+
+            if ledger is None:
+                continue
+
+            allocated_minor = int(allocation.amount_minor or 0)
+            actual_minor = _budget_actual_minor(
+                workspace_id,
+                ledger.id,
+                budget.period_start,
+                budget.period_end,
+                user_timezone,
+            )
+            remaining_minor = allocated_minor - actual_minor
+
+            category_data.append({
+                "category_id": str(category.id),
+                "category": category.name,
+                "amount_minor": allocated_minor,
+                "actual_minor": actual_minor,
+                "remaining_minor": remaining_minor,
+                "usage_percentage": round(
+                    actual_minor / allocated_minor * 100, 2
+                ) if allocated_minor else 0,
+                "is_over_budget": actual_minor > allocated_minor,
+            })
+
+        if not category_data:
             continue
 
-        ledger = LedgerAccount.query.filter_by(
-            id=category.ledger_account_id,
-            workspace_id=workspace_id,
-            account_class="expense",
-        ).first()
-
-        if ledger is None:
-            continue
-
-        start_local = datetime.combine(
-            budget.period_start,
-            time.min,
-            tzinfo=user_timezone,
-        )
-        end_local = datetime.combine(
-            budget.period_end + timedelta(days=1),
-            time.min,
-            tzinfo=user_timezone,
-        )
-
-        actual = (
-            db.session.query(
-                func.coalesce(
-                    func.sum(
-                        JournalLine.functional_debit_minor
-                        - JournalLine.functional_credit_minor
-                    ),
-                    0,
-                )
-            )
-            .join(
-                JournalEntry,
-                JournalEntry.id == JournalLine.journal_entry_id,
-            )
-            .filter(
-                JournalEntry.workspace_id == workspace_id,
-                JournalEntry.status.in_(POSTED_STATUSES),
-                JournalEntry.transaction_date >= (
-                    start_local.astimezone(timezone.utc)
-                ),
-                JournalEntry.transaction_date < (
-                    end_local.astimezone(timezone.utc)
-                ),
-                JournalLine.ledger_account_id == ledger.id,
-            )
-            .scalar()
-        )
-
-        actual_minor = int(actual or 0)
+        total_limit = sum(item["amount_minor"] for item in category_data)
+        total_actual = sum(item["actual_minor"] for item in category_data)
 
         budget_data.append({
             "id": str(budget.id),
-            "category": category.name,
-            "amount_minor": budget.amount_minor,
-            "actual_minor": actual_minor,
-            "remaining_minor": budget.amount_minor - actual_minor,
+            "category": (
+                category_data[0]["category"]
+                if len(category_data) == 1
+                else None
+            ),
+            "categories": category_data,
+            "amount_minor": total_limit,
+            "actual_minor": total_actual,
+            "remaining_minor": total_limit - total_actual,
             "usage_percentage": round(
-                actual_minor / budget.amount_minor * 100, 2
-            ) if budget.amount_minor else 0,
+                total_actual / total_limit * 100, 2
+            ) if total_limit else 0,
+            "is_over_budget": total_actual > total_limit,
             "currency": budget.currency_code,
             "period_start": budget.period_start.isoformat(),
             "period_end": budget.period_end.isoformat(),

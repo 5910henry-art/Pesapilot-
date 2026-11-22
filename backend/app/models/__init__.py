@@ -13,6 +13,7 @@ from .core import (
     RefreshToken,
     ExpenseCategory,
     Budget,
+    BudgetCategoryAllocation,
     SavingsGoal,
     SavingsGoalMovement,
 )

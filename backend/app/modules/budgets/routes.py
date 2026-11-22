@@ -12,6 +12,7 @@ from app.models import (
     AuditLog,
     ExpenseCategory,
     Budget,
+    BudgetCategoryAllocation,
     Currency,
     JournalEntry,
     JournalLine,
@@ -258,49 +259,24 @@ def create_expense_category():
         }), 500
 
 
-def _budget_response(budget, timezone_name):
-    category = ExpenseCategory.query.filter_by(
-        id=budget.category_id,
-        workspace_id=budget.workspace_id,
-    ).first()
 
-    if category is None:
-        raise ValueError("Budget expense category was not found.")
-
-    ledger = LedgerAccount.query.filter_by(
-        id=category.ledger_account_id,
-        workspace_id=budget.workspace_id,
-        account_class="expense",
-        normal_balance="debit",
-        is_active=True,
-    ).first()
-
-    if ledger is None:
-        raise ValueError(
-            "Budget category has no valid active expense ledger account."
-        )
-
-    try:
-        user_timezone = ZoneInfo(timezone_name)
-    except Exception:
-        user_timezone = ZoneInfo("UTC")
-
+def _budget_actual_for_ledger(
+    budget,
+    ledger,
+    user_timezone,
+):
     start_local = datetime.combine(
         budget.period_start,
         time.min,
         tzinfo=user_timezone,
     )
-
     end_local = datetime.combine(
         budget.period_end + timedelta(days=1),
         time.min,
         tzinfo=user_timezone,
     )
 
-    start_utc = start_local.astimezone(timezone.utc)
-    end_utc = end_local.astimezone(timezone.utc)
-
-    actual_minor = (
+    actual = (
         db.session.query(
             func.coalesce(
                 func.sum(
@@ -317,32 +293,123 @@ def _budget_response(budget, timezone_name):
         .filter(
             JournalEntry.workspace_id == budget.workspace_id,
             JournalEntry.status.in_(("posted", "reversed")),
-            JournalEntry.transaction_date >= start_utc,
-            JournalEntry.transaction_date < end_utc,
+            JournalEntry.transaction_date >= (
+                start_local.astimezone(timezone.utc)
+            ),
+            JournalEntry.transaction_date < (
+                end_local.astimezone(timezone.utc)
+            ),
             JournalLine.ledger_account_id == ledger.id,
         )
         .scalar()
     )
 
-    actual_minor = int(actual_minor or 0)
-    remaining_minor = budget.amount_minor - actual_minor
+    return int(actual or 0)
 
-    percentage = round(
-        (actual_minor / budget.amount_minor) * 100,
+
+def _budget_response(budget, timezone_name):
+    try:
+        user_timezone = ZoneInfo(timezone_name)
+    except Exception:
+        user_timezone = ZoneInfo("UTC")
+
+    allocations = (
+        BudgetCategoryAllocation.query
+        .filter_by(
+            workspace_id=budget.workspace_id,
+            budget_id=budget.id,
+        )
+        .order_by(BudgetCategoryAllocation.created_at.asc())
+        .all()
+    )
+
+    if not allocations:
+        raise ValueError(
+            "Budget has no category allocations."
+        )
+
+    category_data = []
+
+    for allocation in allocations:
+        category = ExpenseCategory.query.filter_by(
+            id=allocation.category_id,
+            workspace_id=budget.workspace_id,
+        ).first()
+
+        if category is None:
+            raise ValueError(
+                "Budget expense category was not found."
+            )
+
+        ledger = LedgerAccount.query.filter_by(
+            id=category.ledger_account_id,
+            workspace_id=budget.workspace_id,
+            account_class="expense",
+            normal_balance="debit",
+            is_active=True,
+        ).first()
+
+        if ledger is None:
+            raise ValueError(
+                "Budget category has no valid active expense ledger account."
+            )
+
+        actual_minor = _budget_actual_for_ledger(
+            budget,
+            ledger,
+            user_timezone,
+        )
+
+        allocated_minor = int(allocation.amount_minor)
+        remaining_minor = allocated_minor - actual_minor
+
+        percentage = round(
+            actual_minor / allocated_minor * 100,
+            2,
+        ) if allocated_minor else 0
+
+        category_data.append({
+            "id": str(allocation.id),
+            "category_id": str(category.id),
+            "category": {
+                "id": str(category.id),
+                "name": category.name,
+            },
+            "amount_minor": allocated_minor,
+            "actual_minor": actual_minor,
+            "remaining_minor": remaining_minor,
+            "usage_percentage": percentage,
+            "is_over_budget": actual_minor > allocated_minor,
+        })
+
+    total_allocated = sum(
+        item["amount_minor"] for item in category_data
+    )
+    total_actual = sum(
+        item["actual_minor"] for item in category_data
+    )
+    total_remaining = total_allocated - total_actual
+
+    total_percentage = round(
+        total_actual / total_allocated * 100,
         2,
+    ) if total_allocated else 0
+
+    single_category = (
+        category_data[0]["category"]
+        if len(category_data) == 1
+        else None
     )
 
     return {
         "id": str(budget.id),
-        "category": {
-            "id": str(category.id),
-            "name": category.name,
-        },
-        "amount_minor": budget.amount_minor,
-        "actual_minor": actual_minor,
-        "remaining_minor": remaining_minor,
-        "usage_percentage": percentage,
-        "is_over_budget": actual_minor > budget.amount_minor,
+        "category": single_category,
+        "categories": category_data,
+        "amount_minor": total_allocated,
+        "actual_minor": total_actual,
+        "remaining_minor": total_remaining,
+        "usage_percentage": total_percentage,
+        "is_over_budget": total_actual > total_allocated,
         "currency_code": budget.currency_code,
         "period_start": budget.period_start.isoformat(),
         "period_end": budget.period_end.isoformat(),
@@ -406,6 +473,7 @@ def list_budgets():
     }), 200
 
 
+
 @budgets_bp.post("")
 @jwt_required()
 def create_budget():
@@ -418,13 +486,12 @@ def create_budget():
         }), 400
 
     workspace_id = _workspace_id(data.get("workspace_id"))
-    category_id = _workspace_id(data.get("category_id"))
     user_id = _user_id()
 
-    if workspace_id is None or category_id is None:
+    if workspace_id is None:
         return jsonify({
             "success": False,
-            "message": "Valid workspace and category IDs are required.",
+            "message": "A valid workspace ID is required.",
         }), 400
 
     if user_id is None:
@@ -447,22 +514,97 @@ def create_budget():
             "message": "You do not have permission to create budgets.",
         }), 403
 
-    amount_minor = data.get("amount_minor")
+    # Accept the new categories array or the legacy single-category payload.
+    if "categories" in data:
+        if "category_id" in data or "amount_minor" in data:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Use either categories or the legacy category_id and "
+                    "amount_minor fields, not both."
+                ),
+            }), 400
 
-    if (
-        isinstance(amount_minor, bool)
-        or not isinstance(amount_minor, int)
-        or amount_minor <= 0
-        or amount_minor > 9223372036854775807
-    ):
-        return jsonify({
-            "success": False,
-            "message": "Budget amount must be a positive integer in minor units.",
-        }), 400
+        raw_categories = data.get("categories")
+
+        if (
+            not isinstance(raw_categories, list)
+            or not raw_categories
+            or len(raw_categories) > 100
+        ):
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Provide between 1 and 100 category allocations."
+                ),
+            }), 400
+    else:
+        raw_categories = [{
+            "category_id": data.get("category_id"),
+            "amount_minor": data.get("amount_minor"),
+        }]
+
+    allocations = []
+    seen_category_ids = set()
+    total_amount = 0
+    maximum_amount = 9223372036854775807
+
+    for item in raw_categories:
+        if not isinstance(item, dict):
+            return jsonify({
+                "success": False,
+                "message": "Each category allocation must be an object.",
+            }), 400
+
+        category_id = _workspace_id(item.get("category_id"))
+        amount_minor = item.get("amount_minor")
+
+        if category_id is None:
+            return jsonify({
+                "success": False,
+                "message": "Every allocation requires a valid category ID.",
+            }), 400
+
+        if category_id in seen_category_ids:
+            return jsonify({
+                "success": False,
+                "message": "A category can only appear once per budget.",
+            }), 400
+
+        if (
+            isinstance(amount_minor, bool)
+            or not isinstance(amount_minor, int)
+            or amount_minor <= 0
+            or amount_minor > maximum_amount
+        ):
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Every category amount must be a positive integer "
+                    "in minor units."
+                ),
+            }), 400
+
+        if total_amount > maximum_amount - amount_minor:
+            return jsonify({
+                "success": False,
+                "message": "The total budget amount is too large.",
+            }), 400
+
+        seen_category_ids.add(category_id)
+        total_amount += amount_minor
+        allocations.append({
+            "category_id": category_id,
+            "amount_minor": amount_minor,
+        })
 
     try:
-        period_start = date.fromisoformat(data.get("period_start", ""))
-        period_end = date.fromisoformat(data.get("period_end", ""))
+        period_start = date.fromisoformat(
+            data.get("period_start", "")
+        )
+        period_end = date.fromisoformat(
+            data.get("period_end", "")
+        )
     except (TypeError, ValueError):
         return jsonify({
             "success": False,
@@ -475,17 +617,21 @@ def create_budget():
             "message": "Budget end date cannot be before its start date.",
         }), 400
 
-    category = ExpenseCategory.query.filter_by(
-        id=category_id,
-        workspace_id=workspace_id,
-        is_active=True,
-    ).first()
+    # Validate every category within this workspace.
+    for allocation in allocations:
+        category = ExpenseCategory.query.filter_by(
+            id=allocation["category_id"],
+            workspace_id=workspace_id,
+            is_active=True,
+        ).first()
 
-    if category is None:
-        return jsonify({
-            "success": False,
-            "message": "Active expense category not found in this workspace.",
-        }), 404
+        if category is None:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "An active expense category was not found in this workspace."
+                ),
+            }), 404
 
     workspace = db.session.get(Workspace, workspace_id)
 
@@ -507,7 +653,7 @@ def create_budget():
         }), 400
 
     duplicate = Budget.query.filter_by(
-        category_id=category_id,
+        workspace_id=workspace_id,
         period_start=period_start,
         period_end=period_end,
     ).first()
@@ -515,14 +661,20 @@ def create_budget():
     if duplicate:
         return jsonify({
             "success": False,
-            "message": "A budget already exists for this category and period.",
+            "message": (
+                "A budget already exists for this workspace and period."
+            ),
         }), 409
 
     try:
         budget = Budget(
             workspace_id=workspace_id,
-            category_id=category_id,
-            amount_minor=amount_minor,
+            category_id=(
+                allocations[0]["category_id"]
+                if len(allocations) == 1
+                else None
+            ),
+            amount_minor=total_amount,
             currency_code=workspace.functional_currency,
             period_start=period_start,
             period_end=period_end,
@@ -533,19 +685,42 @@ def create_budget():
         db.session.add(budget)
         db.session.flush()
 
+        for allocation in allocations:
+            db.session.add(BudgetCategoryAllocation(
+                workspace_id=workspace_id,
+                budget_id=budget.id,
+                category_id=allocation["category_id"],
+                amount_minor=allocation["amount_minor"],
+            ))
+
+        db.session.flush()
+
+        audit_details = {
+            "categories": [
+                {
+                    "category_id": str(item["category_id"]),
+                    "amount_minor": item["amount_minor"],
+                }
+                for item in allocations
+            ],
+            "amount_minor": total_amount,
+            "currency_code": workspace.functional_currency,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+        }
+
+        if len(allocations) == 1:
+            audit_details["category_id"] = str(
+                allocations[0]["category_id"]
+            )
+
         db.session.add(AuditLog(
             workspace_id=workspace_id,
             user_id=user_id,
             action="budget_created",
             resource_type="budget",
             resource_id=str(budget.id),
-            details={
-                "category_id": str(category_id),
-                "amount_minor": amount_minor,
-                "currency_code": workspace.functional_currency,
-                "period_start": period_start.isoformat(),
-                "period_end": period_end.isoformat(),
-            },
+            details=audit_details,
             ip_address=request.remote_addr,
         ))
 
@@ -568,7 +743,10 @@ def create_budget():
         db.session.rollback()
         return jsonify({
             "success": False,
-            "message": "A budget already exists for this category and period.",
+            "message": (
+                "A budget already exists for this workspace and period, "
+                "or one of its allocations is invalid."
+            ),
         }), 409
 
     except Exception:
@@ -578,4 +756,3 @@ def create_budget():
             "success": False,
             "message": "Budget creation failed. Please try again.",
         }), 500
-

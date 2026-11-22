@@ -6897,6 +6897,23 @@ class PesaPilotTestCase(unittest.TestCase):
             },
         )
 
+    def create_multi_category_budget(
+        self,
+        allocations,
+        start="2026-11-01",
+        end="2026-11-30",
+    ):
+        return self.client.post(
+            "/api/v1/budgets",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "categories": allocations,
+                "period_start": start,
+                "period_end": end,
+            },
+        )
+
     def create_expense_entry(
         self,
         category_id,
@@ -7170,36 +7187,114 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(budget["period_start"], "2026-11-01")
         self.assertEqual(budget["period_end"], "2026-11-30")
         self.assertEqual(budget["category"]["name"], "Food")
+        self.assertEqual(len(budget["categories"]), 1)
+        self.assertEqual(
+            budget["categories"][0]["category"]["name"],
+            "Food",
+        )
+        self.assertEqual(
+            budget["categories"][0]["amount_minor"],
+            50000,
+        )
 
     def test_list_budgets(self):
         first = self.create_category("Food")
         second = self.create_category("Transport")
 
-        self.assertEqual(
-            self.create_budget(first.json["category"]["id"]).status_code,
-            201,
-        )
-        self.assertEqual(
-            self.create_budget(
-                second.json["category"]["id"],
-                amount=80000,
-            ).status_code,
-            201,
-        )
+        created = self.create_multi_category_budget([
+            {
+                "category_id": first.json["category"]["id"],
+                "amount_minor": 50000,
+            },
+            {
+                "category_id": second.json["category"]["id"],
+                "amount_minor": 80000,
+            },
+        ])
 
-        response = self.client.get(
-            f"/api/v1/budgets?workspace_id={self.workspace.id}",
-            headers=self.headers,
-        )
+        self.assertEqual(created.status_code, 201, created.json)
+
+        response = self.get_budget_list()
 
         self.assertEqual(response.status_code, 200, response.json)
-        self.assertEqual(len(response.json["budgets"]), 2)
+        self.assertEqual(len(response.json["budgets"]), 1)
 
-        names = {
-            item["category"]["name"]
-            for item in response.json["budgets"]
+        budget = response.json["budgets"][0]
+        self.assertEqual(budget["amount_minor"], 130000)
+        self.assertIsNone(budget["category"])
+
+        allocations = {
+            item["category"]["name"]: item["amount_minor"]
+            for item in budget["categories"]
         }
-        self.assertEqual(names, {"Food", "Transport"})
+        self.assertEqual(
+            allocations,
+            {"Food": 50000, "Transport": 80000},
+        )
+
+    def test_multi_category_budget_tracks_category_and_parent_spending(self):
+        food = self.create_category("Food")
+        transport = self.create_category("Transport")
+
+        food_id = food.json["category"]["id"]
+        transport_id = transport.json["category"]["id"]
+
+        created = self.create_multi_category_budget([
+            {"category_id": food_id, "amount_minor": 100000},
+            {"category_id": transport_id, "amount_minor": 50000},
+        ])
+
+        self.assertEqual(created.status_code, 201, created.json)
+
+        transaction_date = datetime(
+            2026, 11, 15, 12, 0, tzinfo=timezone.utc
+        )
+        self.create_expense_entry(food_id, 25000, transaction_date)
+        self.create_expense_entry(transport_id, 10000, transaction_date)
+
+        response = self.get_budget_list()
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(len(response.json["budgets"]), 1)
+
+        budget = response.json["budgets"][0]
+        self.assertEqual(budget["amount_minor"], 150000)
+        self.assertEqual(budget["actual_minor"], 35000)
+        self.assertEqual(budget["remaining_minor"], 115000)
+        self.assertEqual(budget["usage_percentage"], 23.33)
+        self.assertFalse(budget["is_over_budget"])
+
+        categories = {
+            item["category"]["name"]: item
+            for item in budget["categories"]
+        }
+
+        self.assertEqual(categories["Food"]["amount_minor"], 100000)
+        self.assertEqual(categories["Food"]["actual_minor"], 25000)
+        self.assertEqual(categories["Food"]["remaining_minor"], 75000)
+
+        self.assertEqual(categories["Transport"]["amount_minor"], 50000)
+        self.assertEqual(categories["Transport"]["actual_minor"], 10000)
+        self.assertEqual(categories["Transport"]["remaining_minor"], 40000)
+
+    def test_multi_category_budget_rejects_duplicate_categories(self):
+        food = self.create_category("Food")
+        food_id = food.json["category"]["id"]
+
+        response = self.create_multi_category_budget([
+            {"category_id": food_id, "amount_minor": 50000},
+            {"category_id": food_id, "amount_minor": 30000},
+        ])
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertIn("only appear once", response.json["message"])
+
+        self.assertEqual(
+            Budget.query.filter_by(
+                workspace_id=self.workspace.id,
+            ).count(),
+            0,
+        )
 
     def test_duplicate_budget_period_is_rejected(self):
         category = self.create_category("Food")
@@ -8524,6 +8619,61 @@ class PesaPilotTestCase(unittest.TestCase):
             snapshot["summary"]["savings_rate_percentage"],
             45.0,
         )
+
+    def test_ai_snapshot_reports_multi_category_budget_allocations(self):
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+
+        food = self.create_category("Food")
+        transport = self.create_category("Transport")
+        self.assertEqual(food.status_code, 201, food.json)
+        self.assertEqual(transport.status_code, 201, transport.json)
+
+        food_id = food.json["category"]["id"]
+        transport_id = transport.json["category"]["id"]
+
+        created = self.create_multi_category_budget([
+            {"category_id": food_id, "amount_minor": 100000},
+            {"category_id": transport_id, "amount_minor": 50000},
+        ])
+        self.assertEqual(created.status_code, 201, created.json)
+
+        self.create_expense_entry(food_id, 25000, now)
+        self.create_expense_entry(transport_id, 55000, now)
+
+        snapshot = build_financial_snapshot(
+            self.workspace.id,
+            self.user.id,
+            as_of=now,
+        )
+
+        self.assertEqual(len(snapshot["budgets"]), 1)
+        budget = snapshot["budgets"][0]
+
+        self.assertEqual(budget["amount_minor"], 150000)
+        self.assertEqual(budget["actual_minor"], 80000)
+        self.assertEqual(budget["remaining_minor"], 70000)
+        self.assertEqual(budget["usage_percentage"], 53.33)
+        self.assertFalse(budget["is_over_budget"])
+
+        categories = {
+            item["category"]: item
+            for item in budget["categories"]
+        }
+
+        self.assertEqual(categories["Food"]["actual_minor"], 25000)
+        self.assertEqual(categories["Food"]["remaining_minor"], 75000)
+        self.assertEqual(categories["Food"]["usage_percentage"], 25.0)
+
+        self.assertEqual(
+            categories["Transport"]["actual_minor"], 55000
+        )
+        self.assertEqual(
+            categories["Transport"]["remaining_minor"], -5000
+        )
+        self.assertEqual(
+            categories["Transport"]["usage_percentage"], 110.0
+        )
+        self.assertTrue(categories["Transport"]["is_over_budget"])
 
     def test_ai_snapshot_category_spending_is_offset_by_reversal(self):
         now = datetime.now(timezone.utc)
@@ -9983,6 +10133,50 @@ class AIManagerRulesEngineTestCase(unittest.TestCase):
         self.assertNotIn("budget_near_limit", self.get_rules(insights))
         self.assertNotIn("budget_exceeded", self.get_rules(insights))
 
+    def test_multi_category_budget_generates_category_specific_insights(self):
+        self.snapshot["budgets"] = [{
+            "id": "multi-budget",
+            "categories": [
+                {
+                    "category": "Food",
+                    "amount_minor": 100000,
+                    "actual_minor": 85000,
+                },
+                {
+                    "category": "Transport",
+                    "amount_minor": 50000,
+                    "actual_minor": 55000,
+                },
+                {
+                    "category": "Rent",
+                    "amount_minor": 100000,
+                    "actual_minor": 30000,
+                },
+            ],
+            "currency": "KES",
+        }]
+
+        insights = generate_insights(self.snapshot)
+
+        food = next(
+            item for item in insights
+            if item["title"] == "Budget approaching its limit: Food"
+        )
+        transport = next(
+            item for item in insights
+            if item["title"] == "Budget exceeded: Transport"
+        )
+
+        self.assertEqual(food["rule"], "budget_near_limit")
+        self.assertEqual(food["amount_minor"], 15000)
+        self.assertEqual(transport["rule"], "budget_exceeded")
+        self.assertEqual(transport["amount_minor"], 5000)
+
+        self.assertFalse(any(
+            item.get("title", "").endswith(": Rent")
+            for item in insights
+        ))
+
     def test_bill_due_date_boundaries(self):
         self.snapshot["bills"] = [
             {
@@ -10318,6 +10512,57 @@ class AIManagerSanitizationTestCase(unittest.TestCase):
         self.assertNotIn("private-category-id", serialized)
         self.assertNotIn("must not leave the app", serialized)
         self.assertNotIn("secret", serialized)
+
+    def test_sanitizer_anonymizes_multi_category_budget_allocations(self):
+        snapshot = {
+            "spending_by_category": [
+                {"category": "Private Food", "amount_minor": 20000},
+            ],
+            "budgets": [{
+                "id": "private-budget-id",
+                "category": "Private Food",
+                "categories": [
+                    {
+                        "category": "Private Food",
+                        "amount_minor": 50000,
+                        "actual_minor": 20000,
+                        "category_id": "private-food-id",
+                    },
+                    {
+                        "category": "Private Transport",
+                        "amount_minor": 30000,
+                        "actual_minor": 10000,
+                        "category_id": "private-transport-id",
+                    },
+                ],
+                "amount_minor": 80000,
+                "actual_minor": 30000,
+                "currency": "KES",
+            }],
+        }
+
+        sanitized = sanitize_financial_context(snapshot)
+        budget = sanitized["budgets"][0]
+
+        self.assertEqual(budget["category"], "Category 1")
+        self.assertEqual(
+            [item["category"] for item in budget["categories"]],
+            ["Category 1", "Category 2"],
+        )
+        self.assertEqual(
+            [item["amount_minor"] for item in budget["categories"]],
+            [50000, 30000],
+        )
+
+        serialized = str(sanitized)
+        for private_value in (
+            "Private Food",
+            "Private Transport",
+            "private-budget-id",
+            "private-food-id",
+            "private-transport-id",
+        ):
+            self.assertNotIn(private_value, serialized)
 
     def test_sanitizer_limits_monthly_trends_to_six_records(self):
         snapshot = {

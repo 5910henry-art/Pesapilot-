@@ -65,10 +65,13 @@ def sanitize_financial_context(snapshot):
     )
 
     budget_fields = (
+        "category",
+        "categories",
         "amount_minor",
         "actual_minor",
         "remaining_minor",
         "usage_percentage",
+        "is_over_budget",
         "currency",
         "period_start",
         "period_end",
@@ -111,11 +114,36 @@ def sanitize_financial_context(snapshot):
         if not isinstance(records, list):
             return []
 
-        return [
-            _pick(record, fields)
-            for record in records[:30]
-            if isinstance(record, dict)
-        ]
+        cleaned = []
+        for record in records[:30]:
+            if not isinstance(record, dict):
+                continue
+
+            item = _pick(record, fields)
+
+            if key == "budgets":
+                if isinstance(record.get("category"), str):
+                    item["category"] = category_label(record["category"])
+
+                categories = record.get("categories", [])
+                item["categories"] = [
+                    {
+                        **_pick(category, (
+                            "amount_minor",
+                            "actual_minor",
+                            "remaining_minor",
+                            "usage_percentage",
+                            "is_over_budget",
+                        )),
+                        "category": category_label(category.get("category")),
+                    }
+                    for category in categories[:100]
+                    if isinstance(category, dict)
+                ]
+
+            cleaned.append(item)
+
+        return cleaned
 
     def clean_spending_collection(key, category_labels):
         records = snapshot.get(key, [])
@@ -154,6 +182,17 @@ def sanitize_financial_context(snapshot):
                 category_labels[record["category"]] = (
                     f"Category {len(category_labels) + 1}"
                 )
+
+    def category_label(category):
+        if not isinstance(category, str):
+            return "Uncategorized"
+
+        label = category_labels.get(category)
+        if label is None:
+            label = f"Category {len(category_labels) + 1}"
+            category_labels[category] = label
+
+        return label
 
     monthly_trends = snapshot.get("monthly_trends", [])
     if not isinstance(monthly_trends, list):

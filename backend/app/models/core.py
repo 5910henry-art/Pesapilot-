@@ -779,9 +779,9 @@ class Budget(db.Model):
         index=True,
     )
 
-    category_id: Mapped[uuid.UUID] = mapped_column(
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("expense_categories.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
 
     amount_minor: Mapped[int] = mapped_column(
@@ -829,10 +829,15 @@ class Budget(db.Model):
             ondelete="RESTRICT",
         ),
         UniqueConstraint(
-            "category_id",
+            "workspace_id",
+            "id",
+            name="uq_budget_workspace_id",
+        ),
+        UniqueConstraint(
+            "workspace_id",
             "period_start",
             "period_end",
-            name="uq_budget_category_period",
+            name="uq_budget_workspace_period",
         ),
         CheckConstraint(
             "amount_minor > 0",
@@ -841,6 +846,71 @@ class Budget(db.Model):
         CheckConstraint(
             "period_end >= period_start",
             name="ck_budget_period_valid",
+        ),
+    )
+
+
+class BudgetCategoryAllocation(db.Model):
+    __tablename__ = "budget_category_allocations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        primary_key=True,
+        default=new_uuid,
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=False,
+    )
+
+    budget_id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=False,
+    )
+
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=False,
+    )
+
+    amount_minor: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "budget_id"],
+            ["budgets.workspace_id", "budgets.id"],
+            name="fk_budget_allocation_budget_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "category_id"],
+            ["expense_categories.workspace_id", "expense_categories.id"],
+            name="fk_budget_allocation_category_workspace",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "budget_id",
+            "category_id",
+            name="uq_budget_allocation_category",
+        ),
+        CheckConstraint(
+            "amount_minor > 0",
+            name="ck_budget_allocation_amount_positive",
+        ),
+        Index(
+            "ix_budget_category_allocations_workspace_budget",
+            "workspace_id",
+            "budget_id",
         ),
     )
 

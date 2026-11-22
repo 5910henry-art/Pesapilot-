@@ -138,7 +138,6 @@ export default function Loans() {
   const [formMessage, setFormMessage] = useState(null);
   const [loanMessages, setLoanMessages] = useState({});
   const [paymentMessages, setPaymentMessages] = useState({});
-  const [workspaceNotice, setWorkspaceNotice] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editingLoan, setEditingLoan] = useState(null);
@@ -252,7 +251,6 @@ export default function Loans() {
     setFormMessage(null);
     setLoanMessages({});
     setPaymentMessages({});
-    setWorkspaceNotice("");
 
     loadLoans();
   }, [loadLoans]);
@@ -779,21 +777,7 @@ export default function Loans() {
         <button type="button" className="active">
           My Loans
         </button>
-        <button
-          type="button"
-          onClick={() => setWorkspaceNotice("Lending Business tools will be added after the loan application and borrower-management backend is ready.")}
-        >
-          Lending Business <span>Coming next</span>
-        </button>
       </div>
-
-      {workspaceNotice && (
-        <div className="loans-alert loans-alert-success" role="status">
-          <CheckCircle2 size={17} />
-          <span>{workspaceNotice}</span>
-          <button type="button" onClick={() => setWorkspaceNotice("")} aria-label="Dismiss message">×</button>
-        </div>
-      )}
 
       <section className="loans-list-section">
         <div className="loans-section-heading">
@@ -894,7 +878,7 @@ export default function Loans() {
                         <span><CalendarDays size={14} /> Due {loan.due_date}</span>
                         <span>{loan.repayment_frequency.replace("_", " ")}</span>
                         {loan.interest_method !== "none" && (
-                          <span>{loan.interest_rate_percent}% annual interest</span>
+                          <span>{Number(loan.interest_rate_percent || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}% annual interest</span>
                         )}
                       </div>
                     </div>

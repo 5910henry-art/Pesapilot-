@@ -209,9 +209,23 @@ function answerQuestion(question, snapshot) {
       };
     }
 
-    const details = budgets.map((budget) => {
-      const usage = Number(budget.usage_percentage || 0);
-      return `${budget.category || "Uncategorized"}: ${usage.toFixed(1)}% used, ${money(budget.remaining_minor, budget.currency)} remaining`;
+    const details = budgets.flatMap((budget) => {
+      const allocations = Array.isArray(budget.categories) && budget.categories.length
+        ? budget.categories
+        : [{
+            category: budget.category || "Uncategorized",
+            amount_minor: budget.amount_minor,
+            actual_minor: budget.actual_minor,
+            remaining_minor: budget.remaining_minor,
+            usage_percentage: budget.usage_percentage,
+            is_over_budget: budget.is_over_budget,
+          }];
+
+      return allocations.map((allocation) => {
+        const usage = Number(allocation.usage_percentage || 0);
+        const status = allocation.is_over_budget ? "over budget" : "within budget";
+        return `${allocation.category || "Uncategorized"}: ${money(allocation.actual_minor, budget.currency)} spent of ${money(allocation.amount_minor, budget.currency)}, ${usage.toFixed(1)}% used, ${money(allocation.remaining_minor, budget.currency)} remaining (${status})`;
+      });
     });
 
     return {
@@ -366,7 +380,7 @@ export default function AIManager() {
     setAsking(true);
 
     try {
-      const result = await aiApi.ask(workspaceId, trimmedQuestion);
+      const result = await aiApi.ask(workspaceId, trimmedQuestion, externalAiConsent);
 
       if (!result?.success || !result?.data?.answer) {
         throw new Error(
@@ -402,6 +416,7 @@ export default function AIManager() {
           </p>
           <div className="ai-readonly-note">
             <ShieldCheck size={15} />
+            <span>Read-only insights. AI Manager cannot change records or make financial transactions.</span>
           </div>
         </div>
         <div className="ai-hero-symbol">
@@ -694,164 +709,6 @@ export default function AIManager() {
             )}
           </section>
 
-          <section className="ai-detail-grid">
-            <article className="ai-detail-panel">
-              <div className="ai-detail-heading">
-                <ChartNoAxesCombinedIcon />
-                <div>
-                  <h3>Budgets</h3>
-                  <span>{snapshot.budgets?.length || 0} active budgets</span>
-                </div>
-              </div>
-              {(snapshot.budgets || []).length ? (
-                snapshot.budgets.map((budget) => (
-                  <div className="ai-progress-item" key={budget.id}>
-                    <div className="ai-progress-label">
-                      <strong>{budget.category}</strong>
-                      <span>{Number(budget.usage_percentage || 0).toFixed(1)}%</span>
-                    </div>
-                    <div className="ai-progress-track">
-                      <div
-                        className={`ai-progress-fill ${
-                          Number(budget.usage_percentage) >= 100
-                            ? "over"
-                            : Number(budget.usage_percentage) >= 80
-                              ? "warning"
-                              : ""
-                        }`}
-                        style={{
-                          width: `${Math.min(100, Math.max(0, Number(budget.usage_percentage || 0)))}%`,
-                        }}
-                      />
-                    </div>
-                    <small>
-                      {formatMoney(
-                        budget.remaining_minor,
-                        budget.currency,
-                        budget.currency === currency ? minorUnit : undefined
-                      )} remaining
-                    </small>
-                  </div>
-                ))
-              ) : (
-                <p className="ai-no-data">No active budgets recorded.</p>
-              )}
-            </article>
-
-            <article className="ai-detail-panel">
-              <div className="ai-detail-heading">
-                <Receipt size={20} />
-                <div>
-                  <h3>Bills</h3>
-                  <span>Outstanding obligations</span>
-                </div>
-              </div>
-              {(snapshot.bills || []).filter(
-                (bill) => Number(bill.remaining_minor) > 0
-              ).length ? (
-                snapshot.bills.filter(
-                  (bill) => Number(bill.remaining_minor) > 0
-                ).map((bill) => (
-                  <div className="ai-record-row" key={bill.id}>
-                    <div>
-                      <strong>{bill.title}</strong>
-                      <small>Due {formatDate(bill.due_date)}</small>
-                    </div>
-                    <div className="ai-record-value">
-                      <strong>{formatMoney(
-                        bill.remaining_minor,
-                        bill.currency,
-                        bill.currency === currency ? minorUnit : undefined
-                      )}</strong>
-                      <span className={`ai-record-status ${bill.status}`}>
-                        {bill.status.replace("_", " ")}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="ai-no-data">No outstanding bills recorded.</p>
-              )}
-            </article>
-
-            <article className="ai-detail-panel">
-              <div className="ai-detail-heading">
-                <PiggyBank size={20} />
-                <div>
-                  <h3>Savings goals</h3>
-                  <span>Progress towards your targets</span>
-                </div>
-              </div>
-              {(snapshot.savings_goals || []).length ? (
-                snapshot.savings_goals.map((goal) => (
-                  <div className="ai-progress-item" key={goal.id}>
-                    <div className="ai-progress-label">
-                      <strong>{goal.name}</strong>
-                      <span>{Number(goal.progress_percentage || 0).toFixed(1)}%</span>
-                    </div>
-                    <div className="ai-progress-track">
-                      <div
-                        className="ai-progress-fill savings-fill"
-                        style={{
-                          width: `${Math.min(100, Math.max(0, Number(goal.progress_percentage || 0)))}%`,
-                        }}
-                      />
-                    </div>
-                    <small>
-                      {formatMoney(goal.saved_minor, goal.currency, goal.currency === currency ? minorUnit : undefined)}
-                      {" of "}
-                      {formatMoney(goal.target_minor, goal.currency, goal.currency === currency ? minorUnit : undefined)}
-                      {" · "}
-                      {goal.status}
-                    </small>
-                  </div>
-                ))
-              ) : (
-                <p className="ai-no-data">No savings goals recorded.</p>
-              )}
-            </article>
-
-            <article className="ai-detail-panel">
-              <div className="ai-detail-heading">
-                <HandCoins size={20} />
-                <div>
-                  <h3>Loans</h3>
-                  <span>Active loan obligations and receivables</span>
-                </div>
-              </div>
-              {(snapshot.loans || []).length ? (
-                snapshot.loans.map((loan) => (
-                  <div className="ai-record-row" key={loan.id}>
-                    <div>
-                      <strong>
-                        {loan.direction === "borrowed" ? "Borrowed" : "Lent"} · {loan.type}
-                      </strong>
-                      <small>Due {formatDate(loan.due_date)}</small>
-                    </div>
-                    <div className="ai-record-value">
-                      <strong>{formatMoney(
-                        loan.outstanding_minor,
-                        loan.currency,
-                        loan.currency === currency ? minorUnit : undefined
-                      )}</strong>
-                      <span className={
-                        Number(loan.overdue_installments_minor) > 0
-                          ? "ai-record-status overdue"
-                          : "ai-record-status"
-                      }>
-                        {Number(loan.overdue_installments_minor) > 0
-                          ? "Overdue"
-                          : loan.status}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="ai-no-data">No active loans recorded.</p>
-              )}
-            </article>
-          </section>
-
           <section className="ai-question-panel">
             <div className="ai-question-heading">
               <div className="ai-question-icon">
@@ -899,13 +756,7 @@ export default function AIManager() {
                 disabled={asking}
               />
               <span>
-                <strong>Use external AI (Groq) for my question</strong>
-                <small>
-                  I agree to send my question and a limited, anonymized
-                  summary of my financial records to the external AI provider
-                  to generate this answer. This is optional and applies only
-                  when checked.
-                </small>
+                <strong>Allow my question and a limited financial summary to be shared with an external AI service for this answer.</strong>
               </span>
             </label>
 
@@ -942,22 +793,21 @@ export default function AIManager() {
               <div className="ai-answer-card" aria-live="polite">
                 <strong>{answer.title}</strong>
                 <div className="ai-answer-content">{renderAnswerMarkdown(answer.answer)}</div>
-                <small>
-                </small>
               </div>
             )}
 
             <div className="ai-engine-note">
               <ShieldCheck size={14} />
+              <span>
+                {externalAiConsent
+                  ? "External AI is enabled for your next question. Your question and a limited financial summary will be shared with an external AI service."
+                  : "Local mode is active. Your question is answered using this workspace snapshot without sharing it with an external AI service."}
+              </span>
             </div>
           </section>
         </>
       )}
 
-      {overview && (
-        <p className="ai-footnote">
-        </p>
-      )}
     </div>
   );
 }

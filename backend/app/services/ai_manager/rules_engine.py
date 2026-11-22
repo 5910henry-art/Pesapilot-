@@ -178,54 +178,64 @@ def generate_insights(snapshot):
     # Budgets
     # ---------------------------------------------------------
     for budget in snapshot.get("budgets", []):
-        limit = int(budget.get("amount_minor") or 0)
-        actual = int(budget.get("actual_minor") or 0)
+        categories = budget.get("categories") or [{
+            "category": budget.get("category") or "Uncategorized",
+            "amount_minor": budget.get("amount_minor"),
+            "actual_minor": budget.get("actual_minor"),
+            "remaining_minor": budget.get("remaining_minor"),
+            "usage_percentage": budget.get("usage_percentage"),
+        }]
 
-        if limit <= 0 or actual < 0:
-            continue
-
-        usage = actual / limit * 100
-        category = budget.get("category") or "Uncategorized"
         budget_currency = budget.get("currency") or currency
-        remaining = limit - actual
 
-        if usage >= 100:
-            insights.append(_insight(
-                rule="budget_exceeded",
-                severity="high",
-                title="Budget exceeded: {}".format(category),
-                message=(
-                    "{} spending has reached {:.1f}% of its budget, "
-                    "exceeding the limit by {} minor units."
-                ).format(category, usage, abs(remaining)),
-                recommendation=(
-                    "Review further spending in this category and "
-                    "check whether the budget needs adjustment."
-                ),
-                entity_type="budget",
-                entity_id=budget.get("id"),
-                amount_minor=abs(remaining),
-                currency=budget_currency,
-            ))
+        for item in categories:
+            limit = int(item.get("amount_minor") or 0)
+            actual = int(item.get("actual_minor") or 0)
 
-        elif usage >= 80:
-            insights.append(_insight(
-                rule="budget_near_limit",
-                severity="medium",
-                title="Budget approaching its limit: {}".format(category),
-                message=(
-                    "{} spending has used {:.1f}% of its budget. "
-                    "{} minor units remain."
-                ).format(category, usage, remaining),
-                recommendation=(
-                    "Monitor additional spending in this category "
-                    "for the rest of the budget period."
-                ),
-                entity_type="budget",
-                entity_id=budget.get("id"),
-                amount_minor=remaining,
-                currency=budget_currency,
-            ))
+            if limit <= 0 or actual < 0:
+                continue
+
+            usage = actual / limit * 100
+            category = item.get("category") or "Uncategorized"
+            remaining = limit - actual
+
+            if usage >= 100:
+                insights.append(_insight(
+                    rule="budget_exceeded",
+                    severity="high",
+                    title="Budget exceeded: {}".format(category),
+                    message=(
+                        "{} spending has reached {:.1f}% of its budget, "
+                        "exceeding the limit by {} minor units."
+                    ).format(category, usage, abs(remaining)),
+                    recommendation=(
+                        "Review further spending in this category and "
+                        "check whether the budget needs adjustment."
+                    ),
+                    entity_type="budget",
+                    entity_id=budget.get("id"),
+                    amount_minor=abs(remaining),
+                    currency=budget_currency,
+                ))
+
+            elif usage >= 80:
+                insights.append(_insight(
+                    rule="budget_near_limit",
+                    severity="medium",
+                    title="Budget approaching its limit: {}".format(category),
+                    message=(
+                        "{} spending has used {:.1f}% of its budget. "
+                        "{} minor units remain."
+                    ).format(category, usage, remaining),
+                    recommendation=(
+                        "Monitor additional spending in this category "
+                        "for the rest of the budget period."
+                    ),
+                    entity_type="budget",
+                    entity_id=budget.get("id"),
+                    amount_minor=remaining,
+                    currency=budget_currency,
+                ))
 
     # ---------------------------------------------------------
     # Bills

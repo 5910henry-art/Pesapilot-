@@ -592,13 +592,13 @@ export const aiApi = {
     );
   },
 
-  ask(workspaceId, question) {
+  ask(workspaceId, question, externalAiConsent) {
     return apiRequest("/ai-manager/ask", {
       method: "POST",
       body: JSON.stringify({
         workspace_id: workspaceId,
         question,
-        external_ai_consent: true,
+        external_ai_consent: externalAiConsent === true,
       }),
     });
   },

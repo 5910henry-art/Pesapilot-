@@ -114,8 +114,7 @@ export default function Budgets() {
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [showBudgetForm, setShowBudgetForm] = useState(false);
   const [categoryName, setCategoryName] = useState("");
-  const [categoryId, setCategoryId] = useState("");
-  const [amount, setAmount] = useState("");
+  const [budgetAllocations, setBudgetAllocations] = useState([]);
   const [period, setPeriod] = useState(currentMonthPeriod);
   const [periodFilter, setPeriodFilter] = useState("all");
   const [filterMonth, setFilterMonth] = useState(() => {
@@ -163,11 +162,20 @@ export default function Budgets() {
       ));
       setBudgets(budgetResult.budgets || []);
 
-      setCategoryId((current) =>
-        nextCategories.some((item) => item.id === current && item.is_active)
-          ? current
-          : nextCategories.find((item) => item.is_active)?.id || ""
+      const availableCategories = nextCategories.filter(
+        (category) => category.is_active && category.ledger_account?.id
       );
+
+      setBudgetAllocations((current) => {
+        const validIds = new Set(availableCategories.map((item) => item.id));
+        const retained = current.filter((item) => validIds.has(item.category_id));
+
+        return retained.length ? retained : (
+          availableCategories[0]
+            ? [{ category_id: availableCategories[0].id, amount: "" }]
+            : []
+        );
+      });
     } catch (err) {
       setLoadError(err.message || "Unable to load budgets.");
     } finally {
@@ -218,8 +226,8 @@ export default function Budgets() {
     event.preventDefault();
     setBudgetMessage(null);
 
-    if (!categoryId) {
-      setBudgetMessage({ type: "error", text: "Create or select an expense category first." });
+    if (!budgetAllocations.length) {
+      setBudgetMessage({ type: "error", text: "Select at least one expense category." });
       return;
     }
 
@@ -228,10 +236,13 @@ export default function Budgets() {
       return;
     }
 
-    let amountMinor;
+    let allocations;
 
     try {
-      amountMinor = toMinorUnits(amount, currency);
+      allocations = budgetAllocations.map((item) => ({
+        category_id: item.category_id,
+        amount_minor: toMinorUnits(item.amount, currency),
+      }));
     } catch (err) {
       setBudgetMessage({ type: "error", text: err.message });
       return;
@@ -242,13 +253,12 @@ export default function Budgets() {
     try {
       const result = await financeApi.createBudget({
         workspace_id: workspaceId,
-        category_id: categoryId,
-        amount_minor: amountMinor,
+        categories: allocations,
         period_start: period.start,
         period_end: period.end,
       });
 
-      setAmount("");
+      setBudgetAllocations([]);
       setBudgetMessage({ type: "success", text: result.message || "Budget created successfully." });
       await loadData(true);
     } catch (err) {
@@ -418,34 +428,61 @@ export default function Budgets() {
           </div>
 
           <form className="account-form" onSubmit={handleCreateBudget}>
-            <label>
-              Expense category
-              <select
-                value={categoryId}
-                onChange={(event) => setCategoryId(event.target.value)}
-                required
-              >
-                <option value="">Select a category</option>
-                {categories.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="budget-allocation-list">
+              <span className="budget-suggestions-label">
+                Select categories and set an amount for each
+              </span>
 
-            <label>
-              Budget amount ({currency})
-              <input
-                type="number"
-                min="0"
-                step={currencyDigits(currency) === 0 ? "1" : "0.01"}
-                value={amount}
-                onChange={(event) => setAmount(event.target.value)}
-                placeholder="e.g. 15000"
-                required
-              />
-            </label>
+              {categories.map((category) => {
+                const allocation = budgetAllocations.find(
+                  (item) => item.category_id === category.id
+                );
+
+                return (
+                  <div className="budget-allocation-item" key={category.id}>
+                    <label className="budget-allocation-choice">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(allocation)}
+                        disabled={saving}
+                        onChange={(event) => {
+                          setBudgetAllocations((current) =>
+                            event.target.checked
+                              ? [...current, { category_id: category.id, amount: "" }]
+                              : current.filter((item) => item.category_id !== category.id)
+                          );
+                        }}
+                      />
+                      <span>{category.name}</span>
+                    </label>
+
+                    {allocation && (
+                      <label className="budget-allocation-amount">
+                        Amount ({currency})
+                        <input
+                          type="number"
+                          min="0"
+                          step={currencyDigits(currency) === 0 ? "1" : "0.01"}
+                          value={allocation.amount}
+                          disabled={saving}
+                          onChange={(event) =>
+                            setBudgetAllocations((current) =>
+                              current.map((item) =>
+                                item.category_id === category.id
+                                  ? { ...item, amount: event.target.value }
+                                  : item
+                              )
+                            )
+                          }
+                          placeholder="e.g. 15000"
+                          required
+                        />
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
 
             <label>
               Start date
@@ -483,10 +520,11 @@ export default function Budgets() {
                 {budgetMessage.text}
               </div>
             )}
+
             <div className="account-form-actions">
               <button
                 className="primary-button"
-                disabled={saving || !categories.length}
+                disabled={saving || !categories.length || !budgetAllocations.length}
               >
                 {saving ? "Creating..." : "Create budget"}
               </button>
@@ -599,6 +637,18 @@ export default function Budgets() {
         ) : (
           <div className="budget-grid">
             {filteredBudgets.map((budget) => {
+              const categoryAllocations =
+                Array.isArray(budget.categories) && budget.categories.length
+                  ? budget.categories
+                  : [{
+                      category: budget.category,
+                      amount_minor: budget.amount_minor,
+                      actual_minor: budget.actual_minor,
+                      remaining_minor: budget.remaining_minor,
+                      usage_percentage: budget.usage_percentage,
+                      is_over_budget: budget.is_over_budget,
+                    }];
+
               const percentage = Math.max(
                 0,
                 Number(budget.usage_percentage || 0)
@@ -629,7 +679,11 @@ export default function Budgets() {
                 <article className="budget-card" key={budget.id}>
                   <div className="budget-card-heading">
                     <div>
-                      <h3>{budget.category?.name || "Expense category"}</h3>
+                      <h3>
+                        {categoryAllocations.length === 1
+                          ? categoryAllocations[0].category?.name || "Expense category"
+                          : `${categoryAllocations.length} categories`}
+                      </h3>
                       <span className="budget-period">
                         <CalendarDays size={14} />
                         {budget.period_start} – {budget.period_end}
@@ -665,6 +719,77 @@ export default function Budgets() {
                       {formatMoney(budget.remaining_minor, budget.currency_code)}
                       {" "}{over ? "over" : "left"}
                     </strong>
+                  </div>
+
+                  <div className="budget-category-breakdown">
+                    <h4>Category breakdown</h4>
+
+                    {categoryAllocations.map((allocation) => {
+                      const categoryPercentage = Math.max(
+                        0,
+                        Number(allocation.usage_percentage || 0)
+                      );
+                      const categoryOver =
+                        Boolean(allocation.is_over_budget) ||
+                        Number(allocation.actual_minor || 0) >
+                          Number(allocation.amount_minor || 0);
+                      const categoryNear =
+                        !categoryOver && categoryPercentage >= 80;
+                      const categoryStatus = categoryOver
+                        ? "over"
+                        : categoryNear
+                          ? "near"
+                          : "";
+
+                      return (
+                        <div
+                          className="budget-category-breakdown-item"
+                          key={
+                            allocation.id ||
+                            allocation.category_id ||
+                            allocation.category?.id
+                          }
+                        >
+                          <div className="budget-category-breakdown-heading">
+                            <strong>
+                              {allocation.category?.name || "Expense category"}
+                            </strong>
+                            <span>{categoryPercentage.toFixed(1)}% used</span>
+                          </div>
+
+                          <div
+                            className="budget-progress"
+                            role="progressbar"
+                            aria-valuenow={Math.round(categoryPercentage)}
+                            aria-valuemin="0"
+                            aria-valuemax="100"
+                            aria-label={`${allocation.category?.name || "Category"} spending`}
+                          >
+                            <div
+                              className={`budget-progress-fill ${categoryStatus}`}
+                              style={{
+                                width: `${Math.min(categoryPercentage, 100)}%`,
+                              }}
+                            />
+                          </div>
+
+                          <div className="budget-category-breakdown-amounts">
+                            <span>
+                              {formatMoney(allocation.actual_minor, budget.currency_code)}
+                              {" "}spent
+                            </span>
+                            <span>
+                              {formatMoney(allocation.amount_minor, budget.currency_code)}
+                              {" "}allocated
+                            </span>
+                            <strong className={categoryOver ? "budget-over-amount" : ""}>
+                              {formatMoney(allocation.remaining_minor, budget.currency_code)}
+                              {" "}{categoryOver ? "over" : "left"}
+                            </strong>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {activeNow && (
