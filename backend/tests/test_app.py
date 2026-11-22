@@ -20,6 +20,7 @@ from app.models import (
     RefreshToken,
     Workspace,
     WorkspaceMember,
+    WorkspaceInvitation,
     FinancialAccount,
     LedgerAccount,
     JournalEntry,
@@ -5769,7 +5770,7 @@ class PesaPilotTestCase(unittest.TestCase):
         )
         self.assertEqual(invalid.status_code, 400, invalid.json)
 
-    def test_platform_owner_can_view_application_details_and_affordability_without_national_id(self):
+    def test_platform_owner_can_view_application_details_and_affordability_with_national_id(self):
         product = self.create_platform_loan_product()
         self.create_verified_income_evidence(600000)
         submitted = self.client.post(
@@ -5831,11 +5832,10 @@ class PesaPilotTestCase(unittest.TestCase):
             assessment["recommended_monthly_instalment_minor"], 210000
         )
 
-        self.assertNotIn("national_id", applicant)
+        self.assertEqual(applicant["national_id"], "12345678")
         self.assertNotIn("national_id_encrypted", applicant)
         self.assertNotIn("national_id", item)
         self.assertNotIn("national_id_encrypted", item)
-        self.assertNotIn("12345678", str(item))
         self.assertNotIn(details.national_id_encrypted, str(item))
 
 
@@ -10054,6 +10054,527 @@ class PesaPilotTestCase(unittest.TestCase):
             headers={"Authorization": f"Bearer {access_token}"},
         )
         self.assertEqual(protected_response.status_code, 401)
+
+
+    def test_workspace_invitation_creation_and_verified_acceptance(self):
+        response = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            headers=self.headers,
+            json={"email": "invited@example.com", "role": "member"},
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        invitation_data = response.json["invitation"]
+        self.assertTrue(invitation_data["token"])
+
+        invitation = WorkspaceInvitation.query.filter_by(
+            email="invited@example.com"
+        ).one()
+        self.assertNotEqual(
+            invitation.token_hash,
+            invitation_data["token"],
+        )
+        self.assertEqual(invitation.role, "member")
+
+        invited_user = User(
+            email="invited@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+            email_verified=True,
+        )
+        db.session.add(invited_user)
+        db.session.commit()
+
+        invited_token = create_access_token(identity=str(invited_user.id))
+        invited_headers = {
+            "Authorization": f"Bearer {invited_token}",
+        }
+
+        accepted = self.client.post(
+            "/api/v1/auth/invitations/accept",
+            headers=invited_headers,
+            json={"token": invitation_data["token"]},
+        )
+
+        self.assertEqual(accepted.status_code, 200, accepted.json)
+        self.assertEqual(accepted.json["workspace"]["role"], "member")
+
+        membership = WorkspaceMember.query.filter_by(
+            workspace_id=self.workspace.id,
+            user_id=invited_user.id,
+        ).one()
+        self.assertEqual(membership.role, "member")
+
+        db.session.refresh(invitation)
+        self.assertEqual(invitation.status, "accepted")
+        self.assertIsNotNone(invitation.accepted_at)
+
+    def test_unverified_user_cannot_accept_workspace_invitation(self):
+        response = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            headers=self.headers,
+            json={"email": "unverified@example.com", "role": "viewer"},
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        raw_token = response.json["invitation"]["token"]
+
+        invited_user = User(
+            email="unverified@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+            email_verified=False,
+        )
+        db.session.add(invited_user)
+        db.session.commit()
+
+        invited_token = create_access_token(identity=str(invited_user.id))
+        result = self.client.post(
+            "/api/v1/auth/invitations/accept",
+            headers={"Authorization": f"Bearer {invited_token}"},
+            json={"token": raw_token},
+        )
+
+        self.assertEqual(result.status_code, 403, result.json)
+        self.assertIsNone(
+            WorkspaceMember.query.filter_by(
+                workspace_id=self.workspace.id,
+                user_id=invited_user.id,
+            ).first()
+        )
+
+    def test_workspace_admin_cannot_promote_member_to_admin(self):
+        self.membership.role = "admin"
+
+        target_user = User(
+            email="target-member@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target_user)
+        db.session.flush()
+
+        target_membership = WorkspaceMember(
+            workspace_id=self.workspace.id,
+            user_id=target_user.id,
+            role="member",
+        )
+        db.session.add(target_membership)
+        db.session.commit()
+
+        response = self.client.patch(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{target_user.id}",
+            headers=self.headers,
+            json={"role": "admin"},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        db.session.refresh(target_membership)
+        self.assertEqual(target_membership.role, "member")
+
+    def test_workspace_admin_cannot_invite_admin(self):
+        self.membership.role = "admin"
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            headers=self.headers,
+            json={"email": "newadmin@example.com", "role": "admin"},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertIsNone(
+            WorkspaceInvitation.query.filter_by(
+                email="newadmin@example.com"
+            ).first()
+        )
+
+    def test_workspace_admin_cannot_revoke_admin_invitation(self):
+        created = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            headers=self.headers,
+            json={"email": "invitedadmin@example.com", "role": "admin"},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+
+        invitation_id = created.json["invitation"]["id"]
+        invitation = WorkspaceInvitation.query.filter_by(
+            id=UUID(invitation_id)
+        ).one()
+
+        self.membership.role = "admin"
+        db.session.commit()
+
+        response = self.client.delete(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations/{invitation_id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        db.session.refresh(invitation)
+        self.assertEqual(invitation.status, "pending")
+
+    def test_revoked_workspace_invitation_cannot_be_accepted(self):
+        created = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            headers=self.headers,
+            json={"email": "revoked@example.com", "role": "viewer"},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+
+        invitation_data = created.json["invitation"]
+        invitation = WorkspaceInvitation.query.filter_by(
+            email="revoked@example.com"
+        ).one()
+
+        revoked = self.client.delete(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations/{invitation_data['id']}",
+            headers=self.headers,
+        )
+        self.assertEqual(revoked.status_code, 200, revoked.json)
+
+        invited_user = User(
+            email="revoked@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+            email_verified=True,
+        )
+        db.session.add(invited_user)
+        db.session.commit()
+
+        invited_token = create_access_token(identity=str(invited_user.id))
+        response = self.client.post(
+            "/api/v1/auth/invitations/accept",
+            headers={"Authorization": f"Bearer {invited_token}"},
+            json={"token": invitation_data["token"]},
+        )
+
+        self.assertEqual(response.status_code, 404, response.json)
+        self.assertIsNone(
+            WorkspaceMember.query.filter_by(
+                workspace_id=self.workspace.id,
+                user_id=invited_user.id,
+            ).first()
+        )
+        db.session.refresh(invitation)
+        self.assertEqual(invitation.status, "revoked")
+
+    def test_expired_workspace_invitation_cannot_be_accepted(self):
+        created = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            headers=self.headers,
+            json={"email": "expired@example.com", "role": "member"},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+
+        invitation_data = created.json["invitation"]
+        invitation = WorkspaceInvitation.query.filter_by(
+            email="expired@example.com"
+        ).one()
+        invitation.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        db.session.commit()
+
+        invited_user = User(
+            email="expired@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+            email_verified=True,
+        )
+        db.session.add(invited_user)
+        db.session.commit()
+
+        invited_token = create_access_token(identity=str(invited_user.id))
+        response = self.client.post(
+            "/api/v1/auth/invitations/accept",
+            headers={"Authorization": f"Bearer {invited_token}"},
+            json={"token": invitation_data["token"]},
+        )
+
+        self.assertEqual(response.status_code, 410, response.json)
+        self.assertIsNone(
+            WorkspaceMember.query.filter_by(
+                workspace_id=self.workspace.id,
+                user_id=invited_user.id,
+            ).first()
+        )
+
+    def test_workspace_member_cannot_manage_invitations_or_roles(self):
+        target_user = User(
+            email="member-target@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target_user)
+        db.session.flush()
+
+        target_membership = WorkspaceMember(
+            workspace_id=self.workspace.id,
+            user_id=target_user.id,
+            role="member",
+        )
+        db.session.add(target_membership)
+
+        self.membership.role = "member"
+        db.session.commit()
+
+        base = f"/api/v1/auth/workspaces/{self.workspace.id}"
+
+        create_response = self.client.post(
+            f"{base}/invitations",
+            headers=self.headers,
+            json={"email": "blocked-invite@example.com", "role": "viewer"},
+        )
+        self.assertEqual(create_response.status_code, 403, create_response.json)
+
+        list_response = self.client.get(
+            f"{base}/invitations",
+            headers=self.headers,
+        )
+        self.assertEqual(list_response.status_code, 403, list_response.json)
+
+        update_response = self.client.patch(
+            f"{base}/members/{target_user.id}",
+            headers=self.headers,
+            json={"role": "viewer"},
+        )
+        self.assertEqual(update_response.status_code, 403, update_response.json)
+
+        db.session.refresh(target_membership)
+        self.assertEqual(target_membership.role, "member")
+
+    def test_workspace_owner_cannot_change_own_role(self):
+        response = self.client.patch(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{self.user.id}",
+            headers=self.headers,
+            json={"role": "member"},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        db.session.refresh(self.membership)
+        self.assertEqual(self.membership.role, "owner")
+
+    def test_workspace_owner_cannot_remove_own_membership(self):
+        response = self.client.delete(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{self.user.id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertIsNotNone(
+            WorkspaceMember.query.filter_by(
+                workspace_id=self.workspace.id,
+                user_id=self.user.id,
+            ).first()
+        )
+
+    def test_workspace_owner_can_promote_member_to_admin(self):
+        target_user = User(
+            email="promote-target@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target_user)
+        db.session.flush()
+
+        target = WorkspaceMember(
+            workspace_id=self.workspace.id,
+            user_id=target_user.id,
+            role="member",
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        response = self.client.patch(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{target_user.id}",
+            headers=self.headers,
+            json={"role": "admin"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        db.session.refresh(target)
+        self.assertEqual(target.role, "admin")
+
+    def test_workspace_owner_can_remove_workspace_member(self):
+        target_user = User(
+            email="remove-target@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target_user)
+        db.session.flush()
+
+        target = WorkspaceMember(
+            workspace_id=self.workspace.id,
+            user_id=target_user.id,
+            role="member",
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        response = self.client.delete(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{target_user.id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertIsNone(
+            WorkspaceMember.query.filter_by(
+                workspace_id=self.workspace.id,
+                user_id=target_user.id,
+            ).first()
+        )
+
+    def test_workspace_admin_cannot_change_or_remove_another_admin(self):
+        target_user = User(
+            email="another-admin@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target_user)
+        db.session.flush()
+
+        target = WorkspaceMember(
+            workspace_id=self.workspace.id,
+            user_id=target_user.id,
+            role="admin",
+        )
+        db.session.add(target)
+
+        self.membership.role = "admin"
+        db.session.commit()
+
+        base = f"/api/v1/auth/workspaces/{self.workspace.id}/members/{target_user.id}"
+
+        update_response = self.client.patch(
+            base,
+            headers=self.headers,
+            json={"role": "viewer"},
+        )
+        self.assertEqual(update_response.status_code, 403, update_response.json)
+
+        remove_response = self.client.delete(
+            base,
+            headers=self.headers,
+        )
+        self.assertEqual(remove_response.status_code, 403, remove_response.json)
+
+        db.session.refresh(target)
+        self.assertEqual(target.role, "admin")
+
+
+
+    def test_workspace_owner_can_transfer_ownership(self):
+        target_user = User(
+            email="new-owner@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target_user)
+        db.session.flush()
+
+        target = WorkspaceMember(
+            workspace_id=self.workspace.id,
+            user_id=target_user.id,
+            role="admin",
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/transfer-ownership",
+            headers=self.headers,
+            json={"member_user_id": str(target_user.id)},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+
+        db.session.refresh(self.membership)
+        db.session.refresh(target)
+        self.assertEqual(self.membership.role, "admin")
+        self.assertEqual(target.role, "owner")
+
+        audit = AuditLog.query.filter_by(
+            workspace_id=self.workspace.id,
+            action="workspace_ownership_transferred",
+        ).one()
+        self.assertEqual(audit.user_id, self.user.id)
+        self.assertEqual(
+            audit.details["previous_owner_user_id"],
+            str(self.user.id),
+        )
+        self.assertEqual(
+            audit.details["new_owner_user_id"],
+            str(target_user.id),
+        )
+
+    def test_workspace_admin_cannot_transfer_ownership(self):
+        self.membership.role = "admin"
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/transfer-ownership",
+            headers=self.headers,
+            json={"member_user_id": str(self.user.id)},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        db.session.refresh(self.membership)
+        self.assertEqual(self.membership.role, "admin")
+        self.assertEqual(
+            AuditLog.query.filter_by(
+                workspace_id=self.workspace.id,
+                action="workspace_ownership_transferred",
+            ).count(),
+            0,
+        )
+
+    def test_workspace_member_cannot_receive_ownership_transfer(self):
+        target_user = User(
+            email="ordinary-member@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target_user)
+        db.session.flush()
+
+        target = WorkspaceMember(
+            workspace_id=self.workspace.id,
+            user_id=target_user.id,
+            role="member",
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/transfer-ownership",
+            headers=self.headers,
+            json={"member_user_id": str(target_user.id)},
+        )
+
+        self.assertEqual(response.status_code, 409, response.json)
+        db.session.refresh(self.membership)
+        db.session.refresh(target)
+        self.assertEqual(self.membership.role, "owner")
+        self.assertEqual(target.role, "member")
+
+    def test_workspace_ownership_transfer_rejects_invalid_recipient(self):
+        response = self.client.post(
+            f"/api/v1/auth/workspaces/{self.workspace.id}/transfer-ownership",
+            headers=self.headers,
+            json={"member_user_id": str(uuid4())},
+        )
+
+        self.assertEqual(response.status_code, 404, response.json)
+        db.session.refresh(self.membership)
+        self.assertEqual(self.membership.role, "owner")
+        self.assertEqual(
+            AuditLog.query.filter_by(
+                workspace_id=self.workspace.id,
+                action="workspace_ownership_transferred",
+            ).count(),
+            0,
+        )
 
 
 class AIManagerRulesEngineTestCase(unittest.TestCase):

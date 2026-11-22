@@ -3,6 +3,7 @@ from .core import (
     UserProfile,
     Workspace,
     WorkspaceMember,
+    WorkspaceInvitation,
     Currency,
     ExchangeRate,
     FinancialAccount,

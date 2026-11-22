@@ -241,6 +241,69 @@ export const authApi = {
     });
   },
 
+  listWorkspaceMembers(workspaceId) {
+    return apiRequest(`/auth/workspaces/${encodeURIComponent(workspaceId)}/members`);
+  },
+
+  listWorkspaceInvitations(workspaceId) {
+    return apiRequest(`/auth/workspaces/${encodeURIComponent(workspaceId)}/invitations`);
+  },
+
+  createWorkspaceInvitation(workspaceId, payload) {
+    return apiRequest(`/auth/workspaces/${encodeURIComponent(workspaceId)}/invitations`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  acceptWorkspaceInvitation(token) {
+    return apiRequest("/auth/invitations/accept", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+  },
+
+  resendWorkspaceInvitation(workspaceId, invitationId) {
+    return apiRequest(
+      `/auth/workspaces/${encodeURIComponent(workspaceId)}/invitations/${encodeURIComponent(invitationId)}/resend`,
+      { method: "POST" }
+    );
+  },
+
+  revokeWorkspaceInvitation(workspaceId, invitationId) {
+    return apiRequest(
+      `/auth/workspaces/${encodeURIComponent(workspaceId)}/invitations/${encodeURIComponent(invitationId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  updateWorkspaceMemberRole(workspaceId, memberUserId, role) {
+    return apiRequest(
+      `/auth/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberUserId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      }
+    );
+  },
+
+  removeWorkspaceMember(workspaceId, memberUserId) {
+    return apiRequest(
+      `/auth/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberUserId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  transferWorkspaceOwnership(workspaceId, memberUserId) {
+    return apiRequest(
+      `/auth/workspaces/${encodeURIComponent(workspaceId)}/transfer-ownership`,
+      {
+        method: "POST",
+        body: JSON.stringify({ member_user_id: memberUserId }),
+      }
+    );
+  },
+
   async logout() {
     const refreshToken = getRefreshToken();
 

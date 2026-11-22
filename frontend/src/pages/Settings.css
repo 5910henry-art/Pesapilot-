@@ -697,3 +697,101 @@
     width: 100%;
   }
 }
+
+/* Workspace member and invitation management */
+
+/* Workspace member and invitation management */
+.settings-workspace-management {
+  display: grid;
+  gap: 18px;
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border-color, #e4e8ef);
+}
+
+.settings-workspace-management .settings-form-heading {
+  margin: 0;
+}
+
+.settings-workspace-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-workspace-actions select {
+  min-height: 37px;
+  max-width: 125px;
+  padding: 0 9px;
+  border: 1px solid var(--border-color, #dce1e9);
+  border-radius: 8px;
+  background: var(--card-bg, #fff);
+  color: var(--text-primary, #172033);
+  font: inherit;
+  font-size: 12px;
+}
+
+.settings-workspace-token {
+  display: grid;
+  gap: 10px;
+  padding: 15px;
+  border: 1px solid var(--border-color, #e4e8ef);
+  border-radius: 11px;
+  background: var(--surface-muted, #f8f9fc);
+}
+
+.settings-workspace-token strong {
+  font-size: 13px;
+}
+
+.settings-workspace-token p {
+  margin: 0;
+  color: var(--text-muted, #778197);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-workspace-token input {
+  width: 100%;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--border-color, #dce1e9);
+  border-radius: 8px;
+  background: var(--card-bg, #fff);
+  color: var(--text-primary, #172033);
+  font: inherit;
+  font-size: 12px;
+}
+
+.settings-workspace-token .settings-button {
+  justify-self: start;
+}
+
+@media (max-width: 650px) {
+  .settings-workspace-actions {
+    width: 100%;
+    padding-left: 53px;
+  }
+
+  .settings-workspace-actions .settings-button {
+    flex: 1;
+  }
+
+  .settings-workspace-actions select {
+    flex: 1;
+    max-width: none;
+  }
+
+  .settings-workspace-management .settings-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-workspace-management .settings-form-grid > .settings-button {
+    width: 100%;
+  }
+
+  .settings-workspace-token .settings-button {
+    width: 100%;
+  }
+}

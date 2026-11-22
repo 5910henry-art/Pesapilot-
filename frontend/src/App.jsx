@@ -33,6 +33,7 @@ import Bills from "./pages/Bills";
 import Expenses from "./pages/Expenses";
 import AIManager from "./pages/AIManager";
 import Settings from "./pages/Settings";
+import WorkspaceInvitation from "./pages/WorkspaceInvitation";
 
 import "./styles/app.css";
 
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/register" element={<Register />} />
 
           <Route element={<ProtectedRoute />}>
+            <Route path="/workspace-invitation" element={<WorkspaceInvitation />} />
             <Route element={<DashboardLayout />}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/accounts" element={<Accounts />} />

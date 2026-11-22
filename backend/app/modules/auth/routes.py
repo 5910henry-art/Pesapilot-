@@ -1,5 +1,6 @@
 import hashlib
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -23,6 +24,7 @@ from app.models import (
     UserProfile,
     Workspace,
     WorkspaceMember,
+    WorkspaceInvitation,
     Currency,
     LedgerAccount,
     AuditLog,
@@ -2041,4 +2043,794 @@ def create_business_workspace():
         return jsonify({
             "success": False,
             "message": "Business workspace could not be created. Please try again.",
+        }), 500
+
+
+# ---------------------------------------------------------------------------
+# Workspace membership and invitations
+# ---------------------------------------------------------------------------
+
+
+@auth_bp.post("/workspaces/<workspace_id>/invitations/<invitation_id>/resend")
+@jwt_required()
+def resend_workspace_invitation(workspace_id, invitation_id):
+    user, membership, error = _workspace_invitation_context(workspace_id)
+    if error:
+        return error
+
+    if membership.role not in ("owner", "admin"):
+        return jsonify({"success": False, "message": "Permission denied."}), 403
+
+    try:
+        invitation_uuid = UUID(str(invitation_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"success": False, "message": "Invalid invitation ID."}), 400
+
+    invitation = WorkspaceInvitation.query.filter_by(
+        id=invitation_uuid,
+        workspace_id=membership.workspace_id,
+    ).with_for_update().first()
+
+    if invitation is None or invitation.status != "pending":
+        return jsonify({
+            "success": False,
+            "message": "Pending invitation not found.",
+        }), 404
+
+    if membership.role == "admin" and invitation.role not in ("member", "viewer"):
+        return jsonify({
+            "success": False,
+            "message": "Admins cannot manage admin invitations.",
+        }), 403
+
+    raw_token = secrets.token_urlsafe(32)
+    invitation.token_hash = hashlib.sha256(
+        raw_token.encode("utf-8")
+    ).hexdigest()
+    invitation.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+    try:
+        db.session.add(AuditLog(
+            workspace_id=membership.workspace_id,
+            user_id=user.id,
+            action="workspace_invitation_resent",
+            resource_type="workspace_invitation",
+            resource_id=str(invitation.id),
+            details={"email": invitation.email, "role": invitation.role},
+            ip_address=request.remote_addr,
+        ))
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Invitation renewed. Share the new token securely.",
+            "invitation": {
+                "id": str(invitation.id),
+                "email": invitation.email,
+                "role": invitation.role,
+                "expires_at": invitation.expires_at.isoformat(),
+                "token": raw_token,
+            },
+            "delivery": "manual",
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Workspace invitation resend failed")
+        return jsonify({
+            "success": False,
+            "message": "Could not renew the invitation.",
+        }), 500
+
+
+@auth_bp.delete("/workspaces/<workspace_id>/invitations/<invitation_id>")
+@jwt_required()
+def revoke_workspace_invitation(workspace_id, invitation_id):
+    user, membership, error = _workspace_invitation_context(workspace_id)
+    if error:
+        return error
+
+    if membership.role not in ("owner", "admin"):
+        return jsonify({"success": False, "message": "Permission denied."}), 403
+
+    try:
+        invitation_uuid = UUID(str(invitation_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"success": False, "message": "Invalid invitation ID."}), 400
+
+    invitation = WorkspaceInvitation.query.filter_by(
+        id=invitation_uuid,
+        workspace_id=membership.workspace_id,
+    ).with_for_update().first()
+
+    if invitation is None or invitation.status != "pending":
+        return jsonify({
+            "success": False,
+            "message": "Pending invitation not found.",
+        }), 404
+
+    if membership.role == "admin" and invitation.role not in ("member", "viewer"):
+        return jsonify({
+            "success": False,
+            "message": "Admins cannot revoke admin invitations.",
+        }), 403
+
+    try:
+        invitation.status = "revoked"
+        invitation.revoked_at = datetime.now(timezone.utc)
+
+        db.session.add(AuditLog(
+            workspace_id=membership.workspace_id,
+            user_id=user.id,
+            action="workspace_invitation_revoked",
+            resource_type="workspace_invitation",
+            resource_id=str(invitation.id),
+            details={"email": invitation.email, "role": invitation.role},
+            ip_address=request.remote_addr,
+        ))
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Invitation revoked.",
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Workspace invitation revocation failed")
+        return jsonify({
+            "success": False,
+            "message": "Could not revoke the invitation.",
+        }), 500
+
+
+@auth_bp.patch("/workspaces/<workspace_id>/members/<member_user_id>")
+@jwt_required()
+def update_workspace_member_role(workspace_id, member_user_id):
+    user, membership, error = _workspace_invitation_context(workspace_id)
+    if error:
+        return error
+
+    if membership.role not in ("owner", "admin"):
+        return jsonify({"success": False, "message": "Permission denied."}), 403
+
+    try:
+        target_user_id = UUID(str(member_user_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"success": False, "message": "Invalid member ID."}), 400
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get("role"), str):
+        return jsonify({
+            "success": False,
+            "message": "A valid role is required.",
+        }), 400
+
+    new_role = data["role"].strip().lower()
+    if new_role not in ("admin", "member", "viewer"):
+        return jsonify({
+            "success": False,
+            "message": "Role must be admin, member, or viewer.",
+        }), 400
+
+    target = WorkspaceMember.query.filter_by(
+        workspace_id=membership.workspace_id,
+        user_id=target_user_id,
+    ).with_for_update().first()
+
+    if target is None:
+        return jsonify({"success": False, "message": "Member not found."}), 404
+
+    if target.role == "owner":
+        return jsonify({
+            "success": False,
+            "message": "The workspace owner cannot be changed here.",
+        }), 403
+
+    if membership.role == "admin":
+        if target.role not in ("member", "viewer") or new_role == "admin":
+            return jsonify({
+                "success": False,
+                "message": "Admins can only manage members and viewers.",
+            }), 403
+
+    if target.role == new_role:
+        return jsonify({
+            "success": True,
+            "message": "Member already has that role.",
+            "role": target.role,
+        }), 200
+
+    old_role = target.role
+
+    try:
+        target.role = new_role
+        db.session.add(AuditLog(
+            workspace_id=membership.workspace_id,
+            user_id=user.id,
+            action="workspace_member_role_changed",
+            resource_type="workspace_member",
+            resource_id=str(target.user_id),
+            details={"old_role": old_role, "new_role": new_role},
+            ip_address=request.remote_addr,
+        ))
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Member role updated.",
+            "user_id": str(target.user_id),
+            "role": target.role,
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Workspace member role update failed")
+        return jsonify({
+            "success": False,
+            "message": "Could not update the member role.",
+        }), 500
+
+
+@auth_bp.delete("/workspaces/<workspace_id>/members/<member_user_id>")
+@jwt_required()
+def remove_workspace_member(workspace_id, member_user_id):
+    user, membership, error = _workspace_invitation_context(workspace_id)
+    if error:
+        return error
+
+    if membership.role not in ("owner", "admin"):
+        return jsonify({"success": False, "message": "Permission denied."}), 403
+
+    try:
+        target_user_id = UUID(str(member_user_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"success": False, "message": "Invalid member ID."}), 400
+
+    target = WorkspaceMember.query.filter_by(
+        workspace_id=membership.workspace_id,
+        user_id=target_user_id,
+    ).with_for_update().first()
+
+    if target is None:
+        return jsonify({"success": False, "message": "Member not found."}), 404
+
+    if target.role == "owner":
+        return jsonify({
+            "success": False,
+            "message": "The workspace owner cannot be removed.",
+        }), 403
+
+    if membership.role == "admin" and target.role not in ("member", "viewer"):
+        return jsonify({
+            "success": False,
+            "message": "Admins can only remove members and viewers.",
+        }), 403
+
+    removed_role = target.role
+
+    try:
+        db.session.add(AuditLog(
+            workspace_id=membership.workspace_id,
+            user_id=user.id,
+            action="workspace_member_removed",
+            resource_type="workspace_member",
+            resource_id=str(target.user_id),
+            details={"removed_role": removed_role},
+            ip_address=request.remote_addr,
+        ))
+        db.session.delete(target)
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Workspace member removed.",
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Workspace member removal failed")
+        return jsonify({
+            "success": False,
+            "message": "Could not remove the workspace member.",
+        }), 500
+
+
+
+@auth_bp.post("/workspaces/<workspace_id>/transfer-ownership")
+@jwt_required()
+def transfer_workspace_ownership(workspace_id):
+    user, membership, error = _workspace_invitation_context(workspace_id)
+    if error:
+        return error
+
+    if membership.role != "owner":
+        return jsonify({
+            "success": False,
+            "message": "Only the workspace owner can transfer ownership.",
+        }), 403
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    try:
+        target_user_id = UUID(str(data.get("member_user_id", "")))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid recipient member ID.",
+        }), 400
+
+    if target_user_id == user.id:
+        return jsonify({
+            "success": False,
+            "message": "You are already the workspace owner.",
+        }), 400
+
+    try:
+        current_owner = WorkspaceMember.query.filter_by(
+            workspace_id=membership.workspace_id,
+            user_id=user.id,
+        ).with_for_update().first()
+
+        target = WorkspaceMember.query.filter_by(
+            workspace_id=membership.workspace_id,
+            user_id=target_user_id,
+        ).with_for_update().first()
+
+        if current_owner is None or current_owner.role != "owner":
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": "You are no longer the workspace owner.",
+            }), 403
+
+        if target is None:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": "The selected workspace member was not found.",
+            }), 404
+
+        if target.role != "admin":
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": "Ownership can only be transferred to an existing admin.",
+            }), 409
+
+        previous_owner_id = str(current_owner.user_id)
+        new_owner_id = str(target.user_id)
+
+        current_owner.role = "admin"
+        target.role = "owner"
+
+        db.session.add(AuditLog(
+            workspace_id=membership.workspace_id,
+            user_id=user.id,
+            action="workspace_ownership_transferred",
+            resource_type="workspace",
+            resource_id=str(membership.workspace_id),
+            details={
+                "previous_owner_user_id": previous_owner_id,
+                "new_owner_user_id": new_owner_id,
+            },
+            ip_address=request.remote_addr,
+        ))
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Workspace ownership transferred successfully.",
+            "previous_owner_user_id": previous_owner_id,
+            "new_owner_user_id": new_owner_id,
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Workspace ownership transfer failed")
+        return jsonify({
+            "success": False,
+            "message": "Could not transfer workspace ownership.",
+        }), 500
+
+
+def _workspace_invitation_context(workspace_id):
+    """Return the authenticated user and their workspace membership."""
+    try:
+        user_id = UUID(get_jwt_identity())
+        workspace_uuid = UUID(str(workspace_id))
+    except (ValueError, TypeError, AttributeError):
+        return None, None, (jsonify({
+            "success": False,
+            "message": "Invalid user or workspace identity.",
+        }), 400)
+
+    user = db.session.get(User, user_id)
+    if user is None or not user.is_active:
+        return None, None, (jsonify({
+            "success": False,
+            "message": "Account is unavailable.",
+        }), 403)
+
+    membership = WorkspaceMember.query.filter_by(
+        workspace_id=workspace_uuid,
+        user_id=user_id,
+    ).first()
+
+    if membership is None:
+        return None, None, (jsonify({
+            "success": False,
+            "message": "You are not a member of this workspace.",
+        }), 403)
+
+    return user, membership, None
+
+
+@auth_bp.get("/workspaces/<workspace_id>/members")
+@jwt_required()
+def list_workspace_members(workspace_id):
+    user, membership, error = _workspace_invitation_context(workspace_id)
+    if error:
+        return error
+
+    rows = (
+        db.session.query(WorkspaceMember, User)
+        .join(User, User.id == WorkspaceMember.user_id)
+        .filter(WorkspaceMember.workspace_id == membership.workspace_id)
+        .order_by(WorkspaceMember.joined_at.asc())
+        .all()
+    )
+
+    return jsonify({
+        "success": True,
+        "members": [
+            {
+                "user_id": str(member.user_id),
+                "email": account.email,
+                "role": member.role,
+                "joined_at": member.joined_at.isoformat(),
+            }
+            for member, account in rows
+        ],
+    }), 200
+
+
+@auth_bp.get("/workspaces/<workspace_id>/invitations")
+@jwt_required()
+def list_workspace_invitations(workspace_id):
+    user, membership, error = _workspace_invitation_context(workspace_id)
+    if error:
+        return error
+
+    if membership.role not in ("owner", "admin"):
+        return jsonify({
+            "success": False,
+            "message": "Only workspace owners and admins can view invitations.",
+        }), 403
+
+    invitations = (
+        WorkspaceInvitation.query
+        .filter_by(workspace_id=membership.workspace_id)
+        .order_by(WorkspaceInvitation.created_at.desc())
+        .all()
+    )
+
+    now = datetime.now(timezone.utc)
+
+    invitation_items = []
+
+    for invitation in invitations:
+        expires_at = invitation.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        status = invitation.status
+        if status == "pending" and expires_at <= now:
+            status = "expired"
+
+        invitation_items.append({
+            "id": str(invitation.id),
+            "email": invitation.email,
+            "role": invitation.role,
+            "status": status,
+            "expires_at": expires_at.isoformat(),
+            "created_at": invitation.created_at.isoformat(),
+        })
+
+    return jsonify({
+        "success": True,
+        "invitations": invitation_items,
+    }), 200
+
+
+@auth_bp.post("/workspaces/<workspace_id>/invitations")
+@jwt_required()
+def create_workspace_invitation(workspace_id):
+    user, membership, error = _workspace_invitation_context(workspace_id)
+    if error:
+        return error
+
+    if membership.role not in ("owner", "admin"):
+        return jsonify({
+            "success": False,
+            "message": "Only workspace owners and admins can invite members.",
+        }), 403
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    email = data.get("email")
+    role = data.get("role")
+
+    if not isinstance(email, str) or not isinstance(role, str):
+        return jsonify({
+            "success": False,
+            "message": "Email and role are required.",
+        }), 400
+
+    try:
+        email = validate_email(
+            email.strip(),
+            check_deliverability=False,
+        ).normalized.lower()
+    except (EmailNotValidError, ValueError):
+        return jsonify({
+            "success": False,
+            "message": "Please provide a valid email address.",
+        }), 400
+
+    role = role.strip().lower()
+    allowed_roles = {"admin", "member", "viewer"}
+
+    if role not in allowed_roles:
+        return jsonify({
+            "success": False,
+            "message": "Invitation role must be admin, member, or viewer.",
+        }), 400
+
+    if membership.role == "admin" and role not in {"member", "viewer"}:
+        return jsonify({
+            "success": False,
+            "message": "Admins can only invite members and viewers.",
+        }), 403
+
+    existing_user = User.query.filter(
+        db.func.lower(User.email) == email
+    ).first()
+
+    if existing_user:
+        existing_membership = WorkspaceMember.query.filter_by(
+            workspace_id=membership.workspace_id,
+            user_id=existing_user.id,
+        ).first()
+
+        if existing_membership:
+            return jsonify({
+                "success": False,
+                "message": "This user is already a workspace member.",
+            }), 409
+
+    now = datetime.now(timezone.utc)
+
+    existing_invitation = WorkspaceInvitation.query.filter(
+        WorkspaceInvitation.workspace_id == membership.workspace_id,
+        db.func.lower(WorkspaceInvitation.email) == email,
+        WorkspaceInvitation.status == "pending",
+        WorkspaceInvitation.expires_at > now,
+    ).first()
+
+    if existing_invitation:
+        return jsonify({
+            "success": False,
+            "message": "An active invitation already exists for this email.",
+        }), 409
+
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+    invitation = WorkspaceInvitation(
+        workspace_id=membership.workspace_id,
+        email=email,
+        role=role,
+        invited_by=user.id,
+        token_hash=token_hash,
+        status="pending",
+        expires_at=now + timedelta(days=7),
+    )
+
+    audit = AuditLog(
+        workspace_id=membership.workspace_id,
+        user_id=user.id,
+        action="workspace_invitation_created",
+        resource_type="workspace_invitation",
+        resource_id=None,
+        details={
+            "email": email,
+            "role": role,
+        },
+        ip_address=request.remote_addr,
+    )
+
+    try:
+        db.session.add(invitation)
+        db.session.flush()
+        audit.resource_id = str(invitation.id)
+        db.session.add(audit)
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Invitation created. Share the token securely with the invitee.",
+            "invitation": {
+                "id": str(invitation.id),
+                "email": invitation.email,
+                "role": invitation.role,
+                "expires_at": invitation.expires_at.isoformat(),
+                "token": raw_token,
+            },
+            "delivery": "manual",
+        }), 201
+
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": "An invitation conflict occurred. Please try again.",
+        }), 409
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Workspace invitation creation failed")
+        return jsonify({
+            "success": False,
+            "message": "Could not create the invitation. Please try again.",
+        }), 500
+
+
+@auth_bp.post("/invitations/accept")
+@jwt_required()
+def accept_workspace_invitation():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    raw_token = data.get("token")
+    if not isinstance(raw_token, str) or not raw_token.strip():
+        return jsonify({
+            "success": False,
+            "message": "Invitation token is required.",
+        }), 400
+
+    try:
+        user_id = UUID(get_jwt_identity())
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    user = db.session.get(User, user_id)
+    if user is None or not user.is_active:
+        return jsonify({
+            "success": False,
+            "message": "Account is unavailable.",
+        }), 403
+
+    if not user.email_verified:
+        return jsonify({
+            "success": False,
+            "message": "Verify your account email before accepting an invitation.",
+        }), 403
+
+    token_hash = hashlib.sha256(
+        raw_token.strip().encode("utf-8")
+    ).hexdigest()
+
+    invitation = WorkspaceInvitation.query.filter_by(
+        token_hash=token_hash,
+    ).with_for_update().first()
+
+    if invitation is None or invitation.status != "pending":
+        return jsonify({
+            "success": False,
+            "message": "This invitation is invalid or has already been used.",
+        }), 404
+
+    now = datetime.now(timezone.utc)
+    expires_at = invitation.expires_at
+
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at <= now:
+        return jsonify({
+            "success": False,
+            "message": "This invitation has expired.",
+        }), 410
+
+    if user.email.strip().lower() != invitation.email.strip().lower():
+        return jsonify({
+            "success": False,
+            "message": "This invitation was sent to a different email address.",
+        }), 403
+
+    existing_membership = WorkspaceMember.query.filter_by(
+        workspace_id=invitation.workspace_id,
+        user_id=user.id,
+    ).first()
+
+    if existing_membership:
+        return jsonify({
+            "success": False,
+            "message": "You are already a member of this workspace.",
+        }), 409
+
+    workspace = db.session.get(Workspace, invitation.workspace_id)
+    if workspace is None:
+        return jsonify({
+            "success": False,
+            "message": "The invited workspace no longer exists.",
+        }), 404
+
+    try:
+        membership = WorkspaceMember(
+            workspace_id=invitation.workspace_id,
+            user_id=user.id,
+            role=invitation.role,
+        )
+        invitation.status = "accepted"
+        invitation.accepted_at = now
+
+        db.session.add(membership)
+        db.session.add(AuditLog(
+            workspace_id=invitation.workspace_id,
+            user_id=user.id,
+            action="workspace_invitation_accepted",
+            resource_type="workspace_invitation",
+            resource_id=str(invitation.id),
+            details={
+                "email": user.email,
+                "role": invitation.role,
+            },
+            ip_address=request.remote_addr,
+        ))
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "You have joined the workspace.",
+            "workspace": {
+                "id": str(workspace.id),
+                "name": workspace.name,
+                "role": membership.role,
+                "currency": workspace.functional_currency,
+            },
+        }), 200
+
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": "You may already be a member of this workspace.",
+        }), 409
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Workspace invitation acceptance failed")
+        return jsonify({
+            "success": False,
+            "message": "Could not accept the invitation. Please try again.",
         }), 500

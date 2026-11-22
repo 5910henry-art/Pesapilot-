@@ -160,6 +160,231 @@ export default function Settings() {
   const [revokingSessionId, setRevokingSessionId] = useState("");
   const [revokingOthers, setRevokingOthers] = useState(false);
 
+  const [workspaceMembers, setWorkspaceMembers] = useState([]);
+  const [workspaceInvitations, setWorkspaceInvitations] = useState([]);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [workspaceMessage, setWorkspaceMessage] = useState(null);
+  const [workspaceInviteEmail, setWorkspaceInviteEmail] = useState("");
+  const [workspaceInviteRole, setWorkspaceInviteRole] = useState("member");
+  const [workspaceInviteBusy, setWorkspaceInviteBusy] = useState(false);
+  const [workspaceActionBusy, setWorkspaceActionBusy] = useState("");
+  const [newWorkspaceInvite, setNewWorkspaceInvite] = useState(null);
+
+  const activeWorkspaceId = activeWorkspace?.id || "";
+  const activeWorkspaceRole = activeWorkspace?.role || "";
+  const canManageWorkspace = ["owner", "admin"].includes(activeWorkspaceRole);
+
+  const loadWorkspaceData = useCallback(async () => {
+    if (!activeWorkspaceId) {
+      setWorkspaceMembers([]);
+      setWorkspaceInvitations([]);
+      return;
+    }
+
+    setWorkspaceLoading(true);
+    setWorkspaceError("");
+
+    try {
+      const requests = [
+        authApi.listWorkspaceMembers(activeWorkspaceId),
+        canManageWorkspace
+          ? authApi.listWorkspaceInvitations(activeWorkspaceId)
+          : Promise.resolve({ invitations: [] }),
+      ];
+
+      const [memberResult, invitationResult] = await Promise.all(requests);
+
+      setWorkspaceMembers(memberResult.members || []);
+      setWorkspaceInvitations(invitationResult.invitations || []);
+    } catch (error) {
+      setWorkspaceError(
+        error.message || "Workspace members could not be loaded."
+      );
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }, [activeWorkspaceId, canManageWorkspace]);
+
+  useEffect(() => {
+    loadWorkspaceData();
+  }, [loadWorkspaceData]);
+
+  async function handleCreateWorkspaceInvitation(event) {
+    event.preventDefault();
+    if (!activeWorkspaceId || !canManageWorkspace || workspaceInviteBusy) return;
+
+    setWorkspaceInviteBusy(true);
+    setWorkspaceMessage(null);
+    setNewWorkspaceInvite(null);
+
+    try {
+      const result = await authApi.createWorkspaceInvitation(activeWorkspaceId, {
+        email: workspaceInviteEmail.trim(),
+        role: workspaceInviteRole,
+      });
+      setNewWorkspaceInvite(result.invitation || null);
+      setWorkspaceInviteEmail("");
+      setWorkspaceMessage({
+        text: "Invitation created. Copy and share the invitation link with the invited person.",
+        type: "success",
+      });
+      await loadWorkspaceData();
+    } catch (error) {
+      setWorkspaceMessage({
+        text: error.message || "The workspace invitation could not be created.",
+        type: "error",
+      });
+    } finally {
+      setWorkspaceInviteBusy(false);
+    }
+  }
+
+  async function handleResendWorkspaceInvitation(invitationId) {
+    if (!activeWorkspaceId || !canManageWorkspace || workspaceActionBusy) return;
+
+    setWorkspaceActionBusy(invitationId);
+    setWorkspaceMessage(null);
+    setNewWorkspaceInvite(null);
+
+    try {
+      const result = await authApi.resendWorkspaceInvitation(
+        activeWorkspaceId, invitationId
+      );
+      setNewWorkspaceInvite(result.invitation || null);
+      setWorkspaceMessage({
+        text: "A new invitation token has been generated. The previous token is no longer valid.",
+        type: "success",
+      });
+      await loadWorkspaceData();
+    } catch (error) {
+      setWorkspaceMessage({
+        text: error.message || "The invitation could not be resent.",
+        type: "error",
+      });
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }
+
+  async function handleRevokeWorkspaceInvitation(invitationId) {
+    if (!activeWorkspaceId || !canManageWorkspace || workspaceActionBusy) return;
+    if (!window.confirm("Revoke this workspace invitation?")) return;
+
+    setWorkspaceActionBusy(invitationId);
+    setWorkspaceMessage(null);
+
+    try {
+      const result = await authApi.revokeWorkspaceInvitation(
+        activeWorkspaceId, invitationId
+      );
+      setWorkspaceMessage({
+        text: result.message || "Invitation revoked.",
+        type: "success",
+      });
+      await loadWorkspaceData();
+    } catch (error) {
+      setWorkspaceMessage({
+        text: error.message || "The invitation could not be revoked.",
+        type: "error",
+      });
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }
+
+  async function handleWorkspaceMemberRoleChange(member, role) {
+    if (!activeWorkspaceId || !canManageWorkspace || workspaceActionBusy) return;
+
+    setWorkspaceActionBusy(member.user_id);
+    setWorkspaceMessage(null);
+
+    try {
+      await authApi.updateWorkspaceMemberRole(
+        activeWorkspaceId, member.user_id, role
+      );
+      setWorkspaceMessage({
+        text: "Workspace member role updated.",
+        type: "success",
+      });
+      await loadWorkspaceData();
+    } catch (error) {
+      setWorkspaceMessage({
+        text: error.message || "The member role could not be updated.",
+        type: "error",
+      });
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }
+
+  async function handleRemoveWorkspaceMember(member) {
+    if (!activeWorkspaceId || !canManageWorkspace || workspaceActionBusy) return;
+    if (!window.confirm(
+      `Remove ${member.email} from this workspace? Their personal account will remain active.`
+    )) return;
+
+    setWorkspaceActionBusy(member.user_id);
+    setWorkspaceMessage(null);
+
+    try {
+      const result = await authApi.removeWorkspaceMember(
+        activeWorkspaceId, member.user_id
+      );
+      setWorkspaceMessage({
+        text: result.message || "Workspace member removed.",
+        type: "success",
+      });
+      await loadWorkspaceData();
+    } catch (error) {
+      setWorkspaceMessage({
+        text: error.message || "The member could not be removed.",
+        type: "error",
+      });
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }
+
+  async function handleTransferWorkspaceOwnership(member) {
+    if (
+      !activeWorkspaceId ||
+      activeWorkspaceRole !== "owner" ||
+      member.role !== "admin" ||
+      workspaceActionBusy
+    ) return;
+
+    const confirmed = window.confirm(
+      `Transfer ownership of ${activeWorkspace?.name || "this workspace"} to ${member.email}? You will become an admin and lose owner-only controls.`
+    );
+    if (!confirmed) return;
+
+    setWorkspaceActionBusy(`transfer:${member.user_id}`);
+    setWorkspaceMessage(null);
+
+    try {
+      const result = await authApi.transferWorkspaceOwnership(
+        activeWorkspaceId,
+        member.user_id
+      );
+
+      setWorkspaceMessage({
+        text: result.message || "Workspace ownership transferred.",
+        type: "success",
+      });
+
+      await reloadUser();
+      await loadWorkspaceData();
+    } catch (error) {
+      setWorkspaceMessage({
+        text: error.message || "Workspace ownership could not be transferred.",
+        type: "error",
+      });
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }
+
   useEffect(() => {
     setProfileForm({
       first_name: profile?.first_name || "",
@@ -695,8 +920,249 @@ export default function Settings() {
 
         <p className="settings-helper">
           Switch workspaces using the workspace selector in your dashboard.
-          Workspace closure and ownership transfers are not enabled here.
         </p>
+
+        <div className="settings-workspace-management">
+          <div className="settings-form-heading">
+            <h3>Workspace members</h3>
+            <p>People who can access this workspace and their assigned roles.</p>
+          </div>
+
+          {workspaceError && (
+            <div className="settings-notice error">{workspaceError}</div>
+          )}
+
+          {workspaceMessage && (
+            <div className={`settings-notice ${workspaceMessage.type || "success"}`}>
+              {workspaceMessage.text}
+            </div>
+          )}
+
+          {workspaceLoading ? (
+            <div className="settings-empty">Loading workspace members...</div>
+          ) : workspaceMembers.length ? (
+            <div className="settings-workspace-list">
+              {workspaceMembers.map((member) => {
+                const manageable =
+                  activeWorkspaceRole === "owner"
+                    ? member.role !== "owner"
+                    : activeWorkspaceRole === "admin" &&
+                      ["member", "viewer"].includes(member.role);
+
+                return (
+                  <article className="settings-workspace" key={member.user_id}>
+                    <div className="settings-workspace-icon">
+                      <UserRound size={19} />
+                    </div>
+                    <div className="settings-workspace-info">
+                      <h3>{member.email}</h3>
+                      <p>
+                        {member.role} · Joined {formatDate(member.joined_at)}
+                      </p>
+                    </div>
+
+                    {manageable && canManageWorkspace && (
+                      <div className="settings-workspace-actions">
+                        {activeWorkspaceRole === "owner" && member.role === "admin" && (
+                          <button
+                            type="button"
+                            className="settings-button secondary"
+                            disabled={Boolean(workspaceActionBusy)}
+                            onClick={() => handleTransferWorkspaceOwnership(member)}
+                          >
+                            Transfer ownership
+                          </button>
+                        )}
+                        <select
+                          aria-label={`Role for ${member.email}`}
+                          value={member.role}
+                          disabled={Boolean(workspaceActionBusy)}
+                          onChange={(event) =>
+                            handleWorkspaceMemberRoleChange(member, event.target.value)
+                          }
+                        >
+                          {activeWorkspaceRole === "owner" && (
+                            <option value="admin">Admin</option>
+                          )}
+                          <option value="member">Member</option>
+                          <option value="viewer">Viewer</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="settings-button danger"
+                          disabled={Boolean(workspaceActionBusy)}
+                          onClick={() => handleRemoveWorkspaceMember(member)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="settings-empty">
+              No workspace members were found.
+            </div>
+          )}
+
+          {canManageWorkspace && (
+            <>
+              <div className="settings-form-heading">
+                <h3>Invite a member</h3>
+                <p>
+                  Invitations expire after seven days. You will need to share
+                  the generated invitation link with the invited person.
+                </p>
+              </div>
+
+              <form
+                className="settings-form-grid"
+                onSubmit={handleCreateWorkspaceInvitation}
+              >
+                <label className="settings-field">
+                  <span>Email address</span>
+                  <input
+                    type="email"
+                    value={workspaceInviteEmail}
+                    onChange={(event) => setWorkspaceInviteEmail(event.target.value)}
+                    placeholder="person@example.com"
+                    maxLength={255}
+                    required
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <span>Workspace role</span>
+                  <select
+                    value={workspaceInviteRole}
+                    onChange={(event) => setWorkspaceInviteRole(event.target.value)}
+                  >
+                    {activeWorkspaceRole === "owner" && (
+                      <option value="admin">Admin</option>
+                    )}
+                    <option value="member">Member</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                </label>
+
+                <button
+                  type="submit"
+                  className="settings-button"
+                  disabled={workspaceInviteBusy || !activeWorkspaceId}
+                >
+                  {workspaceInviteBusy ? "Creating invitation..." : "Create invitation"}
+                </button>
+              </form>
+
+              {newWorkspaceInvite?.token && (
+                <div className="settings-workspace-token">
+                  <strong>Invitation link</strong>
+                  <p>Copy this link and share it through WhatsApp or SMS. It is only available here once.</p>
+                  <input
+                    type="text"
+                    value={`${window.location.origin}/workspace-invitation?token=${encodeURIComponent(newWorkspaceInvite.token)}`}
+                    readOnly
+                    onFocus={(event) => event.target.select()}
+                    aria-label="New workspace invitation token"
+                  />
+                  <button
+                    type="button"
+                    className="settings-button secondary"
+                    onClick={async () => {
+                      const value = `${window.location.origin}/workspace-invitation?token=${encodeURIComponent(newWorkspaceInvite.token)}`;
+
+                      try {
+                        if (navigator.clipboard?.writeText) {
+                          await navigator.clipboard.writeText(value);
+                        } else {
+                          const temporary = document.createElement("textarea");
+                          temporary.value = value;
+                          temporary.setAttribute("readonly", "");
+                          temporary.style.position = "fixed";
+                          temporary.style.opacity = "0";
+                          document.body.appendChild(temporary);
+                          temporary.select();
+                          const copied = document.execCommand("copy");
+                          document.body.removeChild(temporary);
+
+                          if (!copied) {
+                            throw new Error("Clipboard access is unavailable.");
+                          }
+                        }
+
+                        setWorkspaceMessage({
+                          type: "success",
+                          text: "Invitation link copied. Send it to the invited person.",
+                        });
+                      } catch {
+                        setWorkspaceMessage({
+                          type: "error",
+                          text: "Could not copy automatically. Tap the invitation link field to select it, then copy it manually.",
+                        });
+                      }
+                    }}
+                  >
+                    Copy invitation link
+                  </button>
+                </div>
+              )}
+
+              <div className="settings-form-heading">
+                <h3>Pending invitations</h3>
+                <p>Manage invitations that have not yet been accepted.</p>
+              </div>
+
+              {workspaceInvitations.length ? (
+                <div className="settings-workspace-list">
+                  {workspaceInvitations.map((invitation) => (
+                    <article className="settings-workspace" key={invitation.id}>
+                      <div className="settings-workspace-icon">
+                        <Mail size={19} />
+                      </div>
+                      <div className="settings-workspace-info">
+                        <h3>{invitation.email}</h3>
+                        <p>
+                          {invitation.role} · {invitation.status} · Expires{" "}
+                          {formatDate(invitation.expires_at)}
+                        </p>
+                      </div>
+                      {["pending", "expired"].includes(invitation.status) && (
+                        <div className="settings-workspace-actions">
+                          <button
+                            type="button"
+                            className="settings-button secondary"
+                            disabled={Boolean(workspaceActionBusy)}
+                            onClick={() =>
+                              handleResendWorkspaceInvitation(invitation.id)
+                            }
+                          >
+                            Resend
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-button danger"
+                            disabled={Boolean(workspaceActionBusy)}
+                            onClick={() =>
+                              handleRevokeWorkspaceInvitation(invitation.id)
+                            }
+                          >
+                            Revoke
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="settings-empty">
+                  There are no workspace invitations.
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </section>
 
       <section className="settings-section">
