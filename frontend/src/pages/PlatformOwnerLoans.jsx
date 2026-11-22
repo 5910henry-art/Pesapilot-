@@ -522,9 +522,15 @@ export default function PlatformOwnerLoans() {
                   return (
                     <tr key={item.id}>
                       <td>
-                        <strong>{item.customer_email || "Customer"}</strong>
+                        <strong>
+                          {item.applicant?.full_name ||
+                            item.customer_email ||
+                            "Customer"}
+                        </strong>
+                        <small>{item.customer_email || "Email unavailable"}</small>
+                        <small>Phone: {item.applicant?.phone || "—"}</small>
+                        <small>National ID: {item.applicant?.national_id || "—"}</small>
                         <small>{item.product_name}</small>
-                        <small className="platform-loan-id">{item.id}</small>
                       </td>
                       <td>{money(item.approved_principal_minor, item.currency_code)}</td>
                       <td>{money(item.disbursed_principal_minor, item.currency_code)}</td>
@@ -603,8 +609,11 @@ export default function PlatformOwnerLoans() {
             )}
             <div className="platform-loan-detail-heading">
               <div>
-                <h3>{loan.product_name}</h3>
-                <p>{loan.customer_email} · {loan.id}</p>
+                <h3>
+                  {loan.applicant?.full_name ||
+                    loan.customer_email ||
+                    "Customer"}
+                </h3>
               </div>
               <Status value={loan.status} />
             </div>
@@ -661,7 +670,12 @@ export default function PlatformOwnerLoans() {
                           <td>{dateTimeText(item.disbursement_date)}</td>
                           <td>{money(item.amount_minor, item.currency_code)}</td>
                           <td>{item.funding_source.replaceAll("_", " ")}</td>
-                          <td>{item.financial_account_id}</td>
+                          <td>
+                            {item.financial_account_name || "Account unavailable"}
+                            {item.financial_account_reference
+                              ? ` · ${item.financial_account_reference}`
+                              : ""}
+                          </td>
                           <td>{item.notes || "—"}</td>
                         </tr>
                       ))}

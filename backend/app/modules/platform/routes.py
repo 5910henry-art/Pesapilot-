@@ -11,7 +11,7 @@ from flask import current_app, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
-from app.services.identity import encrypt_national_id
+from app.services.identity import encrypt_national_id, decrypt_national_id
 from app.services.platform_affordability import estimate_affordable_principal
 from app.services.platform_affordability_evidence import build_affordability_evidence_report
 from app.models import (
@@ -623,6 +623,10 @@ def list_owner_platform_applications():
                 item["applicant"] = {
                     "full_name": details.full_name,
                     "phone": details.phone,
+                    "national_id": (
+                        decrypt_national_id(details.national_id_encrypted)
+                        if details.national_id_encrypted else None
+                    ),
                     "email": details.email,
                     "residential_address": details.residential_address,
                     "employment_status": details.employment_status,
@@ -1547,14 +1551,45 @@ def list_owner_platform_loans():
             .all()
         )
 
+        application_ids = list({
+            loan.application_id for loan, _, _ in rows
+            if loan.application_id
+        })
+        details_by_application = {
+            item.application_id: item
+            for item in PlatformLoanApplicationDetails.query.filter(
+                PlatformLoanApplicationDetails.application_id.in_(
+                    application_ids
+                )
+            ).all()
+        } if application_ids else {}
+
         loans = []
 
         for loan, customer_email, product_name in rows:
+            applicant_details = details_by_application.get(
+                loan.application_id
+            )
+            applicant = None
+            if applicant_details:
+                applicant = {
+                    "full_name": applicant_details.full_name,
+                    "phone": applicant_details.phone,
+                    "national_id": (
+                        decrypt_national_id(
+                            applicant_details.national_id_encrypted
+                        )
+                        if applicant_details.national_id_encrypted else None
+                    ),
+                    "email": applicant_details.email,
+                }
+
             loans.append({
                 "id": str(loan.id),
                 "application_id": str(loan.application_id),
                 "customer_id": str(loan.customer_id),
                 "customer_email": customer_email,
+                "applicant": applicant,
                 "product_id": str(loan.product_id),
                 "product_name": product_name,
                 "approved_principal_minor": loan.approved_principal_minor,
@@ -1637,6 +1672,25 @@ def get_owner_platform_loan(loan_id):
 
         loan, customer_email, product_name = row
 
+        applicant_details = (
+            PlatformLoanApplicationDetails.query
+            .filter_by(application_id=loan.application_id)
+            .one_or_none()
+        )
+        applicant = None
+        if applicant_details:
+            applicant = {
+                "full_name": applicant_details.full_name,
+                "phone": applicant_details.phone,
+                "national_id": (
+                    decrypt_national_id(
+                        applicant_details.national_id_encrypted
+                    )
+                    if applicant_details.national_id_encrypted else None
+                ),
+                "email": applicant_details.email,
+            }
+
         installments = (
             PlatformLoanInstallment.query
             .filter_by(loan_id=loan.id)
@@ -1655,6 +1709,17 @@ def get_owner_platform_loan(loan_id):
             )
             .all()
         )
+
+        disbursement_account_ids = {
+            item.financial_account_id for item in disbursements
+            if item.financial_account_id
+        }
+        disbursement_accounts = {
+            account.id: account
+            for account in PlatformFinancialAccount.query.filter(
+                PlatformFinancialAccount.id.in_(disbursement_account_ids)
+            ).all()
+        } if disbursement_account_ids else {}
 
         payments = (
             PlatformLoanPayment.query
@@ -1677,6 +1742,7 @@ def get_owner_platform_loan(loan_id):
             "application_id": str(loan.application_id),
             "customer_id": str(loan.customer_id),
             "customer_email": customer_email,
+            "applicant": applicant,
             "product_id": str(loan.product_id),
             "product_name": product_name,
             "approved_principal_minor": loan.approved_principal_minor,
@@ -1718,6 +1784,14 @@ def get_owner_platform_loan(loan_id):
         disbursement_data = [{
             "id": str(item.id),
             "financial_account_id": str(item.financial_account_id),
+            "financial_account_name": (
+                disbursement_accounts[item.financial_account_id].name
+                if item.financial_account_id in disbursement_accounts else None
+            ),
+            "financial_account_reference": (
+                disbursement_accounts[item.financial_account_id].display_reference
+                if item.financial_account_id in disbursement_accounts else None
+            ),
             "journal_entry_id": str(item.journal_entry_id),
             "customer_workspace_id": (
                 str(item.customer_workspace_id)

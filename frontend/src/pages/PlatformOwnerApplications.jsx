@@ -788,14 +788,27 @@ export default function PlatformOwnerApplications() {
                     <td>
                       <div className="loan-customer-cell">
                         <div className="loan-customer-avatar">
-                          {(application.customer_email || "C")
-                            .charAt(0).toUpperCase()}
+                          {(
+                            application.applicant?.full_name ||
+                            application.customer_email ||
+                            "C"
+                          ).charAt(0).toUpperCase()}
                         </div>
                         <div>
                           <strong>
-                            {application.customer_email || "Customer"}
+                            {application.applicant?.full_name ||
+                              application.customer_email ||
+                              "Customer"}
                           </strong>
-                          <small>ID: {application.customer_id || "—"}</small>
+                          <small>
+                            {application.customer_email || "Email unavailable"}
+                          </small>
+                          <small>
+                            Phone: {application.applicant?.phone || "—"}
+                          </small>
+                          <small>
+                            National ID: {application.applicant?.national_id || "—"}
+                          </small>
                         </div>
                       </div>
                     </td>
