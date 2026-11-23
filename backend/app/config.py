@@ -23,7 +23,13 @@ class Config:
             "postgresql://", "postgresql+psycopg://", 1
         )
 
-    SQLALCHEMY_ENGINE_OPTIONS = {}
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        # Detect disconnected Neon connections before reusing them.
+        "pool_pre_ping": True,
+        # Recycle pooled connections periodically.
+        "pool_recycle": 300,
+        "pool_timeout": 30,
+    }
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 

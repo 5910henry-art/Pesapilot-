@@ -185,6 +185,31 @@ class PesaPilotTestCase(unittest.TestCase):
         )
         db.session.add(self.membership)
 
+        business_fixture_tests = {
+            "test_unverified_user_cannot_accept_workspace_invitation",
+            "test_revoked_workspace_invitation_cannot_be_accepted",
+            "test_expired_workspace_invitation_cannot_be_accepted",
+        }
+
+        if (
+            self._testMethodName.startswith("test_workspace_")
+            or self._testMethodName in business_fixture_tests
+        ):
+            self.business_workspace = Workspace(
+                name="Test Business Workspace",
+                workspace_type="business",
+                functional_currency="KES",
+            )
+            db.session.add(self.business_workspace)
+            db.session.flush()
+
+            self.business_membership = WorkspaceMember(
+                workspace_id=self.business_workspace.id,
+                user_id=self.user.id,
+                role="owner",
+            )
+            db.session.add(self.business_membership)
+
         self.source_account = FinancialAccount(
             workspace_id=self.workspace.id,
             name="Main Wallet",
@@ -1285,6 +1310,146 @@ class PesaPilotTestCase(unittest.TestCase):
             0,
         )
 
+    def test_workspace_business_affordability_counts_only_relevant_debts(self):
+        personal_response = self.create_personal_loan()
+        self.assertEqual(personal_response.status_code, 201, personal_response.json)
+
+        personal_loan = db.session.get(
+            PersonalLoan, UUID(personal_response.json["loan"]["id"])
+        )
+        personal_loan.status = "active"
+
+        other_business = Workspace(
+            name="Other Business Workspace",
+            workspace_type="business",
+            functional_currency="KES",
+        )
+        db.session.add(other_business)
+        db.session.flush()
+        db.session.add(WorkspaceMember(
+            workspace_id=other_business.id,
+            user_id=self.user.id,
+            role="owner",
+        ))
+
+        start = date.today()
+
+        def add_business_debt(workspace_id, installment):
+            db.session.add(PersonalLoan(
+                workspace_id=workspace_id,
+                created_by=self.user.id,
+                direction="borrowed",
+                counterparty_name="Business Lender",
+                loan_type="business",
+                principal_minor=100000,
+                currency_code="KES",
+                interest_method="flat",
+                interest_rate_percent=Decimal("10"),
+                repayment_frequency="monthly",
+                term_count=12,
+                installment_minor=installment,
+                start_date=start,
+                due_date=start + timedelta(days=30),
+                status="active",
+                description="Workspace debt scope test",
+            ))
+
+        add_business_debt(self.business_workspace.id, 12000)
+        add_business_debt(other_business.id, 5000)
+        db.session.commit()
+
+        debt = collect_existing_monthly_debt(
+            customer_id=self.user.id,
+            workspace_id=self.business_workspace.id,
+        )
+
+        self.assertEqual(
+            debt["existing_personal_monthly_repayments_minor"],
+            9167 + 12000,
+        )
+        self.assertEqual(
+            debt["existing_monthly_repayments_minor"],
+            9167 + 12000,
+        )
+
+
+    def test_workspace_business_affordability_scopes_platform_loans(self):
+        start = date.today()
+        future_due = start + timedelta(days=30)
+
+        def add_platform_debt(workspace_id, installment_minor):
+            application = self.create_approved_platform_application()
+            application.workspace_id = workspace_id
+
+            loan = PlatformLoan(
+                application_id=application.id,
+                customer_id=self.user.id,
+                product_id=application.product_id,
+                approved_principal_minor=100000,
+                principal_minor=100000,
+                outstanding_principal_minor=100000,
+                currency_code="KES",
+                interest_method="reducing",
+                interest_rate_percent=Decimal("10"),
+                repayment_frequency="monthly",
+                term_count=application.term_count,
+                start_date=start,
+                due_date=future_due,
+                status="active",
+            )
+            db.session.add(loan)
+            db.session.flush()
+
+            db.session.add(PlatformLoanInstallment(
+                loan_id=loan.id,
+                installment_number=1,
+                due_date=future_due,
+                amount_minor=installment_minor,
+                principal_minor=installment_minor - 1000,
+                interest_minor=1000,
+                paid_minor=0,
+                status="scheduled",
+            ))
+
+        other_business = Workspace(
+            name="Unrelated Business Workspace",
+            workspace_type="business",
+            functional_currency="KES",
+        )
+        db.session.add(other_business)
+        db.session.flush()
+        db.session.add(WorkspaceMember(
+            workspace_id=other_business.id,
+            user_id=self.user.id,
+            role="owner",
+        ))
+
+        # Applicant's Personal debt, including a pre-workspace legacy loan.
+        add_platform_debt(self.workspace.id, 7000)
+        add_platform_debt(None, 3000)
+
+        # Debt belonging to the selected Business workspace.
+        add_platform_debt(self.business_workspace.id, 8000)
+
+        # Debt belonging to a different Business workspace must be excluded.
+        add_platform_debt(other_business.id, 5000)
+        db.session.commit()
+
+        debt = collect_existing_monthly_debt(
+            customer_id=self.user.id,
+            workspace_id=self.business_workspace.id,
+        )
+
+        self.assertEqual(
+            debt["existing_platform_monthly_repayments_minor"],
+            18000,
+        )
+        self.assertEqual(
+            debt["existing_monthly_repayments_minor"],
+            18000,
+        )
+
+
     def create_personal_loan(self, **overrides):
         start = date.today()
         payload = {
@@ -1392,6 +1557,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def platform_application_payload(self, product, **overrides):
         payload = {
+            "workspace_id": str(self.workspace.id),
             "product_id": str(product.id),
             "customer_financial_account_id": str(self.source_account.id),
             "requested_principal_minor": 100000,
@@ -2056,6 +2222,193 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(sum(line.debit_minor for line in lines), 100000)
         self.assertEqual(sum(line.credit_minor for line in lines), 100000)
 
+    def test_workspace_receiving_accounts_are_scoped_to_personal(self):
+        product = self.create_platform_loan_product()
+        business_account = FinancialAccount(
+            workspace_id=self.business_workspace.id,
+            name="Business Wallet",
+            account_type="mobile_money",
+            currency_code="KES",
+            is_active=True,
+        )
+        db.session.add(business_account)
+        db.session.commit()
+
+        response = self.client.get(
+            f"/api/v1/platform/receiving-accounts/{product.id}",
+            headers=self.headers,
+            query_string={"workspace_id": str(self.workspace.id)},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        account_ids = {item["id"] for item in response.json["accounts"]}
+        self.assertIn(str(self.source_account.id), account_ids)
+        self.assertNotIn(str(business_account.id), account_ids)
+
+    def test_workspace_receiving_accounts_are_scoped_to_business(self):
+        product = self.create_platform_loan_product()
+        business_account = FinancialAccount(
+            workspace_id=self.business_workspace.id,
+            name="Business Wallet",
+            account_type="mobile_money",
+            currency_code="KES",
+            is_active=True,
+        )
+        db.session.add(business_account)
+        db.session.commit()
+
+        response = self.client.get(
+            f"/api/v1/platform/receiving-accounts/{product.id}",
+            headers=self.headers,
+            query_string={"workspace_id": str(self.business_workspace.id)},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        account_ids = {item["id"] for item in response.json["accounts"]}
+        self.assertIn(str(business_account.id), account_ids)
+        self.assertNotIn(str(self.source_account.id), account_ids)
+
+    def test_workspace_receiving_accounts_reject_unowned(self):
+        product = self.create_platform_loan_product()
+        unowned_workspace = Workspace(
+            name="Unowned Business Workspace",
+            workspace_type="business",
+            functional_currency="KES",
+        )
+        db.session.add(unowned_workspace)
+        db.session.commit()
+
+        response = self.client.get(
+            f"/api/v1/platform/receiving-accounts/{product.id}",
+            headers=self.headers,
+            query_string={"workspace_id": str(unowned_workspace.id)},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertFalse(response.json["success"])
+
+    def test_workspace_business_platform_loan_disburses_to_business_account(self):
+        platform_account = self.create_platform_accounting_setup()
+
+        business_account = FinancialAccount(
+            workspace_id=self.business_workspace.id,
+            name="Business Loan Wallet",
+            account_type="mobile_money",
+            currency_code="KES",
+            is_active=True,
+        )
+        db.session.add(business_account)
+        db.session.flush()
+
+        business_cash_ledger = LedgerAccount(
+            workspace_id=self.business_workspace.id,
+            financial_account_id=business_account.id,
+            code=f"BUS-CASH-{uuid4().hex[:12]}",
+            name="Business Loan Wallet",
+            account_class="asset",
+            normal_balance="debit",
+            currency_code="KES",
+            is_system=False,
+            is_active=True,
+        )
+        business_liability_ledger = LedgerAccount(
+            workspace_id=self.business_workspace.id,
+            financial_account_id=None,
+            code="2000",
+            name="Loans and Credit Payable",
+            account_class="liability",
+            normal_balance="credit",
+            currency_code="KES",
+            is_system=True,
+            is_active=True,
+        )
+        db.session.add_all([
+            business_cash_ledger,
+            business_liability_ledger,
+        ])
+        db.session.flush()
+
+        application = self.create_approved_platform_application()
+        application.workspace_id = self.business_workspace.id
+        db.session.flush()
+
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        disbursement = disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=platform_account.id,
+            customer_financial_account_id=business_account.id,
+            amount_minor=100000,
+            funding_source="pesapilot_capital",
+            disbursement_date=datetime(
+                2026, 11, 16, 10, 0, tzinfo=timezone.utc
+            ),
+            recorded_by=self.user.id,
+        )
+        db.session.flush()
+
+        self.assertEqual(disbursement.customer_workspace_id, self.business_workspace.id)
+        self.assertEqual(disbursement.customer_financial_account_id, business_account.id)
+        self.assertEqual(loan.status, "active")
+        self.assertEqual(loan.principal_minor, 100000)
+
+        customer_entry = db.session.get(
+            JournalEntry,
+            disbursement.customer_journal_entry_id,
+        )
+        self.assertIsNotNone(customer_entry)
+        self.assertEqual(customer_entry.workspace_id, self.business_workspace.id)
+        self.assertEqual(customer_entry.status, "posted")
+
+        customer_lines = JournalLine.query.filter_by(
+            journal_entry_id=customer_entry.id
+        ).all()
+        self.assertEqual(len(customer_lines), 2)
+        self.assertEqual(
+            {line.ledger_account_id for line in customer_lines},
+            {business_cash_ledger.id, business_liability_ledger.id},
+        )
+        self.assertEqual(sum(line.debit_minor for line in customer_lines), 100000)
+        self.assertEqual(sum(line.credit_minor for line in customer_lines), 100000)
+
+    def test_workspace_business_platform_loan_rejects_personal_receiving_account(self):
+        platform_account = self.create_platform_accounting_setup()
+
+        application = self.create_approved_platform_application()
+        application.workspace_id = self.business_workspace.id
+        db.session.flush()
+
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+
+        with self.assertRaises(PlatformLendingValidationError):
+            disburse_platform_loan(
+                loan_id=loan.id,
+                financial_account_id=platform_account.id,
+                customer_financial_account_id=self.source_account.id,
+                amount_minor=100000,
+                funding_source="pesapilot_capital",
+                disbursement_date=datetime(
+                    2026, 11, 16, 10, 0, tzinfo=timezone.utc
+                ),
+                recorded_by=self.user.id,
+            )
+
+        db.session.expire_all()
+        refreshed_loan = db.session.get(PlatformLoan, loan.id)
+
+        self.assertEqual(refreshed_loan.status, "created")
+        self.assertEqual(refreshed_loan.principal_minor, 0)
+        self.assertEqual(
+            PlatformLoanDisbursement.query.filter_by(
+                loan_id=loan.id
+            ).count(),
+            0,
+        )
+
     def test_platform_loan_partial_disbursement_records_funding_tranche(self):
         account = self.create_platform_accounting_setup()
         application = self.create_approved_platform_application()
@@ -2264,6 +2617,71 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(len(installments), 1)
         self.assertEqual(installments[0].due_date, expected_due_date)
         self.assertEqual(installments[0].principal_minor, 100000)
+
+    def create_funded_business_platform_loan_for_repayment(self):
+        platform_account = self.create_platform_accounting_setup()
+
+        business_account = FinancialAccount(
+            workspace_id=self.business_workspace.id,
+            name="Business Repayment Wallet",
+            account_type="mobile_money",
+            currency_code="KES",
+            is_active=True,
+        )
+        db.session.add(business_account)
+        db.session.flush()
+
+        business_cash_ledger = LedgerAccount(
+            workspace_id=self.business_workspace.id,
+            financial_account_id=business_account.id,
+            code=f"BUS-CASH-{uuid4().hex[:12]}",
+            name="Business Repayment Wallet",
+            account_class="asset",
+            normal_balance="debit",
+            currency_code="KES",
+            is_system=False,
+            is_active=True,
+        )
+        business_liability_ledger = LedgerAccount(
+            workspace_id=self.business_workspace.id,
+            financial_account_id=None,
+            code="2000",
+            name="Loans and Credit Payable",
+            account_class="liability",
+            normal_balance="credit",
+            currency_code="KES",
+            is_system=True,
+            is_active=True,
+        )
+        db.session.add_all([
+            business_cash_ledger,
+            business_liability_ledger,
+        ])
+        db.session.flush()
+
+        application = self.create_approved_platform_application(
+            approved_principal_minor=100000,
+            term_count=6,
+        )
+        application.workspace_id = self.business_workspace.id
+        db.session.flush()
+
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        disburse_platform_loan(
+            loan_id=loan.id,
+            financial_account_id=platform_account.id,
+            customer_financial_account_id=business_account.id,
+            amount_minor=100000,
+            funding_source="pesapilot_capital",
+            disbursement_date=datetime(
+                2026, 11, 16, 9, 0, tzinfo=timezone.utc
+            ),
+            recorded_by=self.user.id,
+        )
+        db.session.flush()
+        return loan, business_account
 
     def create_funded_platform_loan_for_repayment(self):
         account = self.create_platform_accounting_setup()
@@ -3617,6 +4035,157 @@ class PesaPilotTestCase(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 401)
+
+
+    def test_platform_owner_can_list_and_search_users_for_verification(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        target = User(
+            email="verification-target@example.invalid",
+            phone="+254712345678",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/v1/platform/owner/users?search=verification-target",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["success"])
+        self.assertEqual(response.json["pagination"]["total"], 1)
+        self.assertEqual(response.json["users"][0]["email"], target.email)
+        self.assertFalse(response.json["users"][0]["email_verified"])
+        self.assertFalse(response.json["users"][0]["phone_verified"])
+
+    def test_platform_owner_can_manually_verify_user_email(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        target = User(
+            email="email-review@example.invalid",
+            phone="+254712345679",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/users/{target.id}/verify/email",
+            headers=self.headers,
+            json={"evidence_note": "Confirmed through direct email contact."},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["user"]["email_verified"])
+        self.assertFalse(response.json["user"]["phone_verified"])
+
+        audit = AuditLog.query.filter_by(
+            action="user_email_manually_verified",
+            resource_id=str(target.id),
+        ).one()
+        self.assertEqual(audit.user_id, self.user.id)
+        self.assertEqual(
+            audit.details["verification_method"],
+            "manual_administrator_review",
+        )
+
+    def test_platform_owner_can_manually_verify_user_phone(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        target = User(
+            email="phone-review@example.invalid",
+            phone="+254712345680",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/users/{target.id}/verify/phone",
+            headers=self.headers,
+            json={"evidence_note": "Called the number and confirmed ownership."},
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertFalse(response.json["user"]["email_verified"])
+        self.assertTrue(response.json["user"]["phone_verified"])
+
+        audit = AuditLog.query.filter_by(
+            action="user_phone_manually_verified",
+            resource_id=str(target.id),
+        ).one()
+        self.assertEqual(audit.user_id, self.user.id)
+
+    def test_manual_contact_verification_requires_evidence_note(self):
+        db.session.add(PlatformAdmin(
+            user_id=self.user.id,
+            role="owner",
+            is_active=True,
+        ))
+        target = User(
+            email="missing-evidence@example.invalid",
+            phone="+254712345681",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/platform/owner/users/{target.id}/verify/email",
+            headers=self.headers,
+            json={"evidence_note": "checked"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        db.session.refresh(target)
+        self.assertFalse(target.email_verified)
+        self.assertEqual(
+            AuditLog.query.filter_by(
+                action="user_email_manually_verified",
+                resource_id=str(target.id),
+            ).count(),
+            0,
+        )
+
+    def test_workspace_owner_cannot_list_or_verify_platform_users(self):
+        target = User(
+            email="protected-target@example.invalid",
+            phone="+254712345682",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(target)
+        db.session.commit()
+
+        list_response = self.client.get(
+            "/api/v1/platform/owner/users",
+            headers=self.headers,
+        )
+        verify_response = self.client.post(
+            f"/api/v1/platform/owner/users/{target.id}/verify/email",
+            headers=self.headers,
+            json={"evidence_note": "Attempted without platform authority."},
+        )
+
+        self.assertEqual(list_response.status_code, 403)
+        self.assertEqual(verify_response.status_code, 403)
+        db.session.refresh(target)
+        self.assertFalse(target.email_verified)
 
 
     def test_platform_owner_can_configure_functional_currency(self):
@@ -4995,6 +5564,172 @@ class PesaPilotTestCase(unittest.TestCase):
 
         self.assertEqual(loan.late_payment_fee_minor, 375)
 
+    def test_workspace_business_admin_and_member_can_report_late_fee_payments(self):
+        loan, _account = self.create_funded_business_platform_loan_for_repayment()
+        loan.late_payment_fee_minor = 2500
+        self.create_platform_late_fee_ledgers()
+
+        installments = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(
+            PlatformLoanInstallment.installment_number
+        ).limit(2).all()
+        self.assertEqual(len(installments), 2)
+
+        for index, installment in enumerate(installments):
+            installment.due_date = date(2026, 11, 20 + index)
+
+        assessed = assess_overdue_platform_loan_fees(
+            as_of_date=date(2026, 11, 22),
+            assessed_by=self.user.id,
+        )
+        self.assertEqual(assessed, 2)
+
+        for role in ("admin", "member"):
+            with self.subTest(role=role):
+                user = User(
+                    email=f"{role}-{uuid4().hex}@example.invalid",
+                    password_hash="test-password-hash",
+                    is_active=True,
+                )
+                db.session.add(user)
+                db.session.flush()
+                db.session.add(WorkspaceMember(
+                    workspace_id=self.business_workspace.id,
+                    user_id=user.id,
+                    role=role,
+                ))
+                db.session.commit()
+
+                token = create_access_token(identity=str(user.id))
+                response = self.client.post(
+                    f"/api/v1/platform/loans/{loan.id}/late-fee-payments",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "amount_minor": 1000,
+                        "payment_date": "2026-11-22",
+                        "payment_method": "mobile_money",
+                        "reference": f"FEE-{role}-{uuid4().hex[:12]}",
+                    },
+                )
+
+                self.assertEqual(response.status_code, 201, response.json)
+                self.assertTrue(response.json["success"])
+
+                payment = PlatformLoanLateFeePayment.query.filter_by(
+                    id=UUID(response.json["payment"]["id"])
+                ).one()
+                self.assertEqual(payment.recorded_by, user.id)
+                self.assertEqual(payment.status, "pending")
+
+    def test_workspace_business_viewer_cannot_report_late_fee_payment(self):
+        loan, _account = self.create_funded_business_platform_loan_for_repayment()
+        loan.late_payment_fee_minor = 2500
+        self.create_platform_late_fee_ledgers()
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(
+            PlatformLoanInstallment.installment_number
+        ).first()
+        installment.due_date = date(2026, 11, 20)
+
+        self.assertEqual(
+            assess_overdue_platform_loan_fees(
+                as_of_date=date(2026, 11, 22),
+                assessed_by=self.user.id,
+            ),
+            1,
+        )
+
+        viewer = User(
+            email=f"viewer-{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(viewer)
+        db.session.flush()
+        db.session.add(WorkspaceMember(
+            workspace_id=self.business_workspace.id,
+            user_id=viewer.id,
+            role="viewer",
+        ))
+        db.session.commit()
+
+        token = create_access_token(identity=str(viewer.id))
+        response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/late-fee-payments",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "amount_minor": 1000,
+                "payment_date": "2026-11-22",
+                "payment_method": "mobile_money",
+                "reference": f"FEE-VIEW-{uuid4().hex[:12]}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404, response.json)
+        self.assertEqual(
+            PlatformLoanLateFeePayment.query.filter_by(
+                loan_id=loan.id
+            ).count(),
+            0,
+        )
+
+    def test_workspace_business_member_cannot_report_personal_late_fee_payment(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+        loan.late_payment_fee_minor = 2500
+        self.create_platform_late_fee_ledgers()
+
+        installment = PlatformLoanInstallment.query.filter_by(
+            loan_id=loan.id
+        ).order_by(
+            PlatformLoanInstallment.installment_number
+        ).first()
+        installment.due_date = date(2026, 11, 20)
+
+        self.assertEqual(
+            assess_overdue_platform_loan_fees(
+                as_of_date=date(2026, 11, 22),
+                assessed_by=self.user.id,
+            ),
+            1,
+        )
+
+        member = User(
+            email=f"business-member-{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(member)
+        db.session.flush()
+        db.session.add(WorkspaceMember(
+            workspace_id=self.business_workspace.id,
+            user_id=member.id,
+            role="member",
+        ))
+        db.session.commit()
+
+        token = create_access_token(identity=str(member.id))
+        response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/late-fee-payments",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "amount_minor": 1000,
+                "payment_date": "2026-11-22",
+                "payment_method": "mobile_money",
+                "reference": f"FEE-PERSONAL-{uuid4().hex[:12]}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404, response.json)
+        self.assertEqual(
+            PlatformLoanLateFeePayment.query.filter_by(
+                loan_id=loan.id
+            ).count(),
+            0,
+        )
+
     def test_platform_late_fee_assessment_payment_and_reversal(self):
         loan, account = self.create_funded_platform_loan_for_repayment()
         self.create_platform_late_fee_ledgers()
@@ -5264,6 +5999,197 @@ class PesaPilotTestCase(unittest.TestCase):
         loan_ids = [item["id"] for item in response.json["loans"]]
         self.assertIn(str(own_loan.id), loan_ids)
         self.assertNotIn(str(other_loan.id), loan_ids)
+
+    def test_workspace_business_admin_and_member_can_report_repayments(self):
+        loan, _account = self.create_funded_business_platform_loan_for_repayment()
+
+        for role in ("admin", "member"):
+            with self.subTest(role=role):
+                user = User(
+                    email=f"{uuid4().hex}@example.invalid",
+                    password_hash="test-password-hash",
+                    is_active=True,
+                )
+                db.session.add(user)
+                db.session.flush()
+                db.session.add(WorkspaceMember(
+                    workspace_id=self.business_workspace.id,
+                    user_id=user.id,
+                    role=role,
+                ))
+                db.session.flush()
+
+                token = create_access_token(identity=str(user.id))
+                headers = {"Authorization": f"Bearer {token}"}
+
+                list_response = self.client.get(
+                    "/api/v1/platform/loans",
+                    headers=headers,
+                )
+                self.assertEqual(
+                    list_response.status_code, 200, list_response.json
+                )
+                self.assertIn(
+                    str(loan.id),
+                    [item["id"] for item in list_response.json["loans"]],
+                )
+
+                detail_response = self.client.get(
+                    f"/api/v1/platform/loans/{loan.id}",
+                    headers=headers,
+                )
+                self.assertEqual(
+                    detail_response.status_code, 200, detail_response.json
+                )
+
+                payment_response = self.client.post(
+                    f"/api/v1/platform/loans/{loan.id}/payments",
+                    headers=headers,
+                    json={
+                        "amount_minor": 1000,
+                        "payment_date": date.today().isoformat(),
+                        "payment_method": "mobile_money",
+                        "reference": f"{role.upper()}-{uuid4().hex[:12]}",
+                    },
+                )
+                self.assertEqual(
+                    payment_response.status_code,
+                    201,
+                    payment_response.json,
+                )
+
+                payment = db.session.get(
+                    PlatformLoanPayment,
+                    UUID(payment_response.json["payment"]["id"]),
+                )
+                self.assertEqual(payment.recorded_by, user.id)
+
+    def test_workspace_business_viewer_can_view_but_not_report_repayment(self):
+        loan, _account = self.create_funded_business_platform_loan_for_repayment()
+
+        viewer = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(viewer)
+        db.session.flush()
+        db.session.add(WorkspaceMember(
+            workspace_id=self.business_workspace.id,
+            user_id=viewer.id,
+            role="viewer",
+        ))
+        db.session.flush()
+
+        token = create_access_token(identity=str(viewer.id))
+        headers = {"Authorization": f"Bearer {token}"}
+
+        list_response = self.client.get(
+            "/api/v1/platform/loans",
+            headers=headers,
+        )
+        self.assertEqual(list_response.status_code, 200, list_response.json)
+        self.assertIn(
+            str(loan.id),
+            [item["id"] for item in list_response.json["loans"]],
+        )
+
+        detail_response = self.client.get(
+            f"/api/v1/platform/loans/{loan.id}",
+            headers=headers,
+        )
+        self.assertEqual(detail_response.status_code, 200, detail_response.json)
+
+        payment_response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/payments",
+            headers=headers,
+            json={
+                "amount_minor": 1000,
+                "payment_date": date.today().isoformat(),
+                "payment_method": "mobile_money",
+                "reference": f"VIEWER-{uuid4().hex[:12]}",
+            },
+        )
+        self.assertEqual(payment_response.status_code, 404, payment_response.json)
+        self.assertEqual(
+            PlatformLoanPayment.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
+
+    def test_workspace_business_member_cannot_access_personal_platform_loan(self):
+        loan, _account = self.create_funded_platform_loan_for_repayment()
+
+        member = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(member)
+        db.session.flush()
+        db.session.add(WorkspaceMember(
+            workspace_id=self.business_workspace.id,
+            user_id=member.id,
+            role="member",
+        ))
+        db.session.flush()
+
+        token = create_access_token(identity=str(member.id))
+        headers = {"Authorization": f"Bearer {token}"}
+
+        list_response = self.client.get(
+            "/api/v1/platform/loans",
+            headers=headers,
+        )
+        self.assertEqual(list_response.status_code, 200, list_response.json)
+        self.assertNotIn(
+            str(loan.id),
+            [item["id"] for item in list_response.json["loans"]],
+        )
+
+        detail_response = self.client.get(
+            f"/api/v1/platform/loans/{loan.id}",
+            headers=headers,
+        )
+        self.assertEqual(detail_response.status_code, 404, detail_response.json)
+
+        payment_response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/payments",
+            headers=headers,
+            json={
+                "amount_minor": 1000,
+                "payment_date": date.today().isoformat(),
+                "payment_method": "mobile_money",
+                "reference": f"WRONG-WS-{uuid4().hex[:12]}",
+            },
+        )
+        self.assertEqual(payment_response.status_code, 404, payment_response.json)
+        self.assertEqual(
+            PlatformLoanPayment.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
+
+    def test_workspace_business_repayment_rejects_personal_account(self):
+        loan, _business_account = (
+            self.create_funded_business_platform_loan_for_repayment()
+        )
+
+        response = self.client.post(
+            f"/api/v1/platform/loans/{loan.id}/payments",
+            headers=self.headers,
+            json={
+                "amount_minor": 1000,
+                "payment_date": date.today().isoformat(),
+                "payment_method": "mobile_money",
+                "reference": f"WRONG-ACCOUNT-{uuid4().hex[:12]}",
+                "borrower_financial_account_id": str(self.source_account.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertEqual(
+            PlatformLoanPayment.query.filter_by(loan_id=loan.id).count(),
+            0,
+        )
 
     def test_customer_can_view_platform_loan_detail_and_repayment_history(self):
         loan, _account = self.create_funded_platform_loan_for_repayment()
@@ -5777,7 +6703,9 @@ class PesaPilotTestCase(unittest.TestCase):
             "/api/v1/platform/applications",
             headers=self.headers,
             json=self.platform_application_payload(
-                product, monthly_income_minor=600000,
+                product,
+                workspace_id=str(self.workspace.id),
+                monthly_income_minor=600000,
                 monthly_expenses_minor=0,
             ),
         )
@@ -6376,7 +7304,7 @@ class PesaPilotTestCase(unittest.TestCase):
         response = self.client.post(
             "/api/v1/platform/eligibility",
             headers=self.headers,
-            json={"affordability_consent": False},
+            json={"workspace_id": str(self.workspace.id), "affordability_consent": False},
         )
         self.assertEqual(response.status_code, 400, response.json)
         self.assertIn("consent", response.json["message"].lower())
@@ -6386,7 +7314,7 @@ class PesaPilotTestCase(unittest.TestCase):
         response = self.client.post(
             "/api/v1/platform/eligibility",
             headers=self.headers,
-            json={"affordability_consent": True},
+            json={"workspace_id": str(self.workspace.id), "affordability_consent": True},
         )
         self.assertEqual(response.status_code, 200, response.json)
         self.assertFalse(response.json["eligible"])
@@ -6400,7 +7328,7 @@ class PesaPilotTestCase(unittest.TestCase):
         response = self.client.post(
             "/api/v1/platform/eligibility",
             headers=self.headers,
-            json={"affordability_consent": True},
+            json={"workspace_id": str(self.workspace.id), "affordability_consent": True},
         )
         self.assertEqual(response.status_code, 200, response.json)
         self.assertTrue(response.json["eligible"])
@@ -6425,7 +7353,7 @@ class PesaPilotTestCase(unittest.TestCase):
         response = self.client.post(
             "/api/v1/platform/eligibility",
             headers=self.headers,
-            json={"affordability_consent": True},
+            json={"workspace_id": str(self.workspace.id), "affordability_consent": True},
         )
 
         self.assertEqual(response.status_code, 200, response.json)
@@ -6445,7 +7373,7 @@ class PesaPilotTestCase(unittest.TestCase):
         response = self.client.post(
             "/api/v1/platform/eligibility",
             headers=self.headers,
-            json={"affordability_consent": True},
+            json={"workspace_id": str(self.workspace.id), "affordability_consent": True},
         )
 
         self.assertEqual(response.status_code, 200, response.json)
@@ -6558,7 +7486,9 @@ class PesaPilotTestCase(unittest.TestCase):
             "/api/v1/platform/applications",
             headers=self.headers,
             json=self.platform_application_payload(
-                product, monthly_income_minor=600000,
+                product,
+                workspace_id=str(self.workspace.id),
+                monthly_income_minor=600000,
                 monthly_expenses_minor=0,
             ),
         )
@@ -6622,7 +7552,10 @@ class PesaPilotTestCase(unittest.TestCase):
         product = self.create_platform_loan_product()
         self.create_verified_income_evidence(600000)
         payload = self.platform_application_payload(
-            product, monthly_income_minor=100000, monthly_expenses_minor=0
+            product,
+            workspace_id=str(self.workspace.id),
+            monthly_income_minor=100000,
+            monthly_expenses_minor=0,
         )
 
         first = self.client.post(
@@ -6658,6 +7591,7 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
             json=self.platform_application_payload(
                 first_product,
+                workspace_id=str(self.workspace.id),
                 monthly_income_minor=100000,
                 monthly_expenses_minor=0,
             ),
@@ -6669,6 +7603,7 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
             json=self.platform_application_payload(
                 second_product,
+                workspace_id=str(self.workspace.id),
                 monthly_income_minor=100000,
                 monthly_expenses_minor=0,
             ),
@@ -6702,6 +7637,7 @@ class PesaPilotTestCase(unittest.TestCase):
             headers=self.headers,
             json=self.platform_application_payload(
                 new_product,
+                workspace_id=str(self.workspace.id),
                 monthly_income_minor=100000,
                 monthly_expenses_minor=0,
             ),
@@ -6754,6 +7690,79 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 201, response.json)
         self.assertTrue(response.json["success"])
 
+    def test_workspace_business_application_access_requires_owner(self):
+        product = self.create_platform_loan_product()
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            workspace_id=self.business_workspace.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Business stock",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.flush()
+
+        application_url = (
+            f"/api/v1/platform/applications/{application.id}"
+        )
+
+        owner_list = self.client.get(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+        )
+        self.assertEqual(owner_list.status_code, 200, owner_list.json)
+        self.assertEqual(owner_list.json["count"], 1)
+
+        for role in ("admin", "member", "viewer"):
+            with self.subTest(role=role):
+                self.business_membership.role = role
+                db.session.flush()
+
+                listing = self.client.get(
+                    "/api/v1/platform/applications",
+                    headers=self.headers,
+                )
+                self.assertEqual(listing.status_code, 200, listing.json)
+                self.assertEqual(listing.json["count"], 0)
+
+                withdrawal = self.client.delete(
+                    application_url,
+                    headers=self.headers,
+                )
+                self.assertEqual(
+                    withdrawal.status_code,
+                    404,
+                    withdrawal.json,
+                )
+                db.session.refresh(application)
+                self.assertEqual(application.status, "pending")
+
+        self.business_membership.role = "owner"
+        db.session.flush()
+
+        owner_list_again = self.client.get(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+        )
+        self.assertEqual(
+            owner_list_again.status_code, 200, owner_list_again.json
+        )
+        self.assertEqual(owner_list_again.json["count"], 1)
+
+        owner_withdrawal = self.client.delete(
+            application_url,
+            headers=self.headers,
+        )
+        self.assertEqual(
+            owner_withdrawal.status_code,
+            200,
+            owner_withdrawal.json,
+        )
+        db.session.refresh(application)
+        self.assertEqual(application.status, "withdrawn")
+
     def test_customer_can_withdraw_pending_application(self):
         product = self.create_platform_loan_product()
         self.create_verified_income_evidence(600000)
@@ -6761,7 +7770,9 @@ class PesaPilotTestCase(unittest.TestCase):
             "/api/v1/platform/applications",
             headers=self.headers,
             json=self.platform_application_payload(
-                product, monthly_income_minor=100000,
+                product,
+                workspace_id=str(self.workspace.id),
+                monthly_income_minor=100000,
                 monthly_expenses_minor=0,
             ),
         )
@@ -10056,9 +11067,65 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(protected_response.status_code, 401)
 
 
-    def test_workspace_invitation_creation_and_verified_acceptance(self):
+    def test_personal_workspace_cannot_invite_members(self):
         response = self.client.post(
             f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            headers=self.headers,
+            json={"email": "blocked@example.com", "role": "member"},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertEqual(
+            WorkspaceInvitation.query.filter_by(
+                workspace_id=self.workspace.id
+            ).count(),
+            0,
+        )
+
+    def test_legacy_personal_workspace_invitation_cannot_be_accepted(self):
+        raw_token = "legacy-personal-workspace-invitation-token"
+        token_hash = __import__("hashlib").sha256(
+            raw_token.encode("utf-8")
+        ).hexdigest()
+
+        invitation = WorkspaceInvitation(
+            workspace_id=self.workspace.id,
+            email="legacy-invitee@example.com",
+            role="member",
+            invited_by=self.user.id,
+            token_hash=token_hash,
+            status="pending",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        )
+        invited_user = User(
+            email="legacy-invitee@example.com",
+            password_hash="test-password-hash",
+            is_active=True,
+            email_verified=True,
+        )
+        db.session.add_all([invitation, invited_user])
+        db.session.commit()
+
+        invited_token = create_access_token(identity=str(invited_user.id))
+        response = self.client.post(
+            "/api/v1/auth/invitations/accept",
+            headers={"Authorization": f"Bearer {invited_token}"},
+            json={"token": raw_token},
+        )
+
+        self.assertEqual(response.status_code, 403, response.json)
+        self.assertIsNone(
+            WorkspaceMember.query.filter_by(
+                workspace_id=self.workspace.id,
+                user_id=invited_user.id,
+            ).first()
+        )
+        db.session.refresh(invitation)
+        self.assertEqual(invitation.status, "pending")
+
+    def test_workspace_invitation_creation_and_verified_acceptance(self):
+        response = self.client.post(
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/invitations",
             headers=self.headers,
             json={"email": "invited@example.com", "role": "member"},
         )
@@ -10100,7 +11167,7 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(accepted.json["workspace"]["role"], "member")
 
         membership = WorkspaceMember.query.filter_by(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             user_id=invited_user.id,
         ).one()
         self.assertEqual(membership.role, "member")
@@ -10111,7 +11178,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_unverified_user_cannot_accept_workspace_invitation(self):
         response = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/invitations",
             headers=self.headers,
             json={"email": "unverified@example.com", "role": "viewer"},
         )
@@ -10138,13 +11205,13 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(result.status_code, 403, result.json)
         self.assertIsNone(
             WorkspaceMember.query.filter_by(
-                workspace_id=self.workspace.id,
+                workspace_id=self.business_workspace.id,
                 user_id=invited_user.id,
             ).first()
         )
 
     def test_workspace_admin_cannot_promote_member_to_admin(self):
-        self.membership.role = "admin"
+        self.business_membership.role = "admin"
 
         target_user = User(
             email="target-member@example.invalid",
@@ -10155,7 +11222,7 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.flush()
 
         target_membership = WorkspaceMember(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             user_id=target_user.id,
             role="member",
         )
@@ -10163,7 +11230,7 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.commit()
 
         response = self.client.patch(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{target_user.id}",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/members/{target_user.id}",
             headers=self.headers,
             json={"role": "admin"},
         )
@@ -10173,11 +11240,11 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(target_membership.role, "member")
 
     def test_workspace_admin_cannot_invite_admin(self):
-        self.membership.role = "admin"
+        self.business_membership.role = "admin"
         db.session.commit()
 
         response = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/invitations",
             headers=self.headers,
             json={"email": "newadmin@example.com", "role": "admin"},
         )
@@ -10191,7 +11258,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_workspace_admin_cannot_revoke_admin_invitation(self):
         created = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/invitations",
             headers=self.headers,
             json={"email": "invitedadmin@example.com", "role": "admin"},
         )
@@ -10202,11 +11269,11 @@ class PesaPilotTestCase(unittest.TestCase):
             id=UUID(invitation_id)
         ).one()
 
-        self.membership.role = "admin"
+        self.business_membership.role = "admin"
         db.session.commit()
 
         response = self.client.delete(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations/{invitation_id}",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/invitations/{invitation_id}",
             headers=self.headers,
         )
 
@@ -10216,7 +11283,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_revoked_workspace_invitation_cannot_be_accepted(self):
         created = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/invitations",
             headers=self.headers,
             json={"email": "revoked@example.com", "role": "viewer"},
         )
@@ -10228,7 +11295,7 @@ class PesaPilotTestCase(unittest.TestCase):
         ).one()
 
         revoked = self.client.delete(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations/{invitation_data['id']}",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/invitations/{invitation_data['id']}",
             headers=self.headers,
         )
         self.assertEqual(revoked.status_code, 200, revoked.json)
@@ -10252,7 +11319,7 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 404, response.json)
         self.assertIsNone(
             WorkspaceMember.query.filter_by(
-                workspace_id=self.workspace.id,
+                workspace_id=self.business_workspace.id,
                 user_id=invited_user.id,
             ).first()
         )
@@ -10261,7 +11328,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_expired_workspace_invitation_cannot_be_accepted(self):
         created = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/invitations",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/invitations",
             headers=self.headers,
             json={"email": "expired@example.com", "role": "member"},
         )
@@ -10293,7 +11360,7 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 410, response.json)
         self.assertIsNone(
             WorkspaceMember.query.filter_by(
-                workspace_id=self.workspace.id,
+                workspace_id=self.business_workspace.id,
                 user_id=invited_user.id,
             ).first()
         )
@@ -10308,16 +11375,16 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.flush()
 
         target_membership = WorkspaceMember(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             user_id=target_user.id,
             role="member",
         )
         db.session.add(target_membership)
 
-        self.membership.role = "member"
+        self.business_membership.role = "member"
         db.session.commit()
 
-        base = f"/api/v1/auth/workspaces/{self.workspace.id}"
+        base = f"/api/v1/auth/workspaces/{self.business_workspace.id}"
 
         create_response = self.client.post(
             f"{base}/invitations",
@@ -10344,25 +11411,25 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_workspace_owner_cannot_change_own_role(self):
         response = self.client.patch(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{self.user.id}",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/members/{self.user.id}",
             headers=self.headers,
             json={"role": "member"},
         )
 
         self.assertEqual(response.status_code, 403, response.json)
-        db.session.refresh(self.membership)
-        self.assertEqual(self.membership.role, "owner")
+        db.session.refresh(self.business_membership)
+        self.assertEqual(self.business_membership.role, "owner")
 
     def test_workspace_owner_cannot_remove_own_membership(self):
         response = self.client.delete(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{self.user.id}",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/members/{self.user.id}",
             headers=self.headers,
         )
 
         self.assertEqual(response.status_code, 403, response.json)
         self.assertIsNotNone(
             WorkspaceMember.query.filter_by(
-                workspace_id=self.workspace.id,
+                workspace_id=self.business_workspace.id,
                 user_id=self.user.id,
             ).first()
         )
@@ -10377,7 +11444,7 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.flush()
 
         target = WorkspaceMember(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             user_id=target_user.id,
             role="member",
         )
@@ -10385,7 +11452,7 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.commit()
 
         response = self.client.patch(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{target_user.id}",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/members/{target_user.id}",
             headers=self.headers,
             json={"role": "admin"},
         )
@@ -10404,7 +11471,7 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.flush()
 
         target = WorkspaceMember(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             user_id=target_user.id,
             role="member",
         )
@@ -10412,14 +11479,14 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.commit()
 
         response = self.client.delete(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/members/{target_user.id}",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/members/{target_user.id}",
             headers=self.headers,
         )
 
         self.assertEqual(response.status_code, 200, response.json)
         self.assertIsNone(
             WorkspaceMember.query.filter_by(
-                workspace_id=self.workspace.id,
+                workspace_id=self.business_workspace.id,
                 user_id=target_user.id,
             ).first()
         )
@@ -10434,16 +11501,16 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.flush()
 
         target = WorkspaceMember(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             user_id=target_user.id,
             role="admin",
         )
         db.session.add(target)
 
-        self.membership.role = "admin"
+        self.business_membership.role = "admin"
         db.session.commit()
 
-        base = f"/api/v1/auth/workspaces/{self.workspace.id}/members/{target_user.id}"
+        base = f"/api/v1/auth/workspaces/{self.business_workspace.id}/members/{target_user.id}"
 
         update_response = self.client.patch(
             base,
@@ -10473,7 +11540,7 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.flush()
 
         target = WorkspaceMember(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             user_id=target_user.id,
             role="admin",
         )
@@ -10481,7 +11548,7 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.commit()
 
         response = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/transfer-ownership",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/transfer-ownership",
             headers=self.headers,
             json={"member_user_id": str(target_user.id)},
         )
@@ -10489,13 +11556,13 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         self.assertTrue(response.json["success"])
 
-        db.session.refresh(self.membership)
+        db.session.refresh(self.business_membership)
         db.session.refresh(target)
-        self.assertEqual(self.membership.role, "admin")
+        self.assertEqual(self.business_membership.role, "admin")
         self.assertEqual(target.role, "owner")
 
         audit = AuditLog.query.filter_by(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             action="workspace_ownership_transferred",
         ).one()
         self.assertEqual(audit.user_id, self.user.id)
@@ -10509,21 +11576,21 @@ class PesaPilotTestCase(unittest.TestCase):
         )
 
     def test_workspace_admin_cannot_transfer_ownership(self):
-        self.membership.role = "admin"
+        self.business_membership.role = "admin"
         db.session.commit()
 
         response = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/transfer-ownership",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/transfer-ownership",
             headers=self.headers,
             json={"member_user_id": str(self.user.id)},
         )
 
         self.assertEqual(response.status_code, 403, response.json)
-        db.session.refresh(self.membership)
-        self.assertEqual(self.membership.role, "admin")
+        db.session.refresh(self.business_membership)
+        self.assertEqual(self.business_membership.role, "admin")
         self.assertEqual(
             AuditLog.query.filter_by(
-                workspace_id=self.workspace.id,
+                workspace_id=self.business_workspace.id,
                 action="workspace_ownership_transferred",
             ).count(),
             0,
@@ -10539,7 +11606,7 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.flush()
 
         target = WorkspaceMember(
-            workspace_id=self.workspace.id,
+            workspace_id=self.business_workspace.id,
             user_id=target_user.id,
             role="member",
         )
@@ -10547,30 +11614,30 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.commit()
 
         response = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/transfer-ownership",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/transfer-ownership",
             headers=self.headers,
             json={"member_user_id": str(target_user.id)},
         )
 
         self.assertEqual(response.status_code, 409, response.json)
-        db.session.refresh(self.membership)
+        db.session.refresh(self.business_membership)
         db.session.refresh(target)
-        self.assertEqual(self.membership.role, "owner")
+        self.assertEqual(self.business_membership.role, "owner")
         self.assertEqual(target.role, "member")
 
     def test_workspace_ownership_transfer_rejects_invalid_recipient(self):
         response = self.client.post(
-            f"/api/v1/auth/workspaces/{self.workspace.id}/transfer-ownership",
+            f"/api/v1/auth/workspaces/{self.business_workspace.id}/transfer-ownership",
             headers=self.headers,
             json={"member_user_id": str(uuid4())},
         )
 
         self.assertEqual(response.status_code, 404, response.json)
-        db.session.refresh(self.membership)
-        self.assertEqual(self.membership.role, "owner")
+        db.session.refresh(self.business_membership)
+        self.assertEqual(self.business_membership.role, "owner")
         self.assertEqual(
             AuditLog.query.filter_by(
-                workspace_id=self.workspace.id,
+                workspace_id=self.business_workspace.id,
                 action="workspace_ownership_transferred",
             ).count(),
             0,

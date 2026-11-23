@@ -2058,6 +2058,12 @@ def resend_workspace_invitation(workspace_id, invitation_id):
     if error:
         return error
 
+    workspace_error = _business_workspace_access_error(
+        membership.workspace_id
+    )
+    if workspace_error:
+        return workspace_error
+
     if membership.role not in ("owner", "admin"):
         return jsonify({"success": False, "message": "Permission denied."}), 403
 
@@ -2190,6 +2196,12 @@ def update_workspace_member_role(workspace_id, member_user_id):
     user, membership, error = _workspace_invitation_context(workspace_id)
     if error:
         return error
+
+    workspace_error = _business_workspace_access_error(
+        membership.workspace_id
+    )
+    if workspace_error:
+        return workspace_error
 
     if membership.role not in ("owner", "admin"):
         return jsonify({"success": False, "message": "Permission denied."}), 403
@@ -2337,12 +2349,37 @@ def remove_workspace_member(workspace_id, member_user_id):
 
 
 
+def _business_workspace_access_error(workspace_id):
+    """Prevent collaboration and ownership operations on private workspaces."""
+    workspace = db.session.get(Workspace, workspace_id)
+
+    if workspace is None:
+        return jsonify({
+            "success": False,
+            "message": "Workspace not found.",
+        }), 404
+
+    if workspace.workspace_type != "business":
+        return jsonify({
+            "success": False,
+            "message": "Personal workspaces are private. Create a Business/SACCO workspace to collaborate.",
+        }), 403
+
+    return None
+
+
 @auth_bp.post("/workspaces/<workspace_id>/transfer-ownership")
 @jwt_required()
 def transfer_workspace_ownership(workspace_id):
     user, membership, error = _workspace_invitation_context(workspace_id)
     if error:
         return error
+
+    workspace_error = _business_workspace_access_error(
+        membership.workspace_id
+    )
+    if workspace_error:
+        return workspace_error
 
     if membership.role != "owner":
         return jsonify({
@@ -2555,6 +2592,12 @@ def create_workspace_invitation(workspace_id):
     user, membership, error = _workspace_invitation_context(workspace_id)
     if error:
         return error
+
+    workspace_error = _business_workspace_access_error(
+        membership.workspace_id
+    )
+    if workspace_error:
+        return workspace_error
 
     if membership.role not in ("owner", "admin"):
         return jsonify({
@@ -2784,6 +2827,12 @@ def accept_workspace_invitation():
             "success": False,
             "message": "The invited workspace no longer exists.",
         }), 404
+
+    if workspace.workspace_type != "business":
+        return jsonify({
+            "success": False,
+            "message": "Personal workspaces are private. This invitation cannot be accepted.",
+        }), 403
 
     try:
         membership = WorkspaceMember(

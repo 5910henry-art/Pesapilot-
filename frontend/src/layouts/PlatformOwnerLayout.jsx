@@ -27,6 +27,7 @@ const navigation = [
   { label: "Loan Portfolio", icon: BriefcaseBusiness, path: "/platform-owner/loans" },
   { label: "Collections", icon: Wallet, path: "/platform-owner/collections" },
   { label: "Investors", icon: Users, path: "/platform-owner/investors" },
+  { label: "User verification", icon: ShieldCheck, path: "/platform-owner/user-verification" },
   { label: "Funding", icon: Landmark, path: "/platform-owner/funding" },
   { label: "Accounting", icon: BookOpen, path: "/platform-owner/accounting" },
 ];

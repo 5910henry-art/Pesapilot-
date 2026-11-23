@@ -173,7 +173,10 @@ export default function Settings() {
 
   const activeWorkspaceId = activeWorkspace?.id || "";
   const activeWorkspaceRole = activeWorkspace?.role || "";
+  const isBusinessWorkspace = activeWorkspace?.type === "business";
   const canManageWorkspace = ["owner", "admin"].includes(activeWorkspaceRole);
+  const canManageBusinessWorkspace =
+    isBusinessWorkspace && canManageWorkspace;
 
   const loadWorkspaceData = useCallback(async () => {
     if (!activeWorkspaceId) {
@@ -963,7 +966,9 @@ export default function Settings() {
 
                     {manageable && canManageWorkspace && (
                       <div className="settings-workspace-actions">
-                        {activeWorkspaceRole === "owner" && member.role === "admin" && (
+                        {isBusinessWorkspace &&
+                          activeWorkspaceRole === "owner" &&
+                          member.role === "admin" && (
                           <button
                             type="button"
                             className="settings-button secondary"
@@ -973,20 +978,22 @@ export default function Settings() {
                             Transfer ownership
                           </button>
                         )}
-                        <select
-                          aria-label={`Role for ${member.email}`}
-                          value={member.role}
-                          disabled={Boolean(workspaceActionBusy)}
-                          onChange={(event) =>
-                            handleWorkspaceMemberRoleChange(member, event.target.value)
-                          }
-                        >
-                          {activeWorkspaceRole === "owner" && (
-                            <option value="admin">Admin</option>
-                          )}
-                          <option value="member">Member</option>
-                          <option value="viewer">Viewer</option>
-                        </select>
+                        {isBusinessWorkspace && (
+                          <select
+                            aria-label={`Role for ${member.email}`}
+                            value={member.role}
+                            disabled={Boolean(workspaceActionBusy)}
+                            onChange={(event) =>
+                              handleWorkspaceMemberRoleChange(member, event.target.value)
+                            }
+                          >
+                            {activeWorkspaceRole === "owner" && (
+                              <option value="admin">Admin</option>
+                            )}
+                            <option value="member">Member</option>
+                            <option value="viewer">Viewer</option>
+                          </select>
+                        )}
                         <button
                           type="button"
                           className="settings-button danger"
@@ -1009,6 +1016,8 @@ export default function Settings() {
 
           {canManageWorkspace && (
             <>
+              {isBusinessWorkspace && (
+                <>
               <div className="settings-form-heading">
                 <h3>Invite a member</h3>
                 <p>
@@ -1109,6 +1118,17 @@ export default function Settings() {
                 </div>
               )}
 
+                </>
+              )}
+
+              {!isBusinessWorkspace && (
+                <div className="settings-notice">
+                  Personal workspaces are private. Existing pending invitations
+                  cannot be accepted, but you can revoke them here. Create a
+                  Business/SACCO workspace to invite members and collaborate.
+                </div>
+              )}
+
               <div className="settings-form-heading">
                 <h3>Pending invitations</h3>
                 <p>Manage invitations that have not yet been accepted.</p>
@@ -1130,16 +1150,18 @@ export default function Settings() {
                       </div>
                       {["pending", "expired"].includes(invitation.status) && (
                         <div className="settings-workspace-actions">
-                          <button
-                            type="button"
-                            className="settings-button secondary"
-                            disabled={Boolean(workspaceActionBusy)}
-                            onClick={() =>
-                              handleResendWorkspaceInvitation(invitation.id)
-                            }
-                          >
-                            Resend
-                          </button>
+                          {isBusinessWorkspace && (
+                            <button
+                              type="button"
+                              className="settings-button secondary"
+                              disabled={Boolean(workspaceActionBusy)}
+                              onClick={() =>
+                                handleResendWorkspaceInvitation(invitation.id)
+                              }
+                            >
+                              Resend
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="settings-button danger"

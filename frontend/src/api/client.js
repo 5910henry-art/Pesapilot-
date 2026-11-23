@@ -673,6 +673,27 @@ export const platformOwnerApi = {
     return apiRequest("/platform/owner/access");
   },
 
+  listUsers(options = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["search", "page", "per_page"]) {
+      if (options[key] !== undefined && options[key] !== "") {
+        params.set(key, String(options[key]));
+      }
+    }
+    const query = params.toString();
+    return apiRequest(`/platform/owner/users${query ? `?${query}` : ""}`);
+  },
+
+  verifyUserContact(userId, contactType, evidenceNote) {
+    return apiRequest(
+      `/platform/owner/users/${encodeURIComponent(userId)}/verify/${encodeURIComponent(contactType)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ evidence_note: evidenceNote }),
+      }
+    );
+  },
+
   getPortfolioReport() {
     return apiRequest("/platform/owner/reports/portfolio");
   },

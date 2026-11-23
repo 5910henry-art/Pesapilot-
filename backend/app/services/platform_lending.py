@@ -60,6 +60,7 @@ class PlatformLendingValidationError(PlatformLendingError):
 def submit_loan_application(
     *,
     customer_id,
+    workspace_id,
     product_id,
     requested_principal_minor,
     term_count,
@@ -111,6 +112,7 @@ def submit_loan_application(
     existing_pending = db.session.execute(
         select(PlatformLoanApplication.id).where(
             PlatformLoanApplication.customer_id == customer_id,
+            PlatformLoanApplication.workspace_id == workspace_id,
             PlatformLoanApplication.status == "pending",
         ).limit(1)
     ).scalar_one_or_none()
@@ -122,6 +124,7 @@ def submit_loan_application(
 
     application = PlatformLoanApplication(
         customer_id=customer_id,
+        workspace_id=workspace_id,
         product_id=product.id,
         requested_principal_minor=requested_principal_minor,
         term_count=term_count,
@@ -460,26 +463,63 @@ def _get_platform_loan_customer_disbursement_context(
             "A valid borrower receiving-account ID is required."
         )
 
-    workspaces = db.session.execute(
-        select(Workspace)
-        .join(
-            WorkspaceMember,
-            WorkspaceMember.workspace_id == Workspace.id,
-        )
+    application = db.session.execute(
+        select(PlatformLoanApplication)
         .where(
-            WorkspaceMember.user_id == loan.customer_id,
-            WorkspaceMember.role == "owner",
-            Workspace.workspace_type == "personal",
+            PlatformLoanApplication.id == loan.application_id,
+            PlatformLoanApplication.customer_id == loan.customer_id,
         )
         .with_for_update()
-    ).scalars().all()
+    ).scalar_one_or_none()
 
-    if len(workspaces) != 1:
+    if application is None:
         raise PlatformLendingValidationError(
-            "The borrower must have exactly one owned personal workspace."
+            "The loan's borrower application could not be verified."
         )
 
-    workspace = workspaces[0]
+    if application.workspace_id is not None:
+        workspace = db.session.execute(
+            select(Workspace)
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == Workspace.id,
+            )
+            .where(
+                Workspace.id == application.workspace_id,
+                WorkspaceMember.user_id == loan.customer_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type.in_(("personal", "business")),
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+
+        if workspace is None:
+            raise PlatformLendingValidationError(
+                "The borrower must own the workspace selected for this loan."
+            )
+    else:
+        # Backward compatibility for applications created before workspace
+        # ownership was added. New applications must always specify a workspace.
+        workspaces = db.session.execute(
+            select(Workspace)
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == Workspace.id,
+            )
+            .where(
+                WorkspaceMember.user_id == loan.customer_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type == "personal",
+            )
+            .with_for_update()
+        ).scalars().all()
+
+        if len(workspaces) != 1:
+            raise PlatformLendingValidationError(
+                "A legacy loan requires exactly one owned personal workspace."
+            )
+
+        workspace = workspaces[0]
 
     customer_account = db.session.execute(
         select(FinancialAccount)

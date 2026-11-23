@@ -16,7 +16,10 @@ from ..models.core import (
 )
 from ..models.loans import PersonalLoan
 from ..models.loan_repayments import LoanInstallment
-from ..models.platform_lending import PlatformLoanProduct
+from ..models.platform_lending import (
+    PlatformLoanApplication,
+    PlatformLoanProduct,
+)
 from ..models.platform_loan_records import (
     PlatformLoan,
     PlatformLoanInstallment,
@@ -70,21 +73,24 @@ def collect_personal_workspace_evidence(
     declared_monthly_expenses_minor,
     as_of=None,
 ):
-    """Read six months of posted income/expense evidence from an owned personal workspace.
+    """Read six months of posted income/expense evidence from an owned workspace.
 
     The caller must obtain explicit customer consent before calling this function.
-    Business workspaces and workspaces not owned by the customer are rejected.
+    Only Personal or Business workspaces owned by the applicant are accepted.
     """
     as_of = as_of or date.today()
     if not isinstance(as_of, date):
         raise ValueError("Assessment date must be a date.")
 
     workspace = db.session.execute(
-        select(Workspace).where(Workspace.id == workspace_id)
+        select(Workspace).where(
+            Workspace.id == workspace_id,
+            Workspace.workspace_type.in_(("personal", "business")),
+        )
     ).scalar_one_or_none()
 
-    if workspace is None or workspace.workspace_type != "personal":
-        raise ValueError("Affordability evidence requires a personal workspace.")
+    if workspace is None:
+        raise ValueError("Affordability evidence requires a valid lending workspace.")
 
     membership = db.session.execute(
         select(WorkspaceMember).where(
@@ -95,7 +101,7 @@ def collect_personal_workspace_evidence(
     ).scalar_one_or_none()
 
     if membership is None:
-        raise ValueError("The applicant must own the selected personal workspace.")
+        raise ValueError("The applicant must own the selected lending workspace.")
 
     start_date = _six_month_start(as_of)
     start_at = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
@@ -191,10 +197,11 @@ def collect_personal_workspace_evidence(
 
 
 def collect_existing_monthly_debt(*, customer_id, workspace_id=None, as_of=None):
-    """Calculate known obligations across all personal workspaces owned by a customer.
+    """Calculate Personal debts and obligations belonging to the selected workspace.
 
-    Transaction-sharing consent controls access to journal evidence, not access
-    to loan obligations already recorded in PesaPilot.
+    Personal debts cover all Personal workspaces owned by the applicant.
+    When borrowing through a Business workspace, its recorded debts are also
+    included. Platform-loan records are resolved through their applications.
     """
     as_of = as_of or date.today()
     personal_monthly = 0
@@ -202,7 +209,7 @@ def collect_existing_monthly_debt(*, customer_id, workspace_id=None, as_of=None)
     overdue_personal = 0
     overdue_platform = 0
 
-    owned_workspace_ids = db.session.execute(
+    owned_personal_ids = db.session.execute(
         select(Workspace.id)
         .join(
             WorkspaceMember,
@@ -215,51 +222,132 @@ def collect_existing_monthly_debt(*, customer_id, workspace_id=None, as_of=None)
         )
     ).scalars().all()
 
-    # If a workspace is explicitly supplied, it must be one of the
-    # customer's owned personal workspaces. Debt discovery still covers
-    # every owned personal workspace, not only the consented evidence source.
-    if workspace_id is not None and workspace_id not in owned_workspace_ids:
-        raise ValueError("Personal debt workspace is not owned by the customer.")
+    selected_business_id = None
+    if workspace_id is not None:
+        selected_workspace = db.session.execute(
+            select(Workspace)
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == Workspace.id,
+            )
+            .where(
+                Workspace.id == workspace_id,
+                WorkspaceMember.user_id == customer_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type.in_(("personal", "business")),
+            )
+        ).scalar_one_or_none()
 
-    if owned_workspace_ids:
-        borrowed_loans = db.session.execute(
+        if selected_workspace is None:
+            raise ValueError("The selected lending workspace is not owned by the customer.")
+
+        if selected_workspace.workspace_type == "business":
+            selected_business_id = selected_workspace.id
+        elif selected_workspace.id not in owned_personal_ids:
+            raise ValueError("Personal debt workspace is not owned by the customer.")
+
+    personal_loans_by_id = {}
+
+    if owned_personal_ids:
+        owned_personal_loans = db.session.execute(
             select(PersonalLoan).where(
-                PersonalLoan.workspace_id.in_(owned_workspace_ids),
+                PersonalLoan.workspace_id.in_(owned_personal_ids),
                 PersonalLoan.created_by == customer_id,
                 PersonalLoan.direction == "borrowed",
                 PersonalLoan.status.in_(("active", "overdue", "restructured")),
             )
         ).scalars().all()
 
-        for loan in borrowed_loans:
-            if loan.installment_minor:
-                personal_monthly += _monthly_equivalent(
-                    loan.installment_minor,
-                    loan.repayment_frequency,
-                    loan.start_date,
-                    loan.due_date,
-                    as_of,
+        personal_loans_by_id.update({
+            loan.id: loan for loan in owned_personal_loans
+        })
+
+    if selected_business_id is not None:
+        business_loans = db.session.execute(
+            select(PersonalLoan).where(
+                PersonalLoan.workspace_id == selected_business_id,
+                PersonalLoan.direction == "borrowed",
+                PersonalLoan.status.in_(("active", "overdue", "restructured")),
+            )
+        ).scalars().all()
+
+        personal_loans_by_id.update({
+            loan.id: loan for loan in business_loans
+        })
+
+    for loan in personal_loans_by_id.values():
+        if loan.installment_minor:
+            personal_monthly += _monthly_equivalent(
+                loan.installment_minor,
+                loan.repayment_frequency,
+                loan.start_date,
+                loan.due_date,
+                as_of,
+            )
+
+        overdue_balance = db.session.execute(
+            select(func.coalesce(func.sum(
+                LoanInstallment.amount_minor - LoanInstallment.paid_minor
+            ), 0)).where(
+                LoanInstallment.workspace_id == loan.workspace_id,
+                LoanInstallment.personal_loan_id == loan.id,
+                LoanInstallment.status == "overdue",
+            )
+        ).scalar_one()
+        overdue_personal += int(overdue_balance or 0)
+
+    platform_loans_by_id = {}
+
+    if workspace_id is None:
+        # Preserve existing no-consent debt discovery.
+        customer_platform_loans = db.session.execute(
+            select(PlatformLoan).where(
+                PlatformLoan.customer_id == customer_id,
+                PlatformLoan.status.in_(("active", "overdue")),
+            )
+        ).scalars().all()
+        platform_loans_by_id.update({
+            loan.id: loan for loan in customer_platform_loans
+        })
+    else:
+        # Include the applicant's platform loans attached to their owned
+        # Personal workspaces, plus loans belonging to the selected Business.
+        personal_platform_loans = db.session.execute(
+            select(PlatformLoan)
+            .join(
+                PlatformLoanApplication,
+                PlatformLoanApplication.id == PlatformLoan.application_id,
+            )
+            .where(
+                (
+                    PlatformLoanApplication.workspace_id.in_(owned_personal_ids)
+                    | PlatformLoanApplication.workspace_id.is_(None)
+                ),
+                PlatformLoan.customer_id == customer_id,
+                PlatformLoan.status.in_(("active", "overdue")),
+            )
+        ).scalars().all()
+        platform_loans_by_id.update({
+            loan.id: loan for loan in personal_platform_loans
+        })
+
+        if selected_business_id is not None:
+            business_platform_loans = db.session.execute(
+                select(PlatformLoan)
+                .join(
+                    PlatformLoanApplication,
+                    PlatformLoanApplication.id == PlatformLoan.application_id,
                 )
-
-            overdue_balance = db.session.execute(
-                select(func.coalesce(func.sum(
-                    LoanInstallment.amount_minor - LoanInstallment.paid_minor
-                ), 0)).where(
-                    LoanInstallment.workspace_id == loan.workspace_id,
-                    LoanInstallment.personal_loan_id == loan.id,
-                    LoanInstallment.status == "overdue",
+                .where(
+                    PlatformLoanApplication.workspace_id == selected_business_id,
+                    PlatformLoan.status.in_(("active", "overdue")),
                 )
-            ).scalar_one()
-            overdue_personal += int(overdue_balance or 0)
+            ).scalars().all()
+            platform_loans_by_id.update({
+                loan.id: loan for loan in business_platform_loans
+            })
 
-    platform_loans = db.session.execute(
-        select(PlatformLoan).where(
-            PlatformLoan.customer_id == customer_id,
-            PlatformLoan.status.in_(("active", "overdue")),
-        )
-    ).scalars().all()
-
-    for loan in platform_loans:
+    for loan in platform_loans_by_id.values():
         installments = db.session.execute(
             select(PlatformLoanInstallment).where(
                 PlatformLoanInstallment.loan_id == loan.id,
@@ -274,8 +362,6 @@ def collect_existing_monthly_debt(*, customer_id, workspace_id=None, as_of=None)
                 overdue_platform += remaining
 
         if installments:
-            # Use the contractual installment amount, not the remaining
-            # balance divided by an assumed number of months.
             future_installments = [
                 item for item in installments
                 if item.due_date >= as_of
@@ -320,12 +406,12 @@ def build_affordability_evidence_report(
     workspace_id=None,
     as_of=None,
 ):
-    """Combine declarations and optional personal-workspace evidence."""
+    """Combine declarations and optional selected-workspace evidence."""
     as_of = as_of or date.today()
 
     if consent:
         if workspace_id is None:
-            raise ValueError("Select a personal workspace to provide consented evidence.")
+            raise ValueError("Select a lending workspace to provide consented evidence.")
         workspace_evidence = collect_personal_workspace_evidence(
             customer_id=customer_id,
             workspace_id=workspace_id,

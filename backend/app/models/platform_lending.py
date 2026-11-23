@@ -206,6 +206,11 @@ class PlatformLoanApplication(db.Model):
         nullable=True,
     )
 
+    workspace_id: Mapped[object | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
     product_id: Mapped[object] = mapped_column(
         ForeignKey("platform_loan_products.id", ondelete="RESTRICT"),
         nullable=False,
@@ -301,11 +306,16 @@ class PlatformLoanApplication(db.Model):
             name="ck_platform_application_status",
         ),
         Index(
-            "uq_platform_application_one_pending_per_customer",
+            "uq_platform_application_one_pending_per_customer_workspace",
             "customer_id",
+            "workspace_id",
             unique=True,
-            postgresql_where=text("status = 'pending'"),
-            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text(
+                "status = 'pending' AND workspace_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status = 'pending' AND workspace_id IS NOT NULL"
+            ),
         ),
         Index(
             "ix_platform_application_customer_submitted",

@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 from flask import current_app, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
@@ -35,7 +35,7 @@ from app.models import (
     PlatformAccountingSettings,
 )
 from app.models.core import (
-    Currency, User, utc_now, Workspace, WorkspaceMember, FinancialAccount
+    Currency, User, AuditLog, utc_now, Workspace, WorkspaceMember, FinancialAccount
 )
 from app.services.platform_lending import (
     PlatformLendingValidationError,
@@ -62,6 +62,67 @@ from . import platform_bp
 from .security import platform_owner_required
 
 
+def _customer_application_workspace_access(application, user_id):
+    """Require the original applicant to remain the workspace Owner."""
+    if application.customer_id != user_id:
+        return None
+
+    if application.workspace_id is None:
+        personal_workspaces = (
+            Workspace.query
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == Workspace.id,
+            )
+            .filter(
+                WorkspaceMember.user_id == user_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type == "personal",
+            )
+            .all()
+        )
+        return personal_workspaces[0] if len(personal_workspaces) == 1 else None
+
+    return (
+        Workspace.query
+        .join(
+            WorkspaceMember,
+            WorkspaceMember.workspace_id == Workspace.id,
+        )
+        .filter(
+            Workspace.id == application.workspace_id,
+            WorkspaceMember.user_id == user_id,
+            WorkspaceMember.role == "owner",
+            Workspace.workspace_type.in_(("personal", "business")),
+        )
+        .first()
+    )
+
+
+def _customer_owned_lending_workspace(customer_id, raw_workspace_id):
+    """Resolve a Personal or Business workspace owned by this customer."""
+    try:
+        workspace_uuid = UUID(str(raw_workspace_id))
+    except (ValueError, TypeError, AttributeError):
+        return None, 400
+
+    workspace = (
+        Workspace.query
+        .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+        .filter(
+            Workspace.id == workspace_uuid,
+            WorkspaceMember.user_id == customer_id,
+            WorkspaceMember.role == "owner",
+            Workspace.workspace_type.in_(["personal", "business"]),
+        )
+        .first()
+    )
+    if workspace is None:
+        return None, 403
+
+    return workspace, None
+
+
 @platform_bp.get("/owner/access")
 @platform_owner_required()
 def check_owner_access():
@@ -72,6 +133,148 @@ def check_owner_access():
         "role": "owner",
     }), 200
 
+
+
+@platform_bp.get("/owner/users")
+@platform_owner_required()
+def list_owner_platform_users():
+    """List registered users for manual contact verification."""
+
+    try:
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 20))
+        if page < 1 or per_page < 1:
+            raise ValueError
+        per_page = min(per_page, 100)
+    except (TypeError, ValueError):
+        return jsonify({
+            "success": False,
+            "message": "Page and per_page must be positive integers.",
+        }), 400
+
+    search = request.args.get("search", "").strip()
+    query = User.query
+
+    if search:
+        term = f"%{search}%"
+        query = query.filter(
+            or_(User.email.ilike(term), User.phone.ilike(term))
+        )
+
+    total = query.count()
+    users = (
+        query.order_by(User.created_at.desc(), User.id.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
+    return jsonify({
+        "success": True,
+        "users": [{
+            "id": str(user.id),
+            "email": user.email,
+            "phone": user.phone,
+            "email_verified": user.email_verified,
+            "phone_verified": user.phone_verified,
+            "is_active": user.is_active,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        } for user in users],
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "pages": (total + per_page - 1) // per_page,
+        },
+    }), 200
+
+
+@platform_bp.post("/owner/users/<user_id>/verify/<contact_type>")
+@platform_owner_required()
+def manually_verify_user_contact(user_id, contact_type):
+    """Manually verify one user contact after administrator checks evidence."""
+
+    if contact_type not in {"email", "phone"}:
+        return jsonify({
+            "success": False,
+            "message": "Contact type must be email or phone.",
+        }), 400
+
+    data = request.get_json(silent=True) or {}
+    evidence_note = data.get("evidence_note", "")
+    if not isinstance(evidence_note, str) or len(evidence_note.strip()) < 10:
+        return jsonify({
+            "success": False,
+            "message": "Provide an evidence note of at least 10 characters.",
+        }), 400
+
+    try:
+        target_id = UUID(str(user_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid user ID.",
+        }), 400
+
+    user = db.session.get(User, target_id)
+    if user is None:
+        return jsonify({
+            "success": False,
+            "message": "User account not found.",
+        }), 404
+
+    verified_field = f"{contact_type}_verified"
+    contact_value = getattr(user, contact_type)
+
+    if not contact_value:
+        return jsonify({
+            "success": False,
+            "message": f"This user has no {contact_type} address or number.",
+        }), 400
+
+    if getattr(user, verified_field):
+        return jsonify({
+            "success": False,
+            "message": f"This {contact_type} is already verified.",
+        }), 409
+
+    try:
+        verifier_id = UUID(str(get_jwt_identity()))
+        setattr(user, verified_field, True)
+
+        db.session.add(AuditLog(
+            workspace_id=None,
+            user_id=verifier_id,
+            action=f"user_{contact_type}_manually_verified",
+            resource_type="user",
+            resource_id=str(user.id),
+            details={
+                "contact_type": contact_type,
+                "contact_value": contact_value,
+                "evidence_note": evidence_note.strip(),
+                "verification_method": "manual_administrator_review",
+            },
+            ip_address=request.remote_addr,
+        ))
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"User {contact_type} manually verified.",
+            "user": {
+                "id": str(user.id),
+                "email_verified": user.email_verified,
+                "phone_verified": user.phone_verified,
+            },
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Manual user contact verification failed")
+        return jsonify({
+            "success": False,
+            "message": "Contact verification could not be completed.",
+        }), 500
 
 
 @platform_bp.get("/owner/reports/portfolio")
@@ -2445,10 +2648,12 @@ def submit_platform_late_fee_payment_route(loan_id):
     customer_id = _customer_id()
     try:
         loan_uuid = UUID(str(loan_id))
-        loan = PlatformLoan.query.filter_by(
-            id=loan_uuid, customer_id=customer_id
-        ).first()
-        if loan is None:
+        loan = db.session.get(PlatformLoan, loan_uuid)
+        if loan is None or _platform_loan_workspace_access(
+            loan,
+            customer_id,
+            for_repayment=True,
+        ) is None:
             return jsonify({"success": False, "message": "Loan not found"}), 404
 
         data = request.get_json(silent=True) or {}
@@ -2628,6 +2833,65 @@ def _customer_id():
         return None
 
 
+def _platform_loan_workspace_access(loan, user_id, *, for_repayment=False):
+    """Return the loan workspace only when this user has the required access."""
+    application = db.session.get(
+        PlatformLoanApplication,
+        loan.application_id,
+    )
+    if application is None:
+        return None
+
+    if application.workspace_id is None:
+        if loan.customer_id != user_id:
+            return None
+
+        personal_workspaces = (
+            Workspace.query
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == Workspace.id,
+            )
+            .filter(
+                WorkspaceMember.user_id == user_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type == "personal",
+            )
+            .all()
+        )
+        return personal_workspaces[0] if len(personal_workspaces) == 1 else None
+
+    membership = (
+        db.session.query(Workspace, WorkspaceMember.role)
+        .join(
+            WorkspaceMember,
+            WorkspaceMember.workspace_id == Workspace.id,
+        )
+        .filter(
+            Workspace.id == application.workspace_id,
+            WorkspaceMember.user_id == user_id,
+            Workspace.workspace_type.in_(("personal", "business")),
+        )
+        .one_or_none()
+    )
+    if membership is None:
+        return None
+
+    workspace, role = membership
+
+    if workspace.workspace_type == "personal":
+        if loan.customer_id != user_id or role != "owner":
+            return None
+        return workspace
+
+    allowed_roles = (
+        {"owner", "admin", "member"}
+        if for_repayment
+        else {"owner", "admin", "member", "viewer"}
+    )
+    return workspace if role in allowed_roles else None
+
+
 def _application_response(application):
     return {
         "id": str(application.id),
@@ -2689,16 +2953,47 @@ def list_customer_platform_loans():
                 PlatformLoanProduct,
                 PlatformLoanProduct.id == PlatformLoan.product_id,
             )
-            .filter(PlatformLoan.customer_id == customer_id)
+            .join(
+                PlatformLoanApplication,
+                PlatformLoanApplication.id == PlatformLoan.application_id,
+            )
+            .outerjoin(
+                Workspace,
+                Workspace.id == PlatformLoanApplication.workspace_id,
+            )
+            .outerjoin(
+                WorkspaceMember,
+                and_(
+                    WorkspaceMember.workspace_id == Workspace.id,
+                    WorkspaceMember.user_id == customer_id,
+                ),
+            )
+            .filter(or_(
+                and_(
+                    PlatformLoanApplication.workspace_id.is_(None),
+                    PlatformLoan.customer_id == customer_id,
+                ),
+                and_(
+                    Workspace.workspace_type == "personal",
+                    PlatformLoan.customer_id == customer_id,
+                    WorkspaceMember.role == "owner",
+                ),
+                and_(
+                    Workspace.workspace_type == "business",
+                    WorkspaceMember.role.in_(
+                        ("owner", "admin", "member", "viewer")
+                    ),
+                ),
+            ))
+            .order_by(
+                PlatformLoan.created_at.desc(),
+                PlatformLoan.id.desc(),
+            )
         )
 
         total = query.count()
         rows = (
             query
-            .order_by(
-                PlatformLoan.created_at.desc(),
-                PlatformLoan.id.desc(),
-            )
             .offset((page - 1) * per_page)
             .limit(per_page)
             .all()
@@ -2771,10 +3066,7 @@ def get_customer_platform_loan(loan_id):
                 PlatformLoanProduct,
                 PlatformLoanProduct.id == PlatformLoan.product_id,
             )
-            .filter(
-                PlatformLoan.id == loan_uuid,
-                PlatformLoan.customer_id == customer_id,
-            )
+            .filter(PlatformLoan.id == loan_uuid)
             .one_or_none()
         )
 
@@ -2785,6 +3077,16 @@ def get_customer_platform_loan(loan_id):
             }), 404
 
         loan, product_name = row
+
+        if _platform_loan_workspace_access(
+            loan,
+            customer_id,
+            for_repayment=False,
+        ) is None:
+            return jsonify({
+                "success": False,
+                "message": "Platform loan not found.",
+            }), 404
 
         installments = (
             PlatformLoanInstallment.query
@@ -2902,12 +3204,18 @@ def submit_platform_loan_repayment(loan_id):
             "message": "Invalid loan ID.",
         }), 400
 
-    loan = PlatformLoan.query.filter_by(
-        id=loan_uuid,
-        customer_id=customer_id,
-    ).first()
+    loan = PlatformLoan.query.filter_by(id=loan_uuid).first()
+    loan_workspace = (
+        _platform_loan_workspace_access(
+            loan,
+            customer_id,
+            for_repayment=True,
+        )
+        if loan is not None
+        else None
+    )
 
-    if loan is None:
+    if loan is None or loan_workspace is None:
         return jsonify({
             "success": False,
             "message": "Platform loan not found.",
@@ -2991,6 +3299,7 @@ def submit_platform_loan_repayment(loan_id):
             )
             .filter(
                 FinancialAccount.id == borrower_financial_account_id,
+                FinancialAccount.workspace_id == loan_workspace.id,
                 WorkspaceMember.user_id == customer_id,
                 FinancialAccount.is_active.is_(True),
                 FinancialAccount.currency_code == loan.currency_code,
@@ -3786,23 +4095,20 @@ def check_customer_platform_eligibility():
         }), 400
 
     try:
-        personal_workspaces = (
-            Workspace.query
-            .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-            .filter(
-                WorkspaceMember.user_id == customer_id,
-                WorkspaceMember.role == "owner",
-                Workspace.workspace_type == "personal",
-            )
-            .all()
+        workspace, workspace_error = _customer_owned_lending_workspace(
+            customer_id,
+            data.get("workspace_id"),
         )
-        if len(personal_workspaces) != 1:
+        if workspace_error:
             return jsonify({
                 "success": False,
-                "message": "A single personal workspace is required for the eligibility check.",
-            }), 409
+                "message": (
+                    "A valid Personal or Business workspace owned by you "
+                    "is required for the eligibility check."
+                ),
+            }), workspace_error
 
-        workspace_id = personal_workspaces[0].id
+        workspace_id = workspace.id
 
         # No declarations are used to establish eligibility. The collector
         # reads only posted income/expense entries after this consent check.
@@ -3925,26 +4231,29 @@ def list_platform_customer_receiving_accounts(product_id):
     if product is None:
         return jsonify({"success": False, "message": "Loan product not found."}), 404
 
-    workspaces = (
-        Workspace.query
-        .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-        .filter(
-            WorkspaceMember.user_id == customer_id,
-            WorkspaceMember.role == "owner",
-            Workspace.workspace_type == "personal",
-        )
-        .all()
-    )
-    if len(workspaces) != 1:
+    if customer_id is None:
         return jsonify({
             "success": False,
-            "message": "A single personal workspace is required to select a receiving account.",
-        }), 409
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    workspace, workspace_error = _customer_owned_lending_workspace(
+        customer_id,
+        request.args.get("workspace_id"),
+    )
+    if workspace_error:
+        return jsonify({
+            "success": False,
+            "message": (
+                "A valid Personal or Business workspace owned by you "
+                "is required to select a receiving account."
+            ),
+        }), workspace_error
 
     accounts = (
         FinancialAccount.query
         .filter(
-            FinancialAccount.workspace_id == workspaces[0].id,
+            FinancialAccount.workspace_id == workspace.id,
             FinancialAccount.is_active.is_(True),
             FinancialAccount.account_type.in_(["cash", "bank", "mobile_money"]),
             FinancialAccount.currency_code == product.currency_code,
@@ -3989,9 +4298,25 @@ def submit_platform_application():
             "message": "A valid JSON object is required.",
         }), 400
 
-    # A customer may have only one pending application, regardless of product.
+    workspace, workspace_error = _customer_owned_lending_workspace(
+        customer_id,
+        data.get("workspace_id"),
+    )
+    if workspace_error:
+        return jsonify({
+            "success": False,
+            "message": (
+                "A valid Personal or Business workspace owned by you "
+                "is required to apply."
+            ),
+        }), workspace_error
+
+    workspace_id = workspace.id
+
+    # A customer may have one pending application per workspace.
     pending_application = PlatformLoanApplication.query.filter_by(
         customer_id=customer_id,
+        workspace_id=workspace_id,
         status="pending",
     ).first()
 
@@ -4005,9 +4330,44 @@ def submit_platform_application():
         }), 409
 
     # Block new applications until every existing platform loan is settled.
-    customer_loans = PlatformLoan.query.filter_by(
-        customer_id=customer_id,
-    ).all()
+    loan_workspace_filter = (
+        PlatformLoanApplication.workspace_id == workspace_id
+    )
+
+    # Legacy applications have no workspace_id. Treat those loans as Personal
+    # only when the customer has exactly one owned Personal workspace.
+    if workspace.workspace_type == "personal":
+        owned_personal_workspace_count = (
+            Workspace.query
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == Workspace.id,
+            )
+            .filter(
+                WorkspaceMember.user_id == customer_id,
+                WorkspaceMember.role == "owner",
+                Workspace.workspace_type == "personal",
+            )
+            .count()
+        )
+        if owned_personal_workspace_count == 1:
+            loan_workspace_filter = or_(
+                loan_workspace_filter,
+                and_(
+                    PlatformLoanApplication.workspace_id.is_(None),
+                    PlatformLoan.customer_id == customer_id,
+                ),
+            )
+
+    customer_loans = (
+        PlatformLoan.query
+        .join(
+            PlatformLoanApplication,
+            PlatformLoanApplication.id == PlatformLoan.application_id,
+        )
+        .filter(loan_workspace_filter)
+        .all()
+    )
 
     blocking_loan_statuses = {
         "created", "funding", "active", "overdue", "written_off",
@@ -4194,14 +4554,12 @@ def submit_platform_application():
         consent = data.get("affordability_consent")
         if consent is not True:
             raise ValueError(
-                "Explicit consent to check verified personal-workspace income is required."
+                "Explicit consent to check verified income in the selected workspace is required."
             )
         if data.get("affordability_workspace_id") not in (None, ""):
             raise ValueError(
-                "The personal workspace is resolved securely by the server."
+                "The selected workspace is resolved securely by the server."
             )
-
-        workspace_id = None
 
         try:
             customer_financial_account_id = UUID(
@@ -4210,25 +4568,9 @@ def submit_platform_application():
         except (ValueError, TypeError, AttributeError):
             raise ValueError("Select a valid account to receive the loan.") from None
 
-        personal_workspaces = (
-            Workspace.query
-            .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-            .filter(
-                WorkspaceMember.user_id == customer_id,
-                WorkspaceMember.role == "owner",
-                Workspace.workspace_type == "personal",
-            )
-            .all()
-        )
-        if len(personal_workspaces) != 1:
-            raise ValueError(
-                "A single personal workspace is required for your receiving account."
-            )
-        workspace_id = personal_workspaces[0].id
-
         receiving_account = FinancialAccount.query.filter(
             FinancialAccount.id == customer_financial_account_id,
-            FinancialAccount.workspace_id == personal_workspaces[0].id,
+            FinancialAccount.workspace_id == workspace_id,
             FinancialAccount.is_active.is_(True),
             FinancialAccount.account_type.in_(["cash", "bank", "mobile_money"]),
             FinancialAccount.currency_code == product.currency_code,
@@ -4260,6 +4602,7 @@ def submit_platform_application():
 
         application = submit_loan_application(
             customer_id=customer_id,
+            workspace_id=workspace_id,
             product_id=product_id,
             requested_principal_minor=principal,
             term_count=term_count,
@@ -4436,12 +4779,16 @@ def list_platform_applications():
         }), 401
 
     try:
-        applications = (
+        customer_applications = (
             PlatformLoanApplication.query
             .filter_by(customer_id=customer_id)
             .order_by(PlatformLoanApplication.submitted_at.desc())
             .all()
         )
+        applications = [
+            item for item in customer_applications
+            if _customer_application_workspace_access(item, customer_id) is not None
+        ]
 
         return jsonify({
             "success": True,
@@ -4487,7 +4834,13 @@ def withdraw_platform_application(application_id):
             customer_id=customer_id,
         ).with_for_update().first()
 
-        if application is None:
+        if (
+            application is None
+            or _customer_application_workspace_access(
+                application,
+                customer_id,
+            ) is None
+        ):
             return jsonify({
                 "success": False,
                 "message": "Application not found.",
