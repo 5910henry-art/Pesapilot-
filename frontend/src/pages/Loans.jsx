@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "../context/useAuth";
+import { useToast } from "../context/ToastContext";
 import { useAccounts } from "../context/AccountsContext";
 import { loansApi } from "../api/client";
 import { Skeleton } from "../components/Skeleton";
@@ -120,6 +121,7 @@ const STATUS_LABELS = {
 
 export default function Loans() {
   const { activeWorkspace } = useAuth();
+  const { showToast } = useToast();
 
   const workspaceId = activeWorkspace?.id;
   const currency =
@@ -134,7 +136,7 @@ export default function Loans() {
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState("");
+
   const [formMessage, setFormMessage] = useState(null);
   const [loanMessages, setLoanMessages] = useState({});
   const [paymentMessages, setPaymentMessages] = useState({});
@@ -222,7 +224,7 @@ export default function Loans() {
     if (quiet) setRefreshing(true);
     else setLoading(true);
 
-    setLoadError("");
+
 
     try {
       const data = await loansApi.listLoans(workspaceId);
@@ -232,7 +234,7 @@ export default function Loans() {
       }
     } catch (err) {
       if (requestId === workspaceRequestRef.current) {
-        setLoadError(err.message || "Loans could not be loaded.");
+        showToast(err.message || "Loans could not be loaded.", { type: "error" });
       }
     } finally {
       if (requestId === workspaceRequestRef.current) {
@@ -240,14 +242,14 @@ export default function Loans() {
         setRefreshing(false);
       }
     }
-  }, [workspaceId]);
+  }, [workspaceId, showToast]);
 
   useEffect(() => {
     setLoans([]);
     setLoanDetails({});
     setExpandedLoan(null);
     setLoadingDetails(null);
-    setLoadError("");
+
     setFormMessage(null);
     setLoanMessages({});
     setPaymentMessages({});
@@ -333,6 +335,8 @@ export default function Loans() {
       return;
     }
 
+    let requestStarted = false;
+
     try {
       const principalMinor = toMinorUnits(form.amount, currency);
       const termCount = Number(form.term_count);
@@ -377,6 +381,8 @@ export default function Loans() {
         description: form.description.trim() || null,
       };
 
+      requestStarted = true;
+
       if (editingLoan) {
         await loansApi.updateLoan(editingLoan.id, payload);
       } else {
@@ -386,20 +392,23 @@ export default function Loans() {
       setForm({ ...INITIAL_FORM, start_date: todayLocal(), due_date: defaultDueDate() });
       setEditingLoan(null);
       setShowForm(false);
-      setFormMessage({
-        type: "success",
-        message: editingLoan
+      showToast(
+        editingLoan
           ? "Draft loan updated successfully."
           : "Loan recorded as a draft. Activate it when the repayment plan is ready.",
-      });
+        { type: "success" }
+      );
       await loadLoans(true);
     } catch (err) {
-      setFormMessage({
-        type: "error",
-        message: err.message || (editingLoan
-          ? "The draft loan could not be updated."
-          : "The loan could not be recorded."),
-      });
+      const message = err.message || (editingLoan
+        ? "The draft loan could not be updated."
+        : "The loan could not be recorded.");
+
+      if (requestStarted) {
+        showToast(message, { type: "error" });
+      } else {
+        setFormMessage({ type: "error", message });
+      }
     } finally {
       setSaving(false);
     }
@@ -425,7 +434,7 @@ export default function Loans() {
         [loanId]: data,
       }));
     } catch (err) {
-      setLoanMessage(loanId, "error", err.message || "Loan details could not be loaded.");
+      showToast(err.message || "Loan details could not be loaded.", { type: "error" });
     } finally {
       setLoadingDetails(null);
     }
@@ -450,10 +459,10 @@ export default function Loans() {
         },
       }));
 
-      setLoanMessage(loanId, "success", "Loan activated and repayment schedule generated.");
+      showToast("Loan activated and repayment schedule generated.", { type: "success" });
       await loadLoans(true);
     } catch (err) {
-      setLoanMessage(loanId, "error", err.message || "The loan could not be activated.");
+      showToast(err.message || "The loan could not be activated.", { type: "error" });
     } finally {
       setActivating(null);
     }
@@ -495,7 +504,7 @@ export default function Loans() {
       });
 
       setDisbursementLoan(null);
-      setLoanMessage(loan.id, "success", "Loan disbursement posted successfully.");
+      showToast("Loan disbursement posted successfully.", { type: "success" });
 
       const refreshed = await loansApi.getLoan(loan.id, workspaceId);
       setLoanDetails((current) => ({
@@ -504,7 +513,7 @@ export default function Loans() {
       }));
       await loadLoans(true);
     } catch (err) {
-      setLoanMessage(loan.id, "error", err.message || "The loan could not be disbursed.");
+      showToast(err.message || "The loan could not be disbursed.", { type: "error" });
     } finally {
       setDisbursing(null);
     }
@@ -552,17 +561,17 @@ export default function Loans() {
         reference: "",
         notes: "",
       });
-      setLoanMessage(loan.id, "success", "Repayment recorded as pending. Select an account to confirm it.");
+      showToast("Repayment recorded as pending. Select an account to confirm it.", { type: "success" });
 
       try {
         const refreshed = await loansApi.getLoan(loan.id, workspaceId);
         setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
         await loadLoans(true);
       } catch (refreshError) {
-        setLoanMessage(loan.id, "error", "Repayment was recorded, but the loan details could not refresh. Please refresh the loan.");
+        showToast("Repayment was recorded, but the loan details could not refresh. Please refresh the loan.", { type: "warning" });
       }
     } catch (err) {
-      setLoanMessage(loan.id, "error", err.message || "The repayment could not be recorded.");
+      showToast(err.message || "The repayment could not be recorded.", { type: "error" });
     } finally {
       setSavingPayment(false);
     }
@@ -606,7 +615,7 @@ export default function Loans() {
       });
 
       setEditingPaymentId(null);
-      setPaymentMessage(payment.id, "success", "Pending repayment updated successfully.");
+      showToast("Pending repayment updated successfully.", { type: "success" });
 
       const refreshed = await loansApi.getLoan(loan.id, workspaceId);
       setLoanDetails((current) => ({
@@ -615,7 +624,7 @@ export default function Loans() {
       }));
       await loadLoans(true);
     } catch (err) {
-      setPaymentMessage(payment.id, "error", err.message || "The pending repayment could not be updated.");
+      showToast(err.message || "The pending repayment could not be updated.", { type: "error" });
     } finally {
       setUpdatingPayment(null);
     }
@@ -640,7 +649,7 @@ export default function Loans() {
         setEditingPaymentId(null);
       }
 
-      setPaymentMessage(payment.id, "success", "Pending repayment deleted successfully.");
+      showToast("Pending repayment deleted successfully.", { type: "success" });
 
       const refreshed = await loansApi.getLoan(loan.id, workspaceId);
       setLoanDetails((current) => ({
@@ -649,7 +658,7 @@ export default function Loans() {
       }));
       await loadLoans(true);
     } catch (err) {
-      setPaymentMessage(payment.id, "error", err.message || "The pending repayment could not be deleted.");
+      showToast(err.message || "The pending repayment could not be deleted.", { type: "error" });
     } finally {
       setDeletingPayment(null);
     }
@@ -688,17 +697,17 @@ export default function Loans() {
         ...(isExternal ? {} : { financial_account_id: accountId }),
       });
 
-      setPaymentMessage(payment.id, "success", "Repayment confirmed and accounting updated.");
+      showToast("Repayment confirmed and accounting updated.", { type: "success" });
 
       try {
         const refreshed = await loansApi.getLoan(loan.id, workspaceId);
         setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
         await loadLoans(true);
       } catch (refreshError) {
-        setPaymentMessage(payment.id, "error", "Repayment was confirmed, but the loan details could not refresh. Please refresh the loan.");
+        showToast("Repayment was confirmed, but the loan details could not refresh. Please refresh the loan.", { type: "warning" });
       }
     } catch (err) {
-      setPaymentMessage(payment.id, "error", err.message || "The repayment could not be confirmed.");
+      showToast(err.message || "The repayment could not be confirmed.", { type: "error" });
     } finally {
       setConfirmingPayment(null);
     }
@@ -736,13 +745,6 @@ export default function Loans() {
           </button>
         </div>
       </div>
-
-      {loadError && (
-        <div className="loans-alert loans-alert-error" role="alert">
-          <AlertCircle size={17} />
-          <span>{loadError}</span>
-        </div>
-      )}
 
       <div className="loans-summary-grid">
         <div className="loans-summary-card">

@@ -603,24 +603,36 @@ export const platformLendingApi = {
       body: JSON.stringify(payload),
     });
   },
-  listReceivingAccounts(productId) {
-    return apiRequest(`/platform/receiving-accounts/${encodeURIComponent(productId)}`);
+  listReceivingAccounts(productId, workspaceId) {
+    const params = new URLSearchParams({ workspace_id: workspaceId });
+    return apiRequest(
+      `/platform/receiving-accounts/${encodeURIComponent(productId)}?${params.toString()}`
+    );
   },
 
   listLoans(options = {}) {
     const params = new URLSearchParams();
     if (options.page) params.set("page", String(options.page));
     if (options.per_page) params.set("per_page", String(options.per_page));
+    if (options.workspace_id) params.set("workspace_id", options.workspace_id);
     const query = params.toString();
     return apiRequest(`/platform/loans${query ? `?${query}` : ""}`);
   },
 
-  getLoan(loanId) {
-    return apiRequest(`/platform/loans/${encodeURIComponent(loanId)}`);
+  getLoan(loanId, workspaceId) {
+    const params = new URLSearchParams();
+    if (workspaceId) params.set("workspace_id", workspaceId);
+    const query = params.toString();
+    return apiRequest(
+      `/platform/loans/${encodeURIComponent(loanId)}${query ? `?${query}` : ""}`
+    );
   },
 
-  listApplications() {
-    return apiRequest("/platform/applications");
+  listApplications(workspaceId) {
+    const params = new URLSearchParams();
+    if (workspaceId) params.set("workspace_id", workspaceId);
+    const query = params.toString();
+    return apiRequest(`/platform/applications${query ? `?${query}` : ""}`);
   },
 
   createApplication(payload) {

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "../context/useAuth";
+import { useToast } from "../context/ToastContext";
 import { financeApi } from "../api/client";
 import { Skeleton } from "../components/Skeleton";
 
@@ -95,6 +96,7 @@ const SUGGESTED_CATEGORIES = [
 
 export default function Budgets() {
   const { activeWorkspace } = useAuth();
+  const { showToast } = useToast();
   const workspaceId = activeWorkspace?.id;
 
   const currency =
@@ -108,8 +110,7 @@ export default function Budgets() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const [categoryMessage, setCategoryMessage] = useState(null);
+   const [categoryMessage, setCategoryMessage] = useState(null);
   const [budgetMessage, setBudgetMessage] = useState(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [showBudgetForm, setShowBudgetForm] = useState(false);
@@ -147,8 +148,6 @@ export default function Budgets() {
     if (background) setRefreshing(true);
     else setLoading(true);
 
-    setLoadError("");
-
     try {
       const [categoryResult, budgetResult] = await Promise.all([
         financeApi.listExpenseCategories(workspaceId),
@@ -177,12 +176,12 @@ export default function Budgets() {
         );
       });
     } catch (err) {
-      setLoadError(err.message || "Unable to load budgets.");
+      showToast(err.message || "Unable to load budgets.", { type: "error" });
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, showToast]);
 
   useEffect(() => {
     loadData();
@@ -213,10 +212,10 @@ export default function Budgets() {
       });
 
       setCategoryName("");
-      setCategoryMessage({ type: "success", text: result.message || "Category created successfully." });
+      showToast(result.message || "Category created successfully.", { type: "success" });
       await loadData(true);
     } catch (err) {
-      setCategoryMessage({ type: "error", text: err.message || "Could not create category." });
+      showToast(err.message || "Could not create category.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -259,10 +258,10 @@ export default function Budgets() {
       });
 
       setBudgetAllocations([]);
-      setBudgetMessage({ type: "success", text: result.message || "Budget created successfully." });
+      showToast(result.message || "Budget created successfully.", { type: "success" });
       await loadData(true);
     } catch (err) {
-      setBudgetMessage({ type: "error", text: err.message || "Could not create budget." });
+      showToast(err.message || "Could not create budget.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -327,12 +326,7 @@ export default function Budgets() {
         </div>
       </div>
 
-      {loadError && (
-        <div className="accounts-message error" role="alert">
-          <AlertCircle size={17} />
-          {loadError}
-        </div>
-      )}
+
 
       <div className="accounts-summary budget-summary">
         <div className="accounts-summary-card">
@@ -408,8 +402,8 @@ export default function Budgets() {
                 Cancel
               </button>
             </div>
-            {categoryMessage && (
-              <div className={`accounts-message ${categoryMessage.type}`} role={categoryMessage.type === "error" ? "alert" : "status"}>
+            {categoryMessage?.type === "error" && (
+              <div className="accounts-message error" role="alert">
                 {categoryMessage.type === "error" ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
                 {categoryMessage.text}
               </div>
@@ -514,8 +508,8 @@ export default function Budgets() {
               </p>
             )}
 
-            {budgetMessage && (
-              <div className={`accounts-message ${budgetMessage.type}`} role={budgetMessage.type === "error" ? "alert" : "status"}>
+            {budgetMessage?.type === "error" && (
+              <div className="accounts-message error" role="alert">
                 {budgetMessage.type === "error" ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
                 {budgetMessage.text}
               </div>

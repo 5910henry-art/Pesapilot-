@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, RefreshCw, Pencil, X, Package, AlertCircle } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
+import { useToast } from "../context/ToastContext";
 
 const EMPTY_FORM = {
   name: "",
@@ -48,6 +49,7 @@ function Field({ label, children, wide = false }) {
 }
 
 function ProductForm({ initial, onClose, onSave, saving }) {
+  const { showToast } = useToast();
   const [form, setForm] = useState(initial || EMPTY_FORM);
   const [error, setError] = useState("");
 
@@ -109,7 +111,7 @@ function ProductForm({ initial, onClose, onSave, saving }) {
     try {
       await onSave(payload);
     } catch (err) {
-      setError(err.message || "Could not save this product.");
+      showToast(err.message || "Could not save this product.", { type: "error" });
     }
   }
 
@@ -216,24 +218,21 @@ export default function PlatformOwnerProducts() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [productMessages, setProductMessages] = useState({});
+  const { showToast } = useToast();
   const [filter, setFilter] = useState("all");
   const [modal, setModal] = useState(null);
 
   const loadProducts = useCallback(async () => {
     setLoading(true);
-    setLoadError("");
     try {
       const response = await platformOwnerApi.listProducts({ page: 1, per_page: 100 });
       setProducts(response.products || []);
     } catch (err) {
-      setLoadError(err.message || "Could not load loan products.");
+      showToast(err.message || "Could not load loan products.", { type: "error" });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     loadProducts();
@@ -250,10 +249,10 @@ export default function PlatformOwnerProducts() {
     try {
       if (modal.product) {
         await platformOwnerApi.updateProduct(modal.product.id, payload);
-        setNotice("Loan product updated.");
+        showToast("Loan product updated.", { type: "success" });
       } else {
         await platformOwnerApi.createProduct(payload);
-        setNotice("Loan product created.");
+        showToast("Loan product created.", { type: "success" });
       }
       setModal(null);
       await loadProducts();
@@ -266,26 +265,12 @@ export default function PlatformOwnerProducts() {
     const action = product.is_active ? "deactivate" : "activate";
     if (!window.confirm(`Are you sure you want to ${action} ${product.name}?`)) return;
 
-    setProductMessages((current) => {
-      const next = { ...current };
-      delete next[product.id];
-      return next;
-    });
     try {
       await platformOwnerApi.updateProduct(product.id, { is_active: !product.is_active });
-      setProductMessages((current) => ({
-        ...current,
-        [product.id]: { type: "success", text: `Product ${action}d.` },
-      }));
+      showToast(`Product ${action}d.`, { type: "success" });
       await loadProducts();
     } catch (err) {
-      setProductMessages((current) => ({
-        ...current,
-        [product.id]: {
-          type: "error",
-          text: err.message || `Could not ${action} product.`,
-        },
-      }));
+      showToast(err.message || `Could not ${action} product.`, { type: "error" });
     }
   }
 
@@ -325,8 +310,6 @@ export default function PlatformOwnerProducts() {
         </button>
       </div>
 
-      {loadError && <div className="lending-alert lending-alert-error" role="alert"><AlertCircle size={17} />{loadError}</div>}
-      {notice && <div className="lending-alert lending-alert-success" role="status">{notice}<button type="button" onClick={() => setNotice("")} aria-label="Dismiss"><X size={16} /></button></div>}
 
       <div className="platform-owner-toolbar">
         <div className="platform-owner-filter-tabs">
@@ -385,26 +368,7 @@ export default function PlatformOwnerProducts() {
                   {product.is_active ? "Deactivate" : "Activate"}
                 </button>
               </div>
-              {productMessages[product.id] && (
-                <div
-                  className={`lending-alert lending-alert-${productMessages[product.id].type}`}
-                  role={productMessages[product.id].type === "error" ? "alert" : "status"}
-                >
-                  {productMessages[product.id].type === "error" && <AlertCircle size={16} />}
-                  {productMessages[product.id].text}
-                  <button
-                    type="button"
-                    onClick={() => setProductMessages((current) => {
-                      const next = { ...current };
-                      delete next[product.id];
-                      return next;
-                    })}
-                    aria-label="Dismiss"
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-              )}
+
             </article>
           ))}
         </div>

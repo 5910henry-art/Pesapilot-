@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, RefreshCw, Search, ShieldCheck, X } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
+import { useToast } from "../context/ToastContext";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -16,7 +17,7 @@ function VerificationStatus({ verified }) {
   );
 }
 
-function VerificationModal({ user, contactType, onClose, onSubmit, saving, error }) {
+function VerificationModal({ user, contactType, onClose, onSubmit, saving }) {
   const [evidenceNote, setEvidenceNote] = useState("");
   const contactValue = contactType === "email" ? user.email : user.phone;
 
@@ -54,7 +55,6 @@ function VerificationModal({ user, contactType, onClose, onSubmit, saving, error
               placeholder="Describe how you independently confirmed this email address or phone number..." />
             <small>At least 10 characters. This note will be recorded in the audit log.</small>
           </label>
-          {error && <div className="platform-owner-notice error" role="alert">{error}</div>}
           <div className="platform-owner-modal-actions">
             <button type="button" className="platform-owner-button secondary" onClick={onClose}>
               Cancel
@@ -78,14 +78,11 @@ export default function PlatformOwnerUserVerification() {
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const [actionError, setActionError] = useState("");
-  const [notice, setNotice] = useState("");
+  const { showToast } = useToast();
   const [verificationTarget, setVerificationTarget] = useState(null);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
-    setLoadError("");
     try {
       const response = await platformOwnerApi.listUsers({
         search: search || undefined,
@@ -95,11 +92,11 @@ export default function PlatformOwnerUserVerification() {
       setUsers(response.users || []);
       setPagination(response.pagination || { page, pages: 1, total: 0 });
     } catch (error) {
-      setLoadError(error.message || "User accounts could not be loaded.");
+      showToast(error.message || "User accounts could not be loaded.", { type: "error" });
     } finally {
       setLoading(false);
     }
-  }, [search, page]);
+  }, [search, page, showToast]);
 
   useEffect(() => {
     loadUsers();
@@ -114,8 +111,6 @@ export default function PlatformOwnerUserVerification() {
   async function verifyContact(evidenceNote) {
     if (!verificationTarget) return;
     setSaving(true);
-    setActionError("");
-    setNotice("");
     try {
       await platformOwnerApi.verifyUserContact(
         verificationTarget.user.id,
@@ -124,10 +119,10 @@ export default function PlatformOwnerUserVerification() {
       );
       const label = verificationTarget.contactType;
       setVerificationTarget(null);
-      setNotice(`User ${label} verified successfully. The audit record has been saved.`);
+      showToast(`User ${label} verified successfully. The audit record has been saved.`, { type: "success" });
       await loadUsers();
     } catch (error) {
-      setActionError(error.message || "Contact verification could not be completed.");
+      showToast(error.message || "Contact verification could not be completed.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -152,11 +147,6 @@ export default function PlatformOwnerUserVerification() {
         <span>Only authorised PesaPilot platform administrators can perform manual verification. Entering a contact detail does not verify it.</span>
       </div>
 
-      {loadError && <div className="platform-owner-notice error" role="alert">{loadError}</div>}
-      {actionError && !verificationTarget && (
-        <div className="platform-owner-notice error" role="alert">{actionError}</div>
-      )}
-      {notice && <div className="platform-owner-notice success" role="status">{notice}</div>}
 
       <form className="platform-owner-toolbar" onSubmit={submitSearch}>
         <input value={searchInput} onChange={(event) => setSearchInput(event.target.value)}
@@ -193,7 +183,7 @@ export default function PlatformOwnerUserVerification() {
                   {!user.email_verified && user.email && (
                     <div style={{ marginTop: 8 }}>
                       <button className="platform-owner-button secondary small" type="button"
-                        onClick={() => { setActionError(""); setVerificationTarget({ user, contactType: "email" }); }}>
+                        onClick={() => setVerificationTarget({ user, contactType: "email" })}>
                         Verify email
                       </button>
                     </div>
@@ -204,7 +194,7 @@ export default function PlatformOwnerUserVerification() {
                   {!user.phone_verified && user.phone && (
                     <div style={{ marginTop: 8 }}>
                       <button className="platform-owner-button secondary small" type="button"
-                        onClick={() => { setActionError(""); setVerificationTarget({ user, contactType: "phone" }); }}>
+                        onClick={() => setVerificationTarget({ user, contactType: "phone" })}>
                         Verify phone
                       </button>
                     </div>
@@ -250,7 +240,6 @@ export default function PlatformOwnerUserVerification() {
           onClose={() => { if (!saving) setVerificationTarget(null); }}
           onSubmit={verifyContact}
           saving={saving}
-          error={actionError}
         />
       )}
     </div>

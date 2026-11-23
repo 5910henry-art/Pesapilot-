@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Landmark, RefreshCw, Plus, ChevronRight, ArrowLeft,
   Clock3, CheckCircle2, AlertCircle, X, Wallet,
@@ -95,9 +95,11 @@ function Field({ label, children }) {
 export default function PlatformLending() {
   const { activeWorkspace } = useAuth();
   const workspaceId = activeWorkspace?.id;
+  const eligibilityWorkspaceRef = useRef(workspaceId);
+  const eligibilityStartedWorkspaceRef = useRef(null);
+  const dataWorkspaceRef = useRef(workspaceId);
   const [products, setProducts] = useState([]);
   const [eligibility, setEligibility] = useState(null);
-  const [eligibilityConsent, setEligibilityConsent] = useState(false);
   const [checkingEligibility, setCheckingEligibility] = useState(false);
   const [eligibilityError, setEligibilityError] = useState("");
   const [applications, setApplications] = useState([]);
@@ -157,32 +159,77 @@ export default function PlatformLending() {
   const [repaymentAccountError, setRepaymentAccountError] = useState("");
 
   const loadData = useCallback(async (quiet = false) => {
+    const requestedWorkspaceId = workspaceId;
+
+    if (!requestedWorkspaceId) {
+      setApplications([]);
+      setLoans([]);
+      setLoadError("Select a workspace to view lending records.");
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     if (quiet) setRefreshing(true);
     else setLoading(true);
     setLoadError("");
 
     try {
       const [applicationResult, loanResult] = await Promise.all([
-        platformLendingApi.listApplications(),
-        platformLendingApi.listLoans({ per_page: 100 }),
+        platformLendingApi.listApplications(requestedWorkspaceId),
+        platformLendingApi.listLoans({
+          per_page: 100,
+          workspace_id: requestedWorkspaceId,
+        }),
       ]);
 
-      setApplications(applicationResult.applications || []);
-      setLoans(loanResult.loans || []);
+      if (dataWorkspaceRef.current === requestedWorkspaceId) {
+        setApplications(applicationResult.applications || []);
+        setLoans(loanResult.loans || []);
+      }
     } catch (err) {
-      setLoadError(err.message || "PesaPilot Lending could not be loaded.");
+      if (dataWorkspaceRef.current === requestedWorkspaceId) {
+        setLoadError(err.message || "PesaPilot Lending could not be loaded.");
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (dataWorkspaceRef.current === requestedWorkspaceId) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    dataWorkspaceRef.current = workspaceId;
+    setApplications([]);
+    setLoans([]);
+    setSelectedLoan(null);
+    setLoanDetails(null);
+    setLoadError("");
+    void loadData();
+  }, [loadData, workspaceId]);
 
-  async function checkEligibility() {
-    if (!eligibilityConsent || checkingEligibility) return;
+  useEffect(() => {
+    eligibilityWorkspaceRef.current = workspaceId;
+    setEligibility(null);
+    setProducts([]);
+    setEligibilityError("");
+    setCheckingEligibility(false);
+
+    if (workspaceId && eligibilityStartedWorkspaceRef.current !== workspaceId) {
+      eligibilityStartedWorkspaceRef.current = workspaceId;
+      void checkEligibility(workspaceId);
+    } else if (!workspaceId) {
+      setEligibilityError("Select a workspace to check loan eligibility.");
+    }
+  }, [workspaceId]);
+
+  async function checkEligibility(requestedWorkspaceId = workspaceId) {
+    if (!requestedWorkspaceId) {
+      setEligibilityError("Select a workspace to check loan eligibility.");
+      return;
+    }
+
 
     setCheckingEligibility(true);
     setEligibilityError("");
@@ -192,15 +239,32 @@ export default function PlatformLending() {
     try {
       const result = await platformLendingApi.checkEligibility({
         affordability_consent: true,
+        workspace_id: requestedWorkspaceId,
       });
+      if (eligibilityWorkspaceRef.current !== requestedWorkspaceId) return;
+
       setEligibility(result);
       setProducts(result.products || []);
     } catch (err) {
-      setEligibilityError(
-        err.message || "Your eligibility could not be checked. Please try again."
-      );
+      if (eligibilityWorkspaceRef.current === requestedWorkspaceId) {
+        let message = "We couldn't complete your eligibility check right now. Please try again shortly.";
+
+        if (err.status === 401 || /session has expired/i.test(err.message || "")) {
+          message = "Your session has expired. Please sign in again to continue.";
+        } else if (err.status === 403) {
+          message = "You don't have permission to check loan eligibility in this workspace. Switch to a workspace you own to continue.";
+        } else if (err.status === 404) {
+          message = "This workspace is no longer available. Please select another workspace and try again.";
+        } else if (err.status === 400) {
+          message = "We couldn't verify the selected workspace. Please refresh the page and try again.";
+        }
+
+        setEligibilityError(message);
+      }
     } finally {
-      setCheckingEligibility(false);
+      if (eligibilityWorkspaceRef.current === requestedWorkspaceId) {
+        setCheckingEligibility(false);
+      }
     }
   }
 
@@ -217,7 +281,7 @@ export default function PlatformLending() {
     setLoanNotice("");
 
     try {
-      const result = await platformLendingApi.getLoan(loan.id);
+      const result = await platformLendingApi.getLoan(loan.id, workspaceId);
       setLoanDetails(result);
     } catch (err) {
       setDetailsError(err.message || "Loan details could not be loaded.");
@@ -261,7 +325,7 @@ export default function PlatformLending() {
     setShowApply(true);
 
     try {
-      const result = await platformLendingApi.listReceivingAccounts(product.id);
+      const result = await platformLendingApi.listReceivingAccounts(product.id, workspaceId);
       const accounts = Array.isArray(result?.accounts) ? result.accounts : [];
       setReceivingAccounts(accounts);
       if (accounts.length === 1) {
@@ -320,6 +384,7 @@ export default function PlatformLending() {
       }
 
       await platformLendingApi.createApplication({
+        workspace_id: workspaceId,
         product_id: selectedProduct.id,
         customer_financial_account_id: applicationForm.customer_financial_account_id,
         requested_principal_minor: toMinorUnits(
@@ -480,7 +545,7 @@ export default function PlatformLending() {
         borrower_financial_account_id: "",
       });
 
-      const result = await platformLendingApi.getLoan(selectedLoan.id);
+      const result = await platformLendingApi.getLoan(selectedLoan.id, workspaceId);
       setLoanDetails(result);
       await loadData(true);
     } catch (err) {
@@ -744,45 +809,34 @@ export default function PlatformLending() {
               ) : eligibility === null ? (
                 <div className="lending-panel lending-eligibility-panel">
                   <div className="lending-product-icon"><Landmark size={22} /></div>
-                  <h3>Check your loan eligibility</h3>
-                  <p>
-                    Before showing loan products, PesaPilot must verify income
-                    recorded in your personal workspace over the last six months.
-                    Declared income on this application will not be used to qualify you.
-                  </p>
-                  <p>
-                    We will review posted income and expense records to calculate
-                    your verified average monthly income and affordability.
-                    You need at least one month with verified income and an average
-                    of at least KSh 1,000 per month across the six-month period.
-                  </p>
-                  <label className="lending-consent" style={{ display: "flex", gap: "10px", alignItems: "flex-start", margin: "18px 0" }}>
-                    <input
-                      type="checkbox"
-                      checked={eligibilityConsent}
-                      onChange={(event) => setEligibilityConsent(event.target.checked)}
-                      disabled={checkingEligibility}
-                    />
-                    <span>
-                      I consent to PesaPilot accessing my personal workspace's
-                      posted financial records for this eligibility and affordability
-                      assessment. I understand that my records will be used to
-                      calculate verified income and expenses.
-                    </span>
-                  </label>
-                  {eligibilityError && (
-                    <div className="lending-alert lending-alert-error" role="alert">
-                      {eligibilityError}
-                    </div>
+                  <h3>{checkingEligibility ? "Checking your eligibility…" : "We couldn't check your eligibility"}</h3>
+                  {checkingEligibility ? (
+                    <p>Please wait while we complete your eligibility check.</p>
+                  ) : (
+                    <>
+                      <div className="lending-alert lending-alert-error" role="alert">
+                        {eligibilityError || "Your eligibility could not be checked. Please try again."}
+                      </div>
+                      <button
+                        type="button"
+                        className="lending-button lending-button-primary"
+                        disabled={!workspaceId || checkingEligibility}
+                        onClick={() => checkEligibility()}
+                      >
+                        Try again
+                      </button>
+                    </>
                   )}
-                  <button
-                    type="button"
-                    className="lending-button lending-button-primary"
-                    disabled={!eligibilityConsent || checkingEligibility}
-                    onClick={checkEligibility}
-                  >
-                    {checkingEligibility ? "Checking eligibility…" : "Consent and check eligibility"}
-                  </button>
+                </div>
+              ) : eligibility.has_outstanding_balance ? (
+                <div className="lending-empty">
+                  <AlertCircle size={34} />
+                  <h3>Outstanding repayments</h3>
+                  <p>{eligibility.message}</p>
+                  <p>
+                    Loan products will become available again after all outstanding
+                    balances and unpaid installments in this workspace are fully settled.
+                  </p>
                 </div>
               ) : !eligibility.eligible ? (
                 <div className="lending-empty">
@@ -808,8 +862,8 @@ export default function PlatformLending() {
                     onClick={() => {
                       setEligibility(null);
                       setProducts([]);
-                      setEligibilityConsent(false);
                       setEligibilityError("");
+                      void checkEligibility();
                     }}
                   >
                     Check again
@@ -950,6 +1004,11 @@ export default function PlatformLending() {
               <div>
                 <span className="lending-eyebrow">NEW APPLICATION</span>
                 <h2>{selectedProduct.name}</h2>
+                <p className="lending-muted">
+                  Borrowing workspace: <strong>{activeWorkspace?.name || "My workspace"}</strong>
+                  {" · "}
+                  {activeWorkspace?.type === "business" ? "Business" : "Personal"}
+                </p>
               </div>
               <button type="button" onClick={() => setShowApply(false)}
                 aria-label="Close" disabled={savingApplication}>
@@ -960,14 +1019,18 @@ export default function PlatformLending() {
             <p className="lending-muted">
               Product range: {money(selectedProduct.min_principal_minor, activeCurrency)}
               {" – "}{money(selectedProduct.max_principal_minor, activeCurrency)}.
-              Your personal borrowing limit is calculated from your verified
-              workspace records and the repayment term you select. The product
+              Your borrowing limit is calculated from verified financial
+              records in the selected workspace and the repayment term you select. The product
               maximum is not guaranteed. If your requested amount exceeds your
               assessed limit, we will show you the maximum amount you qualify for.
               All financial figures below must use {activeCurrency}.
             </p>
 
-            <h3>1. Personal information</h3>
+            <h3>1. Applicant information</h3>
+            <p className="lending-muted">
+              These are the personal details of the logged-in individual
+              submitting this application on behalf of the borrowing workspace.
+            </p>
 
             <Field label="Full legal name">
               <input required maxLength={150} autoComplete="name"
@@ -1056,7 +1119,7 @@ export default function PlatformLending() {
 
             <h3>4. Loan request</h3>
 
-            <Field label="Account to receive loan funds">
+            <Field label="Workspace receiving account">
               <select
                 required
                 value={applicationForm.customer_financial_account_id}
@@ -1064,7 +1127,7 @@ export default function PlatformLending() {
                 onChange={(e) => updateApplicationField("customer_financial_account_id", e.target.value)}
               >
                 <option value="">
-                  {loadingReceivingAccounts ? "Loading your accounts..." : "Select receiving account"}
+                  {loadingReceivingAccounts ? "Loading your accounts..." : "Select workspace receiving account"}
                 </option>
                 {receivingAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
@@ -1079,8 +1142,8 @@ export default function PlatformLending() {
               )}
               {!loadingReceivingAccounts && receivingAccounts.length === 0 && (
                 <small>
-                  No eligible {selectedProduct.currency_code} account was found.
-                  Add an active cash, bank or mobile-money account to your personal workspace first.
+                  No eligible {selectedProduct.currency_code} receiving account was found in this workspace.
+                  Add an active cash, bank or mobile-money account to the selected workspace first.
                 </small>
               )}
             </Field>

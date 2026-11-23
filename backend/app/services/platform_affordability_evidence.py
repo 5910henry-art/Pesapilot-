@@ -92,16 +92,24 @@ def collect_personal_workspace_evidence(
     if workspace is None:
         raise ValueError("Affordability evidence requires a valid lending workspace.")
 
+    allowed_roles = (
+        ("owner", "admin")
+        if workspace.workspace_type == "business"
+        else ("owner",)
+    )
+
     membership = db.session.execute(
         select(WorkspaceMember).where(
             WorkspaceMember.workspace_id == workspace_id,
             WorkspaceMember.user_id == customer_id,
-            WorkspaceMember.role == "owner",
+            WorkspaceMember.role.in_(allowed_roles),
         )
     ).scalar_one_or_none()
 
     if membership is None:
-        raise ValueError("The applicant must own the selected lending workspace.")
+        raise ValueError(
+            "The applicant must have permission to borrow in the selected workspace."
+        )
 
     start_date = _six_month_start(as_of)
     start_at = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
@@ -233,10 +241,24 @@ def collect_existing_monthly_debt(*, customer_id, workspace_id=None, as_of=None)
             .where(
                 Workspace.id == workspace_id,
                 WorkspaceMember.user_id == customer_id,
-                WorkspaceMember.role == "owner",
                 Workspace.workspace_type.in_(("personal", "business")),
+                WorkspaceMember.role.in_(("owner", "admin")),
             )
         ).scalar_one_or_none()
+
+        if (
+            selected_workspace is not None
+            and selected_workspace.workspace_type == "personal"
+        ):
+            personal_owner = db.session.execute(
+                select(WorkspaceMember.id).where(
+                    WorkspaceMember.workspace_id == workspace_id,
+                    WorkspaceMember.user_id == customer_id,
+                    WorkspaceMember.role == "owner",
+                )
+            ).scalar_one_or_none()
+            if personal_owner is None:
+                selected_workspace = None
 
         if selected_workspace is None:
             raise ValueError("The selected lending workspace is not owned by the customer.")

@@ -7,6 +7,7 @@ import {
 
 import { AuthProvider } from "./context/AuthContext";
 import { AccountsProvider } from "./context/AccountsContext";
+import { ToastProvider } from "./context/ToastContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PlatformOwnerRoute from "./components/PlatformOwnerRoute";
 
@@ -41,9 +42,10 @@ import "./styles/app.css";
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AccountsProvider>
-          <Routes>
+      <ToastProvider>
+        <AuthProvider>
+          <AccountsProvider>
+            <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
 
@@ -81,9 +83,10 @@ export default function App() {
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </AccountsProvider>
-      </AuthProvider>
+            </Routes>
+          </AccountsProvider>
+        </AuthProvider>
+      </ToastProvider>
     </BrowserRouter>
   );
 }

@@ -186,6 +186,9 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.add(self.membership)
 
         business_fixture_tests = {
+            "test_business_admin_can_check_eligibility_and_apply",
+            "test_business_admin_can_withdraw_own_pending_application",
+            "test_business_member_and_viewer_cannot_apply_for_business_loan",
             "test_unverified_user_cannot_accept_workspace_invitation",
             "test_revoked_workspace_invitation_cannot_be_accepted",
             "test_expired_workspace_invitation_cannot_be_accepted",
@@ -209,6 +212,30 @@ class PesaPilotTestCase(unittest.TestCase):
                 role="owner",
             )
             db.session.add(self.business_membership)
+
+            self.business_source_account = FinancialAccount(
+                workspace_id=self.business_workspace.id,
+                name="Business Wallet",
+                account_type="mobile_money",
+                currency_code="KES",
+                is_active=True,
+            )
+            db.session.add(self.business_source_account)
+            db.session.flush()
+
+            self.business_source_ledger = LedgerAccount(
+                workspace_id=self.business_workspace.id,
+                financial_account_id=self.business_source_account.id,
+                code=f"BSRC-{uuid4().hex[:12]}",
+                name="Business Wallet",
+                account_class="asset",
+                normal_balance="debit",
+                currency_code="KES",
+                is_system=False,
+                is_active=True,
+            )
+            db.session.add(self.business_source_ledger)
+            db.session.flush()
 
         self.source_account = FinancialAccount(
             workspace_id=self.workspace.id,
@@ -5991,6 +6018,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
         response = self.client.get(
             "/api/v1/platform/loans",
+            query_string={"workspace_id": str(self.workspace.id)},
             headers=self.headers,
         )
 
@@ -6024,6 +6052,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
                 list_response = self.client.get(
                     "/api/v1/platform/loans",
+                    query_string={"workspace_id": str(self.business_workspace.id)},
                     headers=headers,
                 )
                 self.assertEqual(
@@ -6086,6 +6115,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
         list_response = self.client.get(
             "/api/v1/platform/loans",
+            query_string={"workspace_id": str(self.business_workspace.id)},
             headers=headers,
         )
         self.assertEqual(list_response.status_code, 200, list_response.json)
@@ -6138,6 +6168,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
         list_response = self.client.get(
             "/api/v1/platform/loans",
+            query_string={"workspace_id": str(self.business_workspace.id)},
             headers=headers,
         )
         self.assertEqual(list_response.status_code, 200, list_response.json)
@@ -7342,6 +7373,81 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(len(response.json["products"]), 1)
         self.assertEqual(response.json["products"][0]["id"], str(product.id))
 
+    def test_customer_eligibility_hides_products_with_outstanding_platform_loan(self):
+        product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
+
+        application = self.create_approved_platform_application(
+            product=product
+        )
+        application.workspace_id = self.workspace.id
+
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        loan.status = "active"
+        loan.principal_minor = 100000
+        loan.outstanding_principal_minor = 50000
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/v1/platform/eligibility",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "affordability_consent": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["eligible"])
+        self.assertTrue(response.json["has_outstanding_balance"])
+        self.assertEqual(response.json["products"], [])
+        self.assertIn("outstanding", response.json["message"].lower())
+
+    def test_customer_eligibility_hides_products_with_unpaid_installment(self):
+        product = self.create_platform_loan_product()
+        self.create_verified_income_evidence(600000)
+
+        application = self.create_approved_platform_application(
+            product=product
+        )
+        application.workspace_id = self.workspace.id
+
+        loan = create_platform_loan_from_application(
+            application_id=application.id
+        )
+        loan.status = "paid"
+        loan.principal_minor = 100000
+        loan.outstanding_principal_minor = 0
+
+        db.session.add(PlatformLoanInstallment(
+            loan_id=loan.id,
+            installment_number=1,
+            due_date=date.today(),
+            amount_minor=100000,
+            principal_minor=100000,
+            interest_minor=0,
+            paid_minor=0,
+            status="scheduled",
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/v1/platform/eligibility",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "affordability_consent": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json["eligible"])
+        self.assertTrue(response.json["has_outstanding_balance"])
+        self.assertEqual(response.json["products"], [])
+        self.assertIn("outstanding", response.json["message"].lower())
+
     def test_verified_income_average_uses_months_with_income_records(self):
         self.create_platform_loan_product()
         now = datetime.now(timezone.utc)
@@ -7692,8 +7798,16 @@ class PesaPilotTestCase(unittest.TestCase):
 
     def test_workspace_business_application_access_requires_owner(self):
         product = self.create_platform_loan_product()
+        other_customer = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(other_customer)
+        db.session.flush()
+
         application = PlatformLoanApplication(
-            customer_id=self.user.id,
+            customer_id=other_customer.id,
             workspace_id=self.business_workspace.id,
             product_id=product.id,
             requested_principal_minor=100000,
@@ -7710,6 +7824,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
         owner_list = self.client.get(
             "/api/v1/platform/applications",
+            query_string={"workspace_id": str(self.business_workspace.id)},
             headers=self.headers,
         )
         self.assertEqual(owner_list.status_code, 200, owner_list.json)
@@ -7722,10 +7837,11 @@ class PesaPilotTestCase(unittest.TestCase):
 
                 listing = self.client.get(
                     "/api/v1/platform/applications",
+                    query_string={"workspace_id": str(self.business_workspace.id)},
                     headers=self.headers,
                 )
                 self.assertEqual(listing.status_code, 200, listing.json)
-                self.assertEqual(listing.json["count"], 0)
+                self.assertEqual(listing.json["count"], 1)
 
                 withdrawal = self.client.delete(
                     application_url,
@@ -7744,6 +7860,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
         owner_list_again = self.client.get(
             "/api/v1/platform/applications",
+            query_string={"workspace_id": str(self.business_workspace.id)},
             headers=self.headers,
         )
         self.assertEqual(
@@ -7760,6 +7877,121 @@ class PesaPilotTestCase(unittest.TestCase):
             200,
             owner_withdrawal.json,
         )
+        db.session.refresh(application)
+        self.assertEqual(application.status, "withdrawn")
+
+    def test_business_admin_can_check_eligibility_and_apply(self):
+        self.business_membership.role = "admin"
+        db.session.flush()
+
+        self.create_income_entry(
+            600000,
+            datetime.now(timezone.utc),
+            workspace=self.business_workspace,
+            source_ledger=self.business_source_ledger,
+        )
+
+        product = self.create_platform_loan_product()
+
+        eligibility = self.client.post(
+            "/api/v1/platform/eligibility",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.business_workspace.id),
+                "affordability_consent": True,
+            },
+        )
+        self.assertEqual(eligibility.status_code, 200, eligibility.json)
+        self.assertTrue(eligibility.json["eligible"], eligibility.json)
+
+        accounts = self.client.get(
+            f"/api/v1/platform/receiving-accounts/{product.id}",
+            query_string={
+                "workspace_id": str(self.business_workspace.id),
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(accounts.status_code, 200, accounts.json)
+        self.assertTrue(accounts.json["accounts"], accounts.json)
+        self.assertEqual(
+            accounts.json["accounts"][0]["id"],
+            str(self.business_source_account.id),
+        )
+
+        payload = self.platform_application_payload(
+            product,
+            workspace_id=str(self.business_workspace.id),
+            customer_financial_account_id=str(self.business_source_account.id),
+            monthly_income_minor=100000,
+            monthly_expenses_minor=0,
+        )
+        submitted = self.client.post(
+            "/api/v1/platform/applications",
+            headers=self.headers,
+            json=payload,
+        )
+
+        self.assertEqual(submitted.status_code, 201, submitted.json)
+        self.assertTrue(submitted.json["success"])
+        application = PlatformLoanApplication.query.filter_by(
+            id=UUID(submitted.json["application"]["id"]),
+        ).one()
+        self.assertEqual(application.customer_id, self.user.id)
+        self.assertEqual(application.workspace_id, self.business_workspace.id)
+        self.assertEqual(application.status, "pending")
+
+    def test_business_member_and_viewer_cannot_apply_for_business_loan(self):
+        product = self.create_platform_loan_product()
+
+        payload = self.platform_application_payload(
+            product,
+            workspace_id=str(self.business_workspace.id),
+            customer_financial_account_id=str(self.business_source_account.id),
+        )
+
+        for role in ("member", "viewer"):
+            with self.subTest(role=role):
+                self.business_membership.role = role
+                db.session.flush()
+
+                response = self.client.post(
+                    "/api/v1/platform/applications",
+                    headers=self.headers,
+                    json=payload,
+                )
+
+                self.assertEqual(response.status_code, 403, response.json)
+                self.assertFalse(response.json["success"])
+
+        self.assertEqual(
+            PlatformLoanApplication.query.filter_by(
+                workspace_id=self.business_workspace.id,
+            ).count(),
+            0,
+        )
+
+    def test_business_admin_can_withdraw_own_pending_application(self):
+        self.business_membership.role = "admin"
+        product = self.create_platform_loan_product()
+
+        application = PlatformLoanApplication(
+            customer_id=self.user.id,
+            workspace_id=self.business_workspace.id,
+            product_id=product.id,
+            requested_principal_minor=100000,
+            term_count=6,
+            purpose="Business stock",
+            status="pending",
+        )
+        db.session.add(application)
+        db.session.flush()
+
+        response = self.client.delete(
+            f"/api/v1/platform/applications/{application.id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
         db.session.refresh(application)
         self.assertEqual(application.status, "withdrawn")
 
@@ -7837,6 +8069,7 @@ class PesaPilotTestCase(unittest.TestCase):
 
         listing = self.client.get(
             "/api/v1/platform/applications",
+            query_string={"workspace_id": str(self.workspace.id)},
             headers=self.headers,
         )
         self.assertEqual(listing.status_code, 200, listing.json)
@@ -7967,9 +8200,19 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.commit()
         return entry
 
-    def create_income_entry(self, amount_minor, transaction_date):
+    def create_income_entry(
+        self,
+        amount_minor,
+        transaction_date,
+        *,
+        workspace=None,
+        source_ledger=None,
+    ):
+        workspace = workspace or self.workspace
+        source_ledger = source_ledger or self.source_ledger
+
         income_ledger = LedgerAccount(
-            workspace_id=self.workspace.id,
+            workspace_id=workspace.id,
             financial_account_id=None,
             code=f"INC-{uuid4().hex[:12]}",
             name="Test Income",
@@ -7983,14 +8226,14 @@ class PesaPilotTestCase(unittest.TestCase):
         db.session.flush()
 
         entry = create_draft_entry(
-            workspace_id=self.workspace.id,
+            workspace_id=workspace.id,
             created_by=self.user.id,
             reference=f"TEST-INC-{uuid4().hex[:12]}",
             description="Dashboard test income",
             transaction_date=transaction_date,
             lines=[
                 {
-                    "ledger_account_id": str(self.source_ledger.id),
+                    "ledger_account_id": str(source_ledger.id),
                     "debit_minor": amount_minor,
                     "credit_minor": 0,
                 },
@@ -8003,7 +8246,7 @@ class PesaPilotTestCase(unittest.TestCase):
         )
         post_entry(
             entry_id=entry.id,
-            workspace_id=self.workspace.id,
+            workspace_id=workspace.id,
             posted_by=self.user.id,
         )
         db.session.commit()

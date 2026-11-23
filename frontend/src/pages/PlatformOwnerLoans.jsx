@@ -7,12 +7,12 @@ import {
   X,
   Plus,
   AlertCircle,
-  CheckCircle2,
   Clock,
   Banknote,
   BriefcaseBusiness,
 } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
+import { useToast } from "../context/ToastContext";
 
 const STATUSES = [
   "all",
@@ -105,13 +105,10 @@ export default function PlatformOwnerLoans() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
   const [selectedLoan, setSelectedLoan] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState("");
   const [showDisbursement, setShowDisbursement] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState("");
 
   const [accounts, setAccounts] = useState([]);
   const [customerAccounts, setCustomerAccounts] = useState([]);
@@ -133,11 +130,11 @@ export default function PlatformOwnerLoans() {
     { investor_id: "", amount: "" },
   ]);
   const [formError, setFormError] = useState("");
+  const { showToast } = useToast();
 
   const loadLoans = useCallback(async (quiet = false) => {
     if (quiet) setRefreshing(true);
     else setLoading(true);
-    setError("");
 
     try {
       const result = await platformOwnerApi.listLoans({
@@ -148,12 +145,12 @@ export default function PlatformOwnerLoans() {
       setLoans(result.loans || []);
       setPagination(result.pagination || null);
     } catch (err) {
-      setError(err.message || "Could not load the loan portfolio.");
+      showToast(err.message || "Could not load the loan portfolio.", { type: "error" });
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [status]);
+  }, [status, showToast]);
 
   useEffect(() => {
     loadLoans();
@@ -161,14 +158,13 @@ export default function PlatformOwnerLoans() {
 
   const openLoan = async (loanId) => {
     setSelectedLoan(null);
-    setDetailError("");
     setDetailLoading(true);
 
     try {
       const result = await platformOwnerApi.getLoan(loanId);
       setSelectedLoan(result);
     } catch (err) {
-      setDetailError(err.message || "Could not load loan details.");
+      showToast(err.message || "Could not load loan details.", { type: "error" });
     } finally {
       setDetailLoading(false);
     }
@@ -178,7 +174,6 @@ export default function PlatformOwnerLoans() {
     setSelectedLoan((current) => current);
     setShowDisbursement(true);
     setFormError("");
-    setNotice("");
     setFundingSource("pesapilot_capital");
     setAccountId("");
     setCustomerAccountId("");
@@ -263,7 +258,7 @@ export default function PlatformOwnerLoans() {
       }
 
       if (errors.length) {
-        setFormError(errors.join(" "));
+        showToast(errors.join(" "), { type: "error" });
       }
     } finally {
       setAccountsLoading(false);
@@ -422,11 +417,11 @@ export default function PlatformOwnerLoans() {
     try {
       await platformOwnerApi.disburseLoan(activeLoan.id, payload);
       setShowDisbursement(false);
-      setNotice("Disbursement recorded successfully.");
+      showToast("Disbursement recorded successfully.", { type: "success" });
       await loadLoans(true);
       await openLoan(activeLoan.id);
     } catch (err) {
-      setFormError(err.message || "Disbursement could not be recorded.");
+      showToast(err.message || "Disbursement could not be recorded.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -483,12 +478,6 @@ export default function PlatformOwnerLoans() {
           ))}
         </select>
       </div>
-
-      {error && (
-        <div className="platform-loan-notice platform-loan-notice-error" role="alert">
-          <AlertCircle size={17} /> {error}
-        </div>
-      )}
 
       <div className="platform-loan-table-card">
         {loading ? (
@@ -583,14 +572,6 @@ export default function PlatformOwnerLoans() {
         </Modal>
       )}
 
-      {detailError && (
-        <Modal title="Loan details" onClose={() => setDetailError("")}>
-          <div className="platform-loan-notice platform-loan-notice-error" role="alert">
-            <AlertCircle size={17} /> {detailError}
-          </div>
-        </Modal>
-      )}
-
       {detail && loan && (
         <Modal
           title="Loan details"
@@ -598,15 +579,6 @@ export default function PlatformOwnerLoans() {
           onClose={() => setSelectedLoan(null)}
         >
           <div className="platform-loan-detail">
-            {notice && (
-              <div className="platform-loan-notice platform-loan-notice-success" role="status">
-                <CheckCircle2 size={17} />
-                {notice}
-                <button type="button" onClick={() => setNotice("")} aria-label="Dismiss message">
-                  <X size={15} />
-                </button>
-              </div>
-            )}
             <div className="platform-loan-detail-heading">
               <div>
                 <h3>

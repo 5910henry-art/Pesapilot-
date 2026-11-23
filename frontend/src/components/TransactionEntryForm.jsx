@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowDownLeft, ArrowUpRight, ArrowLeftRight,
-  Plus, Wallet, AlertCircle, CheckCircle2,
+  Plus, Wallet, AlertCircle,
 } from "lucide-react";
 import { useAuth } from "../context/useAuth";
 import { useAccounts } from "../context/AccountsContext";
+import { useToast } from "../context/ToastContext";
 import { financeApi } from "../api/client";
 import { Skeleton } from "./Skeleton";
 
@@ -73,6 +74,7 @@ export default function TransactionEntryForm({
   title = "Record a transaction",
   description = "Entries are posted to your double-entry ledger.",
   onRecorded,
+  footerAction = null,
 }) {
   const { activeWorkspace } = useAuth();
   const workspaceId = activeWorkspace?.id;
@@ -96,9 +98,9 @@ export default function TransactionEntryForm({
 
   const [expenseCategories, setExpenseCategories] = useState([]);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const { showToast } = useToast();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
 
   const [form, setForm] = useState({
     type: startingType,
@@ -132,7 +134,7 @@ export default function TransactionEntryForm({
         )
       );
     } catch (err) {
-      setError(err.message || "Could not load expense categories.");
+      showToast(err.message || "Could not load expense categories.", { type: "error" });
     } finally {
       setCategoriesLoading(false);
     }
@@ -192,7 +194,6 @@ export default function TransactionEntryForm({
 
   function changeType(type) {
     setError("");
-    setSuccess("");
 
     setForm((current) => ({
       ...current,
@@ -207,7 +208,6 @@ export default function TransactionEntryForm({
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
-    setSuccess("");
 
     if (!workspaceId) {
       setError("No active workspace is available.");
@@ -393,7 +393,7 @@ export default function TransactionEntryForm({
       try {
         await financeApi.postEntry(entryId, workspaceId);
 
-        setSuccess("Transaction recorded and posted successfully.");
+        showToast("Transaction recorded and posted successfully.", { type: "success" });
 
         setForm((current) => ({
           ...current,
@@ -404,15 +404,16 @@ export default function TransactionEntryForm({
           date: localDateValue(),
         }));
       } catch (postError) {
-        setSuccess(
-          `Draft saved, but it was not posted: ${postError.message}`
+        showToast(
+          `Draft saved, but it was not posted: ${postError.message}`,
+          { type: "warning", duration: 6500 }
         );
       }
 
       await refreshAccounts();
       if (onRecorded) await onRecorded();
     } catch (err) {
-      setError(err.message || "Transaction could not be recorded.");
+      showToast(err.message || "Transaction could not be recorded.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -437,12 +438,6 @@ export default function TransactionEntryForm({
       {error && (
         <div className="accounts-message error-message" role="alert">
           <AlertCircle size={17} />{error}
-        </div>
-      )}
-
-      {success && (
-        <div className="accounts-message success-message" role="status">
-          <CheckCircle2 size={17} />{success}
         </div>
       )}
 
@@ -649,15 +644,18 @@ export default function TransactionEntryForm({
             <span>
               Workspace currency: <strong>{workspaceCurrency}</strong>
             </span>
-            <button
-              className="primary-button"
-              type="submit"
-              disabled={saving || loading || usableAccounts.length === 0}
-            >
-              {saving
-                ? "Saving transaction…"
-                : <><Plus size={17} /> Record transaction</>}
-            </button>
+            <div className="transaction-form-actions">
+              {footerAction}
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={saving || loading || usableAccounts.length === 0}
+              >
+                {saving
+                  ? "Saving transaction…"
+                  : <><Plus size={17} /> Record transaction</>}
+              </button>
+            </div>
           </div>
         </form>
       )}

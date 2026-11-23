@@ -20855,3 +20855,179 @@ button { font: inherit; cursor: pointer; }
     gap: 5px 10px;
   }
 }
+
+/* Global PesaPilot toast notifications */
+.app-toast-viewport {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 100000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(390px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.app-toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 15px;
+  border: 1px solid;
+  border-radius: 13px;
+  background: #ffffff;
+  color: #172033;
+  box-shadow: 0 12px 35px rgb(0 0 0 / 16%);
+  pointer-events: auto;
+  animation: app-toast-enter 220ms ease-out;
+}
+
+.app-toast-success {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.app-toast-error {
+  border-color: #fda4af;
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+.app-toast-warning {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.app-toast-info {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.app-toast-icon {
+  flex: 0 0 auto;
+}
+
+.app-toast-message {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.app-toast-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.app-toast-close:hover {
+  background: rgb(0 0 0 / 7%);
+  opacity: 1;
+}
+
+@keyframes app-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 600px) {
+  .app-toast-viewport {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+
+  .app-toast {
+    padding: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-toast {
+    animation: none;
+  }
+}
+
+
+/* Keep optional form actions together beside the submit action. */
+.transaction-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.transaction-form-actions > .primary-button {
+  width: auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .transaction-form-actions {
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .transaction-form-actions > .primary-button {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    justify-content: center;
+    padding-left: 10px;
+    padding-right: 10px;
+    white-space: nowrap;
+  }
+}
+
+
+/* Compact account cards */
+.accounts-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 260px));
+  justify-content: start;
+  align-items: start;
+}
+
+.account-card {
+  padding: 10px;
+  border-radius: 10px;
+}
+
+.account-card-name {
+  margin-top: 9px;
+}
+
+.account-card-balance {
+  margin-top: 10px;
+}
+
+.account-card-balance strong {
+  font-size: 15px;
+}
+
+.account-card-footer {
+  margin-top: 9px;
+  padding-top: 7px;
+}

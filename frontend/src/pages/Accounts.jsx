@@ -5,6 +5,7 @@ import {
   X, CheckCircle2, AlertCircle, Pencil, Archive, RotateCcw, Trash2, Check, ChevronDown
 } from "lucide-react";
 import { useAuth } from "../context/useAuth";
+import { useToast } from "../context/ToastContext";
 import { useAccounts } from "../context/AccountsContext";
 import { financeApi } from "../api/client";
 import TransactionEntryForm from "../components/TransactionEntryForm";
@@ -67,10 +68,9 @@ export default function Accounts() {
     refreshAccounts,
   } = useAccounts();
 
+  const { showToast } = useToast();
   const [refreshing, setRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState("");
   const [createMessage, setCreateMessage] = useState(null);
-  const [accountMessages, setAccountMessages] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingAccountId, setEditingAccountId] = useState(null);
@@ -91,35 +91,19 @@ export default function Accounts() {
   const loadAccounts = useCallback(async (quiet = false) => {
     if (quiet) setRefreshing(true);
 
-    setLoadError("");
 
     try {
       await refreshAccounts();
     } catch (err) {
-      setLoadError(err.message || "Could not load your accounts.");
+      showToast(err.message || "Could not load your accounts.", { type: "error" });
     } finally {
       setRefreshing(false);
     }
-  }, [refreshAccounts]);
+  }, [refreshAccounts, showToast]);
 
   useEffect(() => {
-    if (accountsError) setLoadError(accountsError);
-  }, [accountsError]);
-
-  function setAccountMessage(accountId, type, message) {
-    setAccountMessages((current) => ({
-      ...current,
-      [accountId]: { type, message },
-    }));
-  }
-
-  function clearAccountMessage(accountId) {
-    setAccountMessages((current) => {
-      const next = { ...current };
-      delete next[accountId];
-      return next;
-    });
-  }
+    if (accountsError) showToast(accountsError, { type: "error" });
+  }, [accountsError, showToast]);
 
   const balanceByLedger = useMemo(() => {
     return new Map(
@@ -169,16 +153,10 @@ export default function Accounts() {
       });
 
       setShowForm(false);
-      setCreateMessage({
-        type: "success",
-        message: "Your account was created successfully.",
-      });
+      showToast("Your account was created successfully.", { type: "success" });
       await loadAccounts(true);
     } catch (err) {
-      setCreateMessage({
-        type: "error",
-        message: err.message || "Account creation failed.",
-      });
+      showToast(err.message || "Account creation failed.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -193,7 +171,6 @@ export default function Accounts() {
     }
 
     setActionSaving(account.id);
-    clearAccountMessage(account.id);
 
     try {
       const payload = account.has_records
@@ -207,20 +184,15 @@ export default function Accounts() {
 
       await financeApi.updateAccount(account.id, payload);
       setEditingAccountId(null);
-      setAccountMessage(
-        account.id,
-        "success",
+      showToast(
         account.has_records
           ? "Account renamed successfully."
-          : "Account details updated successfully."
+          : "Account details updated successfully.",
+        { type: "success" }
       );
       await loadAccounts(true);
     } catch (err) {
-      setAccountMessage(
-        account.id,
-        "error",
-        err.message || "Could not update this account."
-      );
+      showToast(err.message || "Could not update this account.", { type: "error" });
     } finally {
       setActionSaving("");
     }
@@ -239,27 +211,21 @@ export default function Accounts() {
     if (!confirmed) return;
 
     setActionSaving(account.id);
-    clearAccountMessage(account.id);
 
     try {
       await financeApi.updateAccount(account.id, {
         workspace_id: workspaceId,
         is_active: !account.is_active,
       });
-      setAccountMessage(
-        account.id,
-        "success",
+      showToast(
         action === "close"
           ? "Account closed. Its history and balance are preserved."
-          : "Account reopened successfully."
+          : "Account reopened successfully.",
+        { type: "success" }
       );
       await loadAccounts(true);
     } catch (err) {
-      setAccountMessage(
-        account.id,
-        "error",
-        err.message || `Could not ${action} this account.`
-      );
+      showToast(err.message || `Could not ${action} this account.`, { type: "error" });
     } finally {
       setActionSaving("");
     }
@@ -275,21 +241,15 @@ export default function Accounts() {
     if (!confirmed) return;
 
     setActionSaving(account.id);
-    clearAccountMessage(account.id);
 
     try {
       await financeApi.deleteAccount(account.id, workspaceId);
-      setAccountMessage(
-        account.id,
-        "success",
-        "Unused account permanently deleted."
-      );
+      showToast("Unused account permanently deleted.", { type: "success" });
       await loadAccounts(true);
     } catch (err) {
-      setAccountMessage(
-        account.id,
-        "error",
-        err.message || "Could not delete this account. Close it instead if it has financial history."
+      showToast(
+        err.message || "Could not delete this account. Close it instead if it has financial history.",
+        { type: "error" }
       );
     } finally {
       setActionSaving("");
@@ -315,27 +275,10 @@ export default function Accounts() {
           >
             <RefreshCw size={17} className={refreshing ? "spinning" : ""} />
           </button>
-
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() => {
-              setCreateMessage(null);
-              setShowForm((value) => !value);
-            }}
-          >
-            {showForm ? <X size={17} /> : <Plus size={18} />}
-            {showForm ? "Close" : "Add account"}
-          </button>
         </div>
       </section>
 
-      {loadError && (
-        <div className="accounts-message error-message" role="alert">
-          <AlertCircle size={17} />
-          {loadError}
-        </div>
-      )}
+
 
       <section className="accounts-summary">
         <article className="accounts-summary-card">
@@ -365,6 +308,19 @@ export default function Accounts() {
         title="Record account activity"
         description="Record income, transfer money between accounts, or enter an opening balance."
         onRecorded={() => loadAccounts(true)}
+        footerAction={
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => {
+              setCreateMessage(null);
+              setShowForm((value) => !value);
+            }}
+          >
+            {showForm ? <X size={17} /> : <Plus size={18} />}
+            {showForm ? "Close" : "Add account"}
+          </button>
+        }
       />
 
       {showForm && (
@@ -377,16 +333,9 @@ export default function Accounts() {
           </div>
 
           <form className="account-form" onSubmit={handleCreate}>
-            {createMessage && (
-              <div
-                className={`accounts-message ${createMessage.type === "error" ? "error-message" : "success-message"}`}
-                role={createMessage.type === "error" ? "alert" : "status"}
-              >
-                {createMessage.type === "error" ? (
-                  <AlertCircle size={17} />
-                ) : (
-                  <CheckCircle2 size={17} />
-                )}
+            {createMessage?.type === "error" && (
+              <div className="accounts-message error-message" role="alert">
+                <AlertCircle size={17} />
                 {createMessage.message}
               </div>
             )}
@@ -485,19 +434,7 @@ export default function Accounts() {
         </section>
       )}
 
-      {!showForm && createMessage && (
-        <div
-          className={`accounts-message ${createMessage.type === "error" ? "error-message" : "success-message"}`}
-          role={createMessage.type === "error" ? "alert" : "status"}
-        >
-          {createMessage.type === "error" ? (
-            <AlertCircle size={17} />
-          ) : (
-            <CheckCircle2 size={17} />
-          )}
-          {createMessage.message}
-        </div>
-      )}
+
 
       <section className="accounts-list-section">
         <div className="accounts-list-heading">
@@ -701,8 +638,7 @@ export default function Accounts() {
                               account_type: account.account_type || "bank",
                               currency: account.currency || workspaceCurrency,
                             });
-                            clearAccountMessage(account.id);
-                          }}
+                                                  }}
                           disabled={Boolean(actionSaving)}
                         >
                           <Pencil size={15} />
@@ -737,19 +673,7 @@ export default function Accounts() {
                     )}
                   </div>
 
-                  {accountMessages[account.id] && (
-                    <div
-                      className={`accounts-message ${accountMessages[account.id].type === "error" ? "error-message" : "success-message"}`}
-                      role={accountMessages[account.id].type === "error" ? "alert" : "status"}
-                    >
-                      {accountMessages[account.id].type === "error" ? (
-                        <AlertCircle size={17} />
-                      ) : (
-                        <CheckCircle2 size={17} />
-                      )}
-                      {accountMessages[account.id].message}
-                    </div>
-                  )}
+
                 </article>
               );
             })}

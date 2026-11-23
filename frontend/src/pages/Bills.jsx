@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "../context/useAuth";
+import { useToast } from "../context/ToastContext";
 import { useAccounts } from "../context/AccountsContext";
 import { financeApi } from "../api/client";
 import { Skeleton } from "../components/Skeleton";
@@ -94,6 +95,7 @@ function getBillStatus(bill) {
 
 export default function Bills() {
   const { activeWorkspace } = useAuth();
+  const { showToast } = useToast();
   const workspaceId = activeWorkspace?.id;
   const { accounts: allAccounts } = useAccounts();
   const currency = activeWorkspace?.functional_currency
@@ -106,11 +108,9 @@ export default function Bills() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
   const [createMessage, setCreateMessage] = useState(null);
   const [paymentMessage, setPaymentMessage] = useState(null);
   const [detailsError, setDetailsError] = useState("");
-  const [actionNotice, setActionNotice] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [selectedBill, setSelectedBill] = useState(null);
   const [billDetails, setBillDetails] = useState(null);
@@ -133,7 +133,6 @@ export default function Bills() {
     if (quiet) setRefreshing(true);
     else setLoading(true);
 
-    setLoadError("");
 
     try {
       const [billResult, categoryResult] = await Promise.all([
@@ -146,12 +145,12 @@ export default function Bills() {
         (item) => item.is_active && item.ledger_account?.id
       ));
     } catch (err) {
-      setLoadError(err.message || "Could not load bills.");
+      showToast(err.message || "Could not load bills.", { type: "error" });
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, showToast]);
 
   useEffect(() => {
     loadData();
@@ -201,7 +200,7 @@ export default function Bills() {
       const result = await financeApi.getBill(bill.id, workspaceId);
       setBillDetails(result);
     } catch (err) {
-      setDetailsError(err.message || "Could not load bill details.");
+      showToast(err.message || "Could not load bill details.", { type: "error" });
     } finally {
       setDetailsLoading(false);
     }
@@ -210,7 +209,6 @@ export default function Bills() {
   async function handleCreate(event) {
     event.preventDefault();
     setCreateMessage(null);
-    setActionNotice("");
 
     if (!billForm.category_id) {
       setCreateMessage({ type: "error", text: "Select an expense category." });
@@ -247,10 +245,10 @@ export default function Bills() {
 
       setShowCreate(false);
       setBillForm(initialBillForm());
-      setActionNotice(result.message || "Bill created successfully.");
+      showToast(result.message || "Bill created successfully.", { type: "success" });
       await loadData(true);
     } catch (err) {
-      setCreateMessage({ type: "error", text: err.message || "Could not create bill." });
+      showToast(err.message || "Could not create bill.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -273,7 +271,6 @@ export default function Bills() {
     if (!payingBill) return;
 
     setPaymentMessage(null);
-    setActionNotice("");
 
     if (!paymentForm.financial_account_id) {
       setPaymentMessage({ type: "error", text: "Choose the account used to pay this bill." });
@@ -307,10 +304,10 @@ export default function Bills() {
       setShowPayment(false);
       setPayingBill(null);
       setPaymentForm(initialPaymentForm());
-      setActionNotice(result.message || "Bill payment recorded successfully.");
+      showToast(result.message || "Bill payment recorded successfully.", { type: "success" });
       await loadData(true);
     } catch (err) {
-      setPaymentMessage({ type: "error", text: err.message || "Could not record payment." });
+      showToast(err.message || "Could not record payment.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -361,8 +358,7 @@ export default function Bills() {
               type="button"
               onClick={() => {
                 setCreateMessage(null);
-                setActionNotice("");
-                setShowCreate(true);
+                            setShowCreate(true);
               }}
             >
               <Plus size={17} /> New bill
@@ -370,12 +366,6 @@ export default function Bills() {
           </div>
         </div>
       </div>
-
-      {loadError && (
-        <div className="accounts-message error" role="alert">
-          <AlertCircle size={17} /> {loadError}
-        </div>
-      )}
 
       <div className="bills-summary">
         <div className="bills-summary-card outstanding">
@@ -406,12 +396,6 @@ export default function Bills() {
           </div>
           <span className="bills-count">{visibleBills.length} shown</span>
         </div>
-
-        {actionNotice && (
-          <div className="accounts-message success" role="status">
-            <CheckCircle2 size={17} /> {actionNotice}
-          </div>
-        )}
 
         <div className="bills-toolbar">
           <div className="bills-search">
@@ -476,8 +460,7 @@ export default function Bills() {
             {!bills.length && (
               <button className="primary-button" onClick={() => {
                 setCreateMessage(null);
-                setActionNotice("");
-                setShowCreate(true);
+                            setShowCreate(true);
               }}>
                 <Plus size={16} /> Create your first bill
               </button>
@@ -793,12 +776,6 @@ export default function Bills() {
                 <X size={19} />
               </button>
             </div>
-
-            {detailsError && (
-              <div className="accounts-message error" role="alert">
-                <AlertCircle size={17} /> {detailsError}
-              </div>
-            )}
 
             {detailsLoading ? (
               <div className="bills-detail-grid bills-detail-skeleton" aria-hidden="true">
