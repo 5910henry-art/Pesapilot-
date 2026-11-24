@@ -36,12 +36,14 @@ import Expenses from "./pages/Expenses";
 import AIManager from "./pages/AIManager";
 import Settings from "./pages/Settings";
 import WorkspaceInvitation from "./pages/WorkspaceInvitation";
+import PWAUpdatePrompt from "./components/PWAUpdatePrompt";
 
 import "./styles/app.css";
 
 export default function App() {
   return (
     <BrowserRouter>
+      <PWAUpdatePrompt />
       <ToastProvider>
         <AuthProvider>
           <AccountsProvider>

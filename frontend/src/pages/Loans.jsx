@@ -449,17 +449,24 @@ export default function Loans() {
     setLoanMessage(loanId, null, "");
 
     try {
-      const data = await loansApi.activateLoan(loanId, workspaceId);
-
-      setLoanDetails((current) => ({
-        ...current,
-        [loanId]: {
-          ...(current[loanId] || {}),
-          ...data,
-        },
-      }));
+      await loansApi.activateLoan(loanId, workspaceId);
 
       showToast("Loan activated and repayment schedule generated.", { type: "success" });
+
+      try {
+        const refreshed = await loansApi.getLoan(loanId, workspaceId);
+
+        setLoanDetails((current) => ({
+          ...current,
+          [loanId]: refreshed,
+        }));
+      } catch (refreshError) {
+        showToast(
+          "Loan activated, but its repayment schedule could not refresh. Please reopen the loan.",
+          { type: "warning" }
+        );
+      }
+
       await loadLoans(true);
     } catch (err) {
       showToast(err.message || "The loan could not be activated.", { type: "error" });

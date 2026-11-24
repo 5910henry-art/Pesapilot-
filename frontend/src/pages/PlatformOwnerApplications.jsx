@@ -14,6 +14,7 @@ import {
   Eye,
 } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
+import { useToast } from "../context/ToastContext";
 
 const FILTERS = [
   { label: "All applications", value: "" },
@@ -58,7 +59,7 @@ function statusClass(status) {
   return `platform-owner-status platform-owner-status-${status}`;
 }
 
-function DecisionModal({ application, onClose, onSubmit, saving, error }) {
+function DecisionModal({ application, onClose, onSubmit, saving }) {
   const [decision, setDecision] = useState("approved");
   const [approvedAmount, setApprovedAmount] = useState(
     String(application.requested_principal_minor)
@@ -342,12 +343,6 @@ function DecisionModal({ application, onClose, onSubmit, saving, error }) {
         )}
 
         <form onSubmit={submit} className="platform-owner-form">
-          {error && (
-            <div className="platform-owner-notice error" role="alert">
-              <AlertCircle size={17} />
-              <span>{error}</span>
-            </div>
-          )}
           <label>
             Application decision
             <select
@@ -475,15 +470,12 @@ export default function PlatformOwnerApplications() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const [decisionError, setDecisionError] = useState("");
-  const [applicationMessages, setApplicationMessages] = useState({});
+  const { showToast } = useToast();
   const [selected, setSelected] = useState(null);
   const [allocatingLoan, setAllocatingLoan] = useState("");
 
   const loadApplications = useCallback(async () => {
     setLoading(true);
-    setLoadError("");
 
     try {
       const response = await platformOwnerApi.listApplications({
@@ -493,11 +485,11 @@ export default function PlatformOwnerApplications() {
 
       setApplications(response.applications || []);
     } catch (err) {
-      setLoadError(err.message || "Applications could not be loaded.");
+      showToast(err.message || "Applications could not be loaded.", { type: "error" });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     loadApplications();
@@ -529,26 +521,16 @@ export default function PlatformOwnerApplications() {
 
   async function saveDecision(applicationId, payload) {
     setSaving(true);
-    setDecisionError("");
-    setApplicationMessages((old) => ({
-      ...old,
-      [applicationId]: null,
-    }));
 
     try {
       await platformOwnerApi.decideApplication(applicationId, payload);
       setSelected(null);
-      setApplicationMessages((old) => ({
-        ...old,
-        [applicationId]: {
-          type: "success",
-          message: `Application ${payload.decision} successfully.`,
-        },
-      }));
+      showToast(`Application ${payload.decision} successfully.`, { type: "success" });
       await loadApplications();
     } catch (err) {
-      setDecisionError(
-        err.message || "The application decision could not be saved."
+      showToast(
+        err.message || "The application decision could not be saved.",
+        { type: "error" }
       );
     } finally {
       setSaving(false);
@@ -563,32 +545,18 @@ export default function PlatformOwnerApplications() {
     if (!confirmed) return;
 
     setAllocatingLoan(application.id);
-    setApplicationMessages((old) => ({
-      ...old,
-      [application.id]: null,
-    }));
 
     try {
       const response =
         await platformOwnerApi.createLoanFromApplication(application.id);
 
-      setApplicationMessages((old) => ({
-        ...old,
-        [application.id]: {
-          type: "success",
-          message: `Loan allocated successfully. Loan ID: ${response.loan?.id || "Allocated"}`,
-        },
-      }));
-
+      showToast(
+        `Loan allocated successfully. Loan ID: ${response.loan?.id || "Allocated"}`,
+        { type: "success" }
+      );
       await loadApplications();
     } catch (err) {
-      setApplicationMessages((old) => ({
-        ...old,
-        [application.id]: {
-          type: "error",
-          message: err.message || "The loan could not be created.",
-        },
-      }));
+      showToast(err.message || "The loan could not be created.", { type: "error" });
     } finally {
       setAllocatingLoan("");
     }
@@ -621,20 +589,6 @@ export default function PlatformOwnerApplications() {
           Refresh data
         </button>
       </header>
-
-      {loadError && (
-        <div className="platform-owner-notice error" role="alert">
-          <AlertCircle size={17} />
-          <span>{loadError}</span>
-          <button
-            type="button"
-            onClick={() => setLoadError("")}
-            aria-label="Dismiss"
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
 
       <section className="loan-applications-stats">
 
@@ -884,32 +838,7 @@ export default function PlatformOwnerApplications() {
                               No action
                             </span>
                           )}
-                        {applicationMessages[application.id] && (
-                          <div
-                            className={`platform-owner-notice ${
-                              applicationMessages[application.id].type === "error"
-                                ? "error"
-                                : "success"
-                            }`}
-                            role={
-                              applicationMessages[application.id].type === "error"
-                                ? "alert"
-                                : "status"
-                            }
-                          >
-                            <span>{applicationMessages[application.id].message}</span>
-                            <button
-                              type="button"
-                              onClick={() => setApplicationMessages((old) => ({
-                                ...old,
-                                [application.id]: null,
-                              }))}
-                              aria-label="Dismiss"
-                            >
-                              <X size={16} />
-                            </button>
-                          </div>
-                        )}
+
                       </div>
                     </td>
                   </tr>
@@ -941,12 +870,10 @@ export default function PlatformOwnerApplications() {
           onClose={() => {
             if (!saving) {
               setSelected(null);
-              setDecisionError("");
             }
           }}
           onSubmit={saveDecision}
           saving={saving}
-          error={decisionError}
         />
       )}
 

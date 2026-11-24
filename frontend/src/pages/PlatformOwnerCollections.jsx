@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Wallet, CheckCircle, X } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
+import { useToast } from "../context/ToastContext";
 
 const ZERO_DECIMAL = new Set([
   "JPY", "UGX", "RWF", "BIF", "DJF", "GNF", "KMF", "XAF", "XOF",
@@ -21,21 +22,7 @@ function dateTime(value) {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }
 
-function Notice({ type, children, onClose }) {
-  return (
-    <div
-      className={`platform-owner-notice ${type}`}
-      role={type === "error" ? "alert" : "status"}
-    >
-      <span>{children}</span>
-      <button type="button" onClick={onClose} aria-label="Dismiss">
-        <X size={16} />
-      </button>
-    </div>
-  );
-}
-
-function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving, error }) {
+function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
   const [accountId, setAccountId] = useState("");
   const [reference, setReference] = useState("");
   const [reason, setReason] = useState("");
@@ -174,12 +161,6 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving, error
             </label>
           )}
 
-          {error && (
-            <div className="platform-owner-notice error" role="alert">
-              <span>{error}</span>
-            </div>
-          )}
-
           <div className="platform-owner-modal-actions">
             <button
               type="button"
@@ -213,7 +194,7 @@ function ActionModal({ payment, accounts, mode, onClose, onSubmit, saving, error
   );
 }
 
-function LateFeeActionModal({ payment, accounts, mode, onClose, onSubmit, saving, error }) {
+function LateFeeActionModal({ payment, accounts, mode, onClose, onSubmit, saving }) {
   const [accountId, setAccountId] = useState("");
   const [reference, setReference] = useState("");
   const [reason, setReason] = useState("");
@@ -298,8 +279,6 @@ function LateFeeActionModal({ payment, accounts, mode, onClose, onSubmit, saving
             </label>
           )}
 
-          {error && <div className="platform-owner-notice error" role="alert"><span>{error}</span></div>}
-
           <div className="platform-owner-modal-actions">
             <button type="button" className="platform-owner-button secondary"
               onClick={onClose} disabled={saving}>Cancel</button>
@@ -326,16 +305,13 @@ export default function PlatformOwnerCollections() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const [actionError, setActionError] = useState("");
-  const [actionNotice, setActionNotice] = useState("");
+  const { showToast } = useToast();
   const [selected, setSelected] = useState(null);
   const [filter, setFilter] = useState("pending");
   const [asOfDate, setAsOfDate] = useState("");
 
   const loadCollections = useCallback(async () => {
     setLoading(true);
-    setLoadError("");
 
     try {
       const [collections, financialAccounts] = await Promise.all([
@@ -350,11 +326,11 @@ export default function PlatformOwnerCollections() {
       setAsOfDate(collections.as_of_date || "");
       setAccounts(financialAccounts.accounts || []);
     } catch (err) {
-      setLoadError(err.message || "Collections could not be loaded.");
+      showToast(err.message || "Collections could not be loaded.", { type: "error" });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     loadCollections();
@@ -364,25 +340,23 @@ export default function PlatformOwnerCollections() {
     if (!selected) return;
 
     setSaving(true);
-    setActionError("");
-    setActionNotice("");
 
     try {
       if (selected.mode === "confirm") {
         await platformOwnerApi.confirmPayment(paymentId, payload);
-        setActionNotice("Repayment confirmed and posted successfully.");
+        showToast("Repayment confirmed and posted successfully.", { type: "success" });
       } else if (selected.mode === "reject") {
         await platformOwnerApi.rejectPayment(paymentId, payload);
-        setActionNotice("Reported repayment rejected. No accounting entry was created.");
+        showToast("Reported repayment rejected. No accounting entry was created.", { type: "info" });
       } else {
         await platformOwnerApi.reversePayment(paymentId, payload);
-        setActionNotice("Repayment reversed successfully.");
+        showToast("Repayment reversed successfully.", { type: "success" });
       }
 
       setSelected(null);
       await loadCollections();
     } catch (err) {
-      setActionError(err.message || "The repayment operation failed.");
+      showToast(err.message || "The repayment operation failed.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -392,25 +366,23 @@ export default function PlatformOwnerCollections() {
     if (!selectedFee) return;
 
     setSaving(true);
-    setActionError("");
-    setActionNotice("");
 
     try {
       if (selectedFee.mode === "confirm") {
         await platformOwnerApi.confirmLateFeePayment(paymentId, payload);
-        setActionNotice("Late-fee payment confirmed and posted successfully.");
+        showToast("Late-fee payment confirmed and posted successfully.", { type: "success" });
       } else if (selectedFee.mode === "reject") {
         await platformOwnerApi.rejectLateFeePayment(paymentId, payload);
-        setActionNotice("Late-fee payment report rejected.");
+        showToast("Late-fee payment report rejected.", { type: "info" });
       } else {
         await platformOwnerApi.reverseLateFeePayment(paymentId, payload);
-        setActionNotice("Late-fee payment reversed. Fee balances restored.");
+        showToast("Late-fee payment reversed. Fee balances restored.", { type: "success" });
       }
 
       setSelectedFee(null);
       await loadCollections();
     } catch (err) {
-      setActionError(err.message || "The late-fee payment operation failed.");
+      showToast(err.message || "The late-fee payment operation failed.", { type: "error" });
     } finally {
       setSaving(false);
     }
@@ -441,16 +413,6 @@ export default function PlatformOwnerCollections() {
         </button>
       </div>
 
-      {loadError && (
-        <Notice type="error" onClose={() => setLoadError("")}>
-          {loadError}
-        </Notice>
-      )}
-      {actionNotice && (
-        <Notice type="success" onClose={() => setActionNotice("")}>
-          {actionNotice}
-        </Notice>
-      )}
 
       <div className="platform-owner-stat-row">
         <div className="platform-owner-stat-card">
@@ -544,8 +506,6 @@ export default function PlatformOwnerCollections() {
                           type="button"
                           className="platform-owner-button primary"
                           onClick={() => {
-                            setActionError("");
-                            setActionNotice("");
                             setSelected({ payment, mode: "confirm" });
                           }}
                         >
@@ -555,8 +515,6 @@ export default function PlatformOwnerCollections() {
                           type="button"
                           className="platform-owner-button secondary"
                           onClick={() => {
-                            setActionError("");
-                            setActionNotice("");
                             setSelected({ payment, mode: "reject" });
                           }}
                         >
@@ -604,16 +562,12 @@ export default function PlatformOwnerCollections() {
                       <div className="platform-owner-inline-actions">
                         <button type="button" className="platform-owner-button primary"
                           onClick={() => {
-                            setActionError("");
-                            setActionNotice("");
                             setSelectedFee({ payment, mode: "confirm" });
                           }}>
                           <CheckCircle size={14} /> Confirm
                         </button>
                         <button type="button" className="platform-owner-button secondary"
                           onClick={() => {
-                            setActionError("");
-                            setActionNotice("");
                             setSelectedFee({ payment, mode: "reject" });
                           }}>
                           <X size={14} /> Reject
@@ -663,8 +617,6 @@ export default function PlatformOwnerCollections() {
                         type="button"
                         className="platform-owner-button secondary"
                         onClick={() => {
-                          setActionError("");
-                          setActionNotice("");
                           setSelectedFee({ payment, mode: "reverse" });
                         }}
                       >
@@ -730,12 +682,10 @@ export default function PlatformOwnerCollections() {
           onClose={() => {
             if (!saving) {
               setSelectedFee(null);
-              setActionError("");
             }
           }}
           onSubmit={processLateFeePayment}
           saving={saving}
-          error={actionError}
         />
       )}
 
@@ -747,12 +697,10 @@ export default function PlatformOwnerCollections() {
           onClose={() => {
             if (!saving) {
               setSelected(null);
-              setActionError("");
             }
           }}
           onSubmit={processPayment}
           saving={saving}
-          error={actionError}
         />
       )}
     </div>

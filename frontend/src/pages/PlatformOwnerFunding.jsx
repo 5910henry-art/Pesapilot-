@@ -15,6 +15,7 @@ import {
   CircleDollarSign,
 } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
+import { useToast } from "../context/ToastContext";
 
 const ZERO_DECIMAL = new Set([
   "JPY", "UGX", "RWF", "BIF", "DJF", "GNF", "KMF", "XAF", "XOF",
@@ -63,8 +64,8 @@ export default function PlatformOwnerFunding() {
   const [accountCurrencies, setAccountCurrencies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [savingAccount, setSavingAccount] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const [accountMessage, setAccountMessage] = useState(null);
+  const { showToast } = useToast();
+  const [accountValidation, setAccountValidation] = useState("");
   const [investorSearch, setInvestorSearch] = useState("");
   const [accountForm, setAccountForm] = useState({
     name: "PesaPilot Main Account",
@@ -76,7 +77,6 @@ export default function PlatformOwnerFunding() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setLoadError("");
     try {
       const [portfolio, investorResponse, accountResponse] = await Promise.all([
         platformOwnerApi.getPortfolioReport(),
@@ -88,11 +88,11 @@ export default function PlatformOwnerFunding() {
       setAccounts(accountResponse.accounts || []);
       setAccountCurrencies(accountResponse.currencies || []);
     } catch (err) {
-      setLoadError(err.message || "Could not load funding information.");
+      showToast(err.message || "Could not load funding information.", { type: "error" });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     load();
@@ -105,10 +105,10 @@ export default function PlatformOwnerFunding() {
 
   const handleCreateAccount = async (event) => {
     event.preventDefault();
-    setAccountMessage(null);
+    setAccountValidation("");
 
     if (!accountForm.name.trim() || !accountForm.currency_code) {
-      setAccountMessage({ type: "error", text: "Enter an account name and select a currency." });
+      setAccountValidation("Enter an account name and select a currency.");
       return;
     }
 
@@ -121,7 +121,7 @@ export default function PlatformOwnerFunding() {
         display_reference: accountForm.display_reference.trim(),
       });
 
-      setAccountMessage({ type: "success", text: response.message || "Platform account created successfully." });
+      showToast(response.message || "Platform account created successfully.", { type: "success" });
       setAccountForm((current) => ({
         ...current,
         name: "",
@@ -130,7 +130,7 @@ export default function PlatformOwnerFunding() {
       }));
       await load();
     } catch (err) {
-      setAccountMessage({ type: "error", text: err.message || "Could not create the platform account." });
+      showToast(err.message || "Could not create the platform account.", { type: "error" });
     } finally {
       setSavingAccount(false);
     }
@@ -205,9 +205,6 @@ export default function PlatformOwnerFunding() {
         </button>
       </header>
 
-      {loadError && (
-        <div className="platform-owner-finance-error" role="alert">{loadError}</div>
-      )}
 
       {loading ? (
         <div className="platform-owner-finance-panel funding-loading">
@@ -351,14 +348,10 @@ export default function PlatformOwnerFunding() {
                 </label>
               </div>
 
-              {accountMessage && (
-                <div
-                  className={accountMessage.type === "error"
-                    ? "platform-owner-finance-error"
-                    : "platform-owner-finance-success"}
-                  role={accountMessage.type === "error" ? "alert" : "status"}
-                >
-                  {accountMessage.text}
+
+              {accountValidation && (
+                <div className="platform-owner-finance-error" role="alert">
+                  {accountValidation}
                 </div>
               )}
 

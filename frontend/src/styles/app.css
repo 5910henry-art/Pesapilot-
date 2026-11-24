@@ -21031,3 +21031,73 @@ button { font: inherit; cursor: pointer; }
   margin-top: 9px;
   padding-top: 7px;
 }
+
+/* PesaPilot PWA update prompt */
+.pwa-update-prompt {
+  position: fixed;
+  z-index: 9999;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  width: min(440px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid #dce8e2;
+  border-radius: 14px;
+  background: #fff;
+  color: #10251e;
+  box-shadow: 0 12px 36px rgb(16 37 30 / 16%);
+}
+
+.pwa-update-prompt strong {
+  display: block;
+  font-size: 14px;
+}
+
+.pwa-update-prompt p {
+  margin: 4px 0 0;
+  color: #64756d;
+  font-size: 13px;
+}
+
+.pwa-update-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.pwa-update-actions button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #087c55;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pwa-update-actions .pwa-update-dismiss {
+  background: #eef3f0;
+  color: #29483b;
+}
+
+@media (max-width: 520px) {
+  .pwa-update-prompt {
+    right: 12px;
+    bottom: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    width: calc(100vw - 24px);
+  }
+
+  .pwa-update-actions {
+    justify-content: flex-end;
+  }
+}
