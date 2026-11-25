@@ -187,6 +187,31 @@ def _loan_response(loan):
     }
 
 
+def _counterparty_loan_response(loan, viewer_workspace_id):
+    """Serialize a linked loan for its lender's read-only view."""
+    profile = UserProfile.query.filter_by(
+        user_id=loan.created_by,
+    ).first()
+
+    borrower_name = "Borrower"
+    if profile is not None:
+        borrower_name = " ".join(
+            part for part in (profile.first_name, profile.last_name)
+            if part
+        ).strip() or borrower_name
+
+    data = _loan_response(loan)
+    data.update({
+        "workspace_id": str(viewer_workspace_id),
+        "direction": "lent",
+        "counterparty_name": borrower_name,
+        "counterparty_phone": None,
+        "counterparty_user_id": str(loan.created_by),
+        "is_counterparty_view": True,
+    })
+    return data
+
+
 @loans_bp.get("")
 @jwt_required()
 def list_personal_loans():
@@ -212,17 +237,39 @@ def list_personal_loans():
         }), 404
 
     try:
-        loans = (
+        owned_loans = (
             PersonalLoan.query
             .filter_by(workspace_id=workspace_id)
             .order_by(PersonalLoan.created_at.desc())
             .all()
         )
 
+        linked_loans = (
+            PersonalLoan.query
+            .filter(
+                PersonalLoan.direction == "borrowed",
+                PersonalLoan.counterparty_user_id == user_id,
+                PersonalLoan.status.notin_(
+                    ("draft", "pending_approval", "rejected")
+                ),
+            )
+            .all()
+        )
+
+        loan_data = [_loan_response(loan) for loan in owned_loans]
+        loan_data.extend(
+            _counterparty_loan_response(loan, workspace_id)
+            for loan in linked_loans
+        )
+        loan_data.sort(
+            key=lambda item: item["created_at"],
+            reverse=True,
+        )
+
         return jsonify({
             "success": True,
-            "count": len(loans),
-            "loans": [_loan_response(loan) for loan in loans],
+            "count": len(loan_data),
+            "loans": loan_data,
         }), 200
 
     except Exception:
@@ -2159,6 +2206,7 @@ def confirm_personal_loan_payment(loan_id, payment_id):
         return jsonify({"success": False, "message": "The repayment could not be confirmed."}), 500
 
 
+
 @loans_bp.get("/<uuid:loan_id>")
 @jwt_required()
 def get_personal_loan(loan_id):
@@ -2189,6 +2237,18 @@ def get_personal_loan(loan_id):
             workspace_id=workspace_id,
         ).first()
 
+        is_counterparty_view = False
+        if loan is None:
+            loan = PersonalLoan.query.filter(
+                PersonalLoan.id == loan_id,
+                PersonalLoan.direction == "borrowed",
+                PersonalLoan.counterparty_user_id == user_id,
+                PersonalLoan.status.notin_(
+                    ("draft", "pending_approval", "rejected")
+                ),
+            ).first()
+            is_counterparty_view = loan is not None
+
         if loan is None:
             return jsonify({
                 "success": False,
@@ -2198,7 +2258,7 @@ def get_personal_loan(loan_id):
         installments = (
             LoanInstallment.query
             .filter_by(
-                workspace_id=workspace_id,
+                workspace_id=loan.workspace_id,
                 personal_loan_id=loan.id,
             )
             .order_by(
@@ -2208,14 +2268,14 @@ def get_personal_loan(loan_id):
         )
 
         disbursement = LoanDisbursement.query.filter_by(
-            workspace_id=workspace_id,
+            workspace_id=loan.workspace_id,
             personal_loan_id=loan.id,
         ).first()
 
         payments = (
             LoanPayment.query
             .filter_by(
-                workspace_id=workspace_id,
+                workspace_id=loan.workspace_id,
                 personal_loan_id=loan.id,
             )
             .order_by(
@@ -2256,8 +2316,8 @@ def get_personal_loan(loan_id):
         if disbursement is not None:
             disbursement_data = {
                 "id": str(disbursement.id),
-                "financial_account_id": str(disbursement.financial_account_id),
-                "journal_entry_id": str(disbursement.journal_entry_id),
+                "financial_account_id": (None if is_counterparty_view else str(disbursement.financial_account_id)),
+                "journal_entry_id": (None if is_counterparty_view else str(disbursement.journal_entry_id)),
                 "amount_minor": disbursement.amount_minor,
                 "disbursement_date": disbursement.disbursement_date.isoformat(),
                 "payment_method": disbursement.payment_method,
@@ -2269,11 +2329,13 @@ def get_personal_loan(loan_id):
                 "id": str(payment.id),
                 "financial_account_id": (
                     str(payment.financial_account_id)
-                    if payment.financial_account_id else None
+                    if payment.financial_account_id and not is_counterparty_view
+                    else None
                 ),
                 "journal_entry_id": (
                     str(payment.journal_entry_id)
-                    if payment.journal_entry_id else None
+                    if payment.journal_entry_id and not is_counterparty_view
+                    else None
                 ),
                 "amount_minor": payment.amount_minor,
                 "principal_minor": payment.principal_minor,
@@ -2294,7 +2356,11 @@ def get_personal_loan(loan_id):
 
         return jsonify({
             "success": True,
-            "loan": _loan_response(loan),
+            "loan": (
+                _counterparty_loan_response(loan, workspace_id)
+                if is_counterparty_view
+                else _loan_response(loan)
+            ),
             "disbursement": disbursement_data,
             "installments": [
                 {

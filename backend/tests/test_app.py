@@ -1500,6 +1500,23 @@ class PesaPilotTestCase(unittest.TestCase):
         headers = {"Authorization": f"Bearer {token}"}
         return lender, headers
 
+    def create_lender_workspace(self, lender):
+        workspace = Workspace(
+            name="Lender Personal Workspace",
+            workspace_type="personal",
+            functional_currency="KES",
+        )
+        db.session.add(workspace)
+        db.session.flush()
+
+        db.session.add(WorkspaceMember(
+            workspace_id=workspace.id,
+            user_id=lender.id,
+            role="owner",
+        ))
+        db.session.commit()
+        return workspace
+
     def create_personal_loan(self, **overrides):
         start = date.today()
         payload = {
@@ -8835,6 +8852,123 @@ class PesaPilotTestCase(unittest.TestCase):
             item.status == "scheduled"
             for item in installments
         ))
+
+    def test_approved_linked_loan_is_visible_to_borrower_and_lender(self):
+        lender, lender_headers = self.create_verified_lender()
+        lender_workspace = self.create_lender_workspace(lender)
+        start = date.today()
+
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+            start_date=start.isoformat(),
+            due_date=(start.replace(
+                year=start.year + 1
+            ) if start.month != 2 or start.day <= 28 else
+                date(start.year + 1, 2, 28)).isoformat(),
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+
+        loan_id = response.json["loan"]["id"]
+
+        # A pending request must not appear in the lender's normal Loans list.
+        pending_list = self.client.get(
+            f"/api/v1/loans?workspace_id={lender_workspace.id}",
+            headers=lender_headers,
+        )
+        self.assertEqual(pending_list.status_code, 200, pending_list.json)
+        self.assertEqual(pending_list.json["count"], 0)
+
+        # The lender approves the request.
+        approval = self.client.post(
+            f"/api/v1/loans/{loan_id}/approve",
+            headers=lender_headers,
+            json={},
+        )
+        self.assertEqual(approval.status_code, 200, approval.json)
+        self.assertEqual(approval.json["request"]["status"], "active")
+
+        # The borrower still sees the original loan in their own workspace.
+        borrower_list = self.client.get(
+            f"/api/v1/loans?workspace_id={self.workspace.id}",
+            headers=self.headers,
+        )
+        self.assertEqual(borrower_list.status_code, 200, borrower_list.json)
+        borrower_matches = [
+            item for item in borrower_list.json["loans"]
+            if item["id"] == loan_id
+        ]
+        self.assertEqual(len(borrower_matches), 1)
+        self.assertEqual(borrower_matches[0]["direction"], "borrowed")
+
+        # The lender sees the same loan as money lent, not a duplicate record.
+        lender_list = self.client.get(
+            f"/api/v1/loans?workspace_id={lender_workspace.id}",
+            headers=lender_headers,
+        )
+        self.assertEqual(lender_list.status_code, 200, lender_list.json)
+        lender_matches = [
+            item for item in lender_list.json["loans"]
+            if item["id"] == loan_id
+        ]
+        self.assertEqual(len(lender_matches), 1)
+
+        lender_loan = lender_matches[0]
+        self.assertEqual(lender_loan["direction"], "lent")
+        self.assertTrue(lender_loan["is_counterparty_view"])
+        self.assertEqual(
+            lender_loan["workspace_id"],
+            str(lender_workspace.id),
+        )
+        self.assertEqual(
+            lender_loan["counterparty_user_id"],
+            str(self.user.id),
+        )
+        self.assertIsNone(lender_loan["counterparty_phone"])
+
+        # The lender can open details and see the repayment schedule.
+        details = self.client.get(
+            f"/api/v1/loans/{loan_id}?workspace_id={lender_workspace.id}",
+            headers=lender_headers,
+        )
+        self.assertEqual(details.status_code, 200, details.json)
+        self.assertTrue(details.json["success"])
+        self.assertTrue(details.json["loan"]["is_counterparty_view"])
+        self.assertEqual(details.json["loan"]["direction"], "lent")
+        self.assertEqual(len(details.json["installments"]), 12)
+
+        # An unrelated user with their own workspace cannot access the loan.
+        outsider = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        outsider_workspace = Workspace(
+            name="Outsider Personal Workspace",
+            workspace_type="personal",
+            functional_currency="KES",
+        )
+        db.session.add_all([outsider, outsider_workspace])
+        db.session.flush()
+
+        db.session.add(WorkspaceMember(
+            workspace_id=outsider_workspace.id,
+            user_id=outsider.id,
+            role="owner",
+        ))
+        db.session.commit()
+
+        outsider_headers = {
+            "Authorization": "Bearer " + create_access_token(
+                identity=str(outsider.id)
+            ),
+        }
+
+        outsider_details = self.client.get(
+            f"/api/v1/loans/{loan_id}?workspace_id={outsider_workspace.id}",
+            headers=outsider_headers,
+        )
+        self.assertEqual(outsider_details.status_code, 404)
 
     def test_borrower_cannot_activate_pending_linked_request(self):
         lender, _ = self.create_verified_lender()

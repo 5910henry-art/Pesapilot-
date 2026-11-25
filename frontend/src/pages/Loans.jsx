@@ -1107,6 +1107,7 @@ export default function Loans() {
         ) : (
           <div className="loans-record-list">
             {visibleLoans.map((loan) => {
+              const isCounterpartyView = loan.is_counterparty_view === true;
               const expanded = expandedLoan === loan.id;
               const details = loanDetails[loan.id];
 
@@ -1185,6 +1186,11 @@ export default function Loans() {
                               {" · "}
                               {money(loan.principal_minor, loan.currency_code)}
                             </p>
+                            {isCounterpartyView && (
+                              <p className="loans-muted">
+                                Shared loan · Read-only lender view
+                              </p>
+                            )}
                           </div>
                           <button
                             type="button"
@@ -1258,7 +1264,7 @@ export default function Loans() {
                                   <CheckCircle2 size={14} /> Disbursement posted
                                 </small>
                               </div>
-                            ) : loan.status === "active" ? (
+                            ) : loan.status === "active" && !isCounterpartyView ? (
                               disbursementLoan !== loan.id ? (
                                 <div>
                                   <p className="loans-muted">
@@ -1450,7 +1456,9 @@ export default function Loans() {
                               )
                             ) : (
                               <p className="loans-muted">
-                                Disbursement becomes available after the loan is activated.
+                                {isCounterpartyView
+                                  ? "No disbursement has been recorded yet."
+                                  : "Disbursement becomes available after the loan is activated."}
                               </p>
                             )}
                           </section>
@@ -1534,7 +1542,7 @@ export default function Loans() {
                                       <p className="loans-muted">{payment.notes}</p>
                                     )}
 
-                                    {payment.status === "pending" && (
+                                    {!isCounterpartyView && payment.status === "pending" && (
                                       <div className="loans-confirm-payment">
                                         {editingPaymentId === payment.id ? (
                                           <form
@@ -1735,7 +1743,7 @@ export default function Loans() {
                             <p className="loans-muted">No repayments have been recorded.</p>
                           )}
 
-                          {["active", "overdue", "restructured"].includes(loan.status) && (
+                          {!isCounterpartyView && ["active", "overdue", "restructured"].includes(loan.status) && (
                             <div className="loans-repayment-actions">
                               {repaymentLoan !== loan.id ? (
                                 <button
@@ -1856,7 +1864,7 @@ export default function Loans() {
                             </div>
                           )}
 
-                          {loan.status === "draft" && (
+                          {!isCounterpartyView && loan.status === "draft" && (
                             <>
                               <button
                                 type="button"
