@@ -16,6 +16,7 @@ from app.services.loan_repayments import (
     build_payment_allocations,
     confirm_loan_payment,
 )
+from app.services.notifications import create_notification
 
 from . import loans_bp
 
@@ -1681,6 +1682,24 @@ def confirm_personal_loan_payment(loan_id, payment_id):
             confirmed_by=user_id,
             financial_account_id=financial_account_id,
         )
+
+        recipient_ids = {
+            participant_id
+            for participant_id in (
+                loan.created_by,
+                loan.counterparty_user_id,
+            )
+            if participant_id is not None and participant_id != user_id
+        }
+        for recipient_id in recipient_ids:
+            create_notification(
+                user_id=recipient_id,
+                category="loan_repayments",
+                title="Loan repayment confirmed",
+                body="A repayment on your linked personal loan has been confirmed.",
+                target_url="/loans",
+                dedupe_key=f"personal-loan-payment-confirmed:{confirmed.id}",
+            )
 
         db.session.commit()
 

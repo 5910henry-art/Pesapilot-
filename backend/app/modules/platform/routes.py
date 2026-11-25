@@ -37,6 +37,7 @@ from app.models import (
 from app.models.core import (
     Currency, User, AuditLog, utc_now, Workspace, WorkspaceMember, FinancialAccount
 )
+from app.services.notifications import create_notification
 from app.services.platform_lending import (
     PlatformLendingValidationError,
     create_platform_loan_from_application,
@@ -997,6 +998,27 @@ def decide_platform_application(application_id):
                 "success": False,
                 "message": "Application not found.",
             }), 404
+
+        if application.customer_id is not None:
+            approved = decision == "approved"
+            create_notification(
+                user_id=application.customer_id,
+                category="loan_application_updates",
+                title=(
+                    "Loan application approved"
+                    if approved else "Loan application update"
+                ),
+                body=(
+                    "Your PesaPilot loan application has been approved."
+                    if approved else
+                    "Your PesaPilot loan application was not approved."
+                ),
+                target_url="/loans",
+                dedupe_key=(
+                    f"platform-loan-application-decision:"
+                    f"{application.id}:{decision}"
+                ),
+            )
 
         db.session.commit()
 

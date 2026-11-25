@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Wallet, ArrowLeftRight, ChartNoAxesCombined, Sparkles,
-  PiggyBank, HandCoins, Landmark, Receipt, Settings, Menu, X, Bell,
+  PiggyBank, HandCoins, Landmark, Receipt, Settings, Menu, X,
   CircleUserRound, ChevronDown, LogOut, PanelLeftClose, PanelLeftOpen, ReceiptText,
   Plus
 } from "lucide-react";
 import { useAuth } from "../context/useAuth";
 import SessionExpiryGuard from "../components/SessionExpiryGuard";
+import NotificationCenter from "../components/NotificationCenter";
 import { apiRequest, authApi } from "../api/client";
 
 const navigation = [
@@ -326,10 +327,7 @@ export default function DashboardLayout() {
           </div>
 
           <div className="topbar-actions">
-            <button className="icon-button" aria-label="Notifications">
-              <Bell size={19} />
-              <span className="notification-dot" />
-            </button>
+            <NotificationCenter />
 
             <div className="topbar-user">
               <CircleUserRound size={22} />

@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 from app import create_app
 from app.extensions import db
 from app.models.loan_repayments import LoanPaymentAllocation
+from app.models.notifications import Notification
 from app.models import (
     BusinessProfile,
     Currency,
@@ -90,6 +91,7 @@ from app.services.ai_manager.data_service import build_financial_snapshot
 from app.services.ai_manager.rules_engine import generate_insights
 from app.services.ai_manager.providers.groq import sanitize_financial_context
 from app.services.loan_schedules import build_repayment_schedule
+from app.services.bill_reminders import send_bill_reminders
 from app.services.platform_affordability_evidence import (
     build_affordability_evidence_report,
     collect_existing_monthly_debt,
@@ -7104,6 +7106,19 @@ class PesaPilotTestCase(unittest.TestCase):
             "Your application has been approved.",
         )
 
+        approval_notifications = Notification.query.filter_by(
+            user_id=self.user.id,
+            category="loan_application_updates",
+            dedupe_key=f"platform-loan-application-decision:{application.id}:approved",
+        ).all()
+        self.assertEqual(len(approval_notifications), 1)
+        self.assertEqual(approval_notifications[0].title, "Loan application approved")
+        self.assertEqual(
+            approval_notifications[0].body,
+            "Your PesaPilot loan application has been approved.",
+        )
+        self.assertEqual(approval_notifications[0].target_url, "/loans")
+
         db.session.refresh(application)
         self.assertEqual(application.reviewed_by, self.user.id)
         self.assertIsNotNone(application.reviewed_at)
@@ -7257,6 +7272,18 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(
             response.json["application"]["decision_notes"],
             "Insufficient eligibility.",
+        )
+
+        rejection_notifications = Notification.query.filter_by(
+            user_id=self.user.id,
+            category="loan_application_updates",
+            dedupe_key=f"platform-loan-application-decision:{application.id}:rejected",
+        ).all()
+        self.assertEqual(len(rejection_notifications), 1)
+        self.assertEqual(rejection_notifications[0].title, "Loan application update")
+        self.assertEqual(
+            rejection_notifications[0].body,
+            "Your PesaPilot loan application was not approved.",
         )
 
         db.session.refresh(application)
@@ -10296,6 +10323,51 @@ class PesaPilotTestCase(unittest.TestCase):
 
         return loan, installment, payment
 
+    def test_confirmed_personal_loan_repayment_notifies_linked_counterparty(self):
+        loan, installment, payment = self.create_repayment_case("borrowed")
+        counterparty = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(counterparty)
+        db.session.flush()
+        loan.counterparty_user_id = counterparty.id
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/loans/{loan.id}/payments/{payment.id}/confirm",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "financial_account_id": str(self.source_account.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.json)
+        confirmed = db.session.get(LoanPayment, payment.id)
+        self.assertEqual(confirmed.status, "confirmed")
+
+        notifications = Notification.query.filter_by(
+            user_id=counterparty.id,
+            category="loan_repayments",
+            dedupe_key=f"personal-loan-payment-confirmed:{payment.id}",
+        ).all()
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0].title, "Loan repayment confirmed")
+        self.assertEqual(
+            notifications[0].body,
+            "A repayment on your linked personal loan has been confirmed.",
+        )
+        self.assertEqual(notifications[0].target_url, "/loans")
+        self.assertEqual(
+            Notification.query.filter_by(
+                user_id=self.user.id,
+                dedupe_key=f"personal-loan-payment-confirmed:{payment.id}",
+            ).count(),
+            0,
+        )
+
     def test_borrowed_loan_repayment_posts_correct_accounting(self):
         loan, installment, payment = self.create_repayment_case("borrowed")
 
@@ -11074,6 +11146,110 @@ class PesaPilotTestCase(unittest.TestCase):
             BillPayment.query.filter_by(
                 bill_id=UUID(bill_id),
                 workspace_id=self.workspace.id,
+            ).count(),
+            0,
+        )
+
+    def _prepare_bill_reminder(self, due_date, timezone_name="Africa/Nairobi"):
+        profile = UserProfile.query.filter_by(user_id=self.user.id).first()
+        if profile is None:
+            profile = UserProfile(
+                user_id=self.user.id,
+                first_name="Test",
+                last_name="User",
+                timezone=timezone_name,
+                preferred_currency="KES",
+            )
+            db.session.add(profile)
+        else:
+            profile.timezone = timezone_name
+
+        created, _ = self.create_bill(40000)
+        bill = Bill.query.filter_by(
+            id=UUID(created.json["bill"]["id"]),
+            workspace_id=self.workspace.id,
+        ).one()
+        bill.due_date = due_date
+        db.session.commit()
+        return bill
+
+    def test_bill_reminder_three_days_before_due_and_deduplicates(self):
+        bill = self._prepare_bill_reminder(date(2026, 11, 28))
+        now = datetime(2026, 11, 25, 9, 0, tzinfo=timezone.utc)
+
+        first = send_bill_reminders(now=now)
+        db.session.commit()
+
+        self.assertEqual(first["notifications_created"], 1)
+        notification = Notification.query.filter_by(
+            user_id=self.user.id,
+            dedupe_key=(
+                f"bill-reminder:{bill.id}:three-days:2026-11-28"
+            ),
+        ).one()
+        self.assertEqual(notification.category, "bill_reminders")
+        self.assertEqual(notification.title, "Bill due in 3 days")
+        self.assertEqual(notification.target_url, "/bills")
+
+        second = send_bill_reminders(now=now)
+        self.assertEqual(second["notifications_created"], 0)
+        self.assertEqual(second["already_notified"], 1)
+        self.assertEqual(
+            Notification.query.filter_by(
+                user_id=self.user.id,
+                category="bill_reminders",
+            ).count(),
+            1,
+        )
+
+    def test_bill_reminder_is_created_on_due_date(self):
+        bill = self._prepare_bill_reminder(date(2026, 11, 28))
+        now = datetime(2026, 11, 28, 9, 0, tzinfo=timezone.utc)
+
+        result = send_bill_reminders(now=now)
+        db.session.commit()
+
+        self.assertEqual(result["notifications_created"], 1)
+        notification = Notification.query.filter_by(
+            user_id=self.user.id,
+            dedupe_key=f"bill-reminder:{bill.id}:due-today:2026-11-28",
+        ).one()
+        self.assertEqual(notification.title, "Bill due today")
+
+    def test_bill_reminder_uses_recipient_local_date(self):
+        bill = self._prepare_bill_reminder(
+            date(2026, 11, 27),
+            timezone_name="America/Los_Angeles",
+        )
+        # 02:00 UTC on November 25 is still November 24 in Los Angeles.
+        now = datetime(2026, 11, 25, 2, 0, tzinfo=timezone.utc)
+
+        result = send_bill_reminders(now=now)
+        db.session.commit()
+
+        self.assertEqual(result["notifications_created"], 1)
+        Notification.query.filter_by(
+            user_id=self.user.id,
+            dedupe_key=(
+                f"bill-reminder:{bill.id}:three-days:2026-11-27"
+            ),
+        ).one()
+
+    def test_fully_paid_bill_does_not_receive_reminder(self):
+        bill = self._prepare_bill_reminder(date(2026, 11, 28))
+        payment = self.pay_bill(str(bill.id), 40000)
+        self.assertEqual(payment.status_code, 201, payment.json)
+
+        now = datetime(2026, 11, 25, 9, 0, tzinfo=timezone.utc)
+        result = send_bill_reminders(now=now)
+        db.session.commit()
+
+        self.assertEqual(result["notifications_created"], 0)
+        self.assertEqual(result["fully_paid_or_invalid"], 1)
+        self.assertEqual(
+            Notification.query.filter_by(
+                user_id=self.user.id,
+                category="bill_reminders",
             ).count(),
             0,
         )

@@ -1,3 +1,11 @@
+from .notifications import (
+    NOTIFICATION_CATEGORIES,
+    Notification,
+    NotificationPreference,
+    PushSubscription,
+    NotificationDelivery,
+)
+
 from .core import (
     User,
     UserProfile,

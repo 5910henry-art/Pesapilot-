@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useRegisterSW } from "virtual:pwa-register/react";
 
 export default function PWAUpdatePrompt() {
@@ -9,6 +10,21 @@ export default function PWAUpdatePrompt() {
       console.error("PesaPilot service worker registration failed:", error);
     },
   });
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || !("serviceWorker" in navigator)) {
+      return undefined;
+    }
+
+    navigator.serviceWorker
+      .register("/dev-sw.js", { type: "module" })
+      .catch((error) => {
+        console.error(
+          "PesaPilot development service worker registration failed:",
+          error,
+        );
+      });
+  }, []);
 
   if (!needRefresh) return null;
 

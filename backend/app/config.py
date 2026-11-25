@@ -6,6 +6,11 @@ class Config:
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
     IDENTITY_ENCRYPTION_KEY = os.getenv("IDENTITY_ENCRYPTION_KEY")
+    VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+    VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+    VAPID_CLAIMS_SUBJECT = os.getenv(
+        "VAPID_CLAIMS_SUBJECT", "mailto:admin@pesapilot.app"
+    )
 
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL")
 

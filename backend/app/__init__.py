@@ -15,6 +15,7 @@ from .modules.loans import loans_bp
 from .modules.bills import bills_bp
 from .modules.ai_manager import ai_manager_bp
 from .modules.platform import platform_bp
+from .modules.notifications import notifications_bp
 
 
 def create_app(test_config=None):
@@ -90,6 +91,7 @@ def create_app(test_config=None):
     app.register_blueprint(bills_bp)
     app.register_blueprint(ai_manager_bp)
     app.register_blueprint(platform_bp)
+    app.register_blueprint(notifications_bp)
 
     @app.cli.command("platform-assess-late-fees")
     @click.option(
@@ -127,6 +129,56 @@ def create_app(test_config=None):
             click.echo(
                 f"Assessed {count} late fee(s) as of "
                 f"{assessment_date.isoformat()}."
+            )
+        except Exception:
+            db.session.rollback()
+            raise
+
+    @app.cli.command("send-bill-reminders")
+    def send_bill_reminders_command():
+        """Create due-date reminders for outstanding bills."""
+        from .services.bill_reminders import send_bill_reminders
+
+        try:
+            result = send_bill_reminders()
+            db.session.commit()
+            click.echo(
+                "Bill reminder run complete: "
+                f"bills_checked={result['bills_checked']}, "
+                f"created={result['notifications_created']}, "
+                f"already_notified={result['already_notified']}, "
+                f"preferences_disabled={result['preferences_disabled']}, "
+                f"fully_paid_or_invalid={result['fully_paid_or_invalid']}."
+            )
+        except Exception:
+            db.session.rollback()
+            raise
+
+    @app.cli.command("deliver-push-notifications")
+    @click.option(
+        "--batch-size",
+        default=50,
+        type=click.IntRange(1, 500),
+        show_default=True,
+        help="Maximum number of push deliveries to process.",
+    )
+    def deliver_push_notifications(batch_size):
+        """Deliver queued Android/Web Push notifications."""
+        from .services.push_delivery import (
+            deliver_pending_push_notifications,
+        )
+
+        try:
+            result = deliver_pending_push_notifications(
+                batch_size=batch_size,
+            )
+            db.session.commit()
+            click.echo(
+                "Push delivery run complete: "
+                f"processed={result['processed']}, "
+                f"sent={result['sent']}, "
+                f"failed={result['failed']}, "
+                f"deferred={result['deferred']}."
             )
         except Exception:
             db.session.rollback()

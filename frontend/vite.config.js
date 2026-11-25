@@ -6,9 +6,13 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      strategies: "generateSW",
-      mode: "development",
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.js",
       registerType: "prompt",
+      devOptions: {
+        enabled: false,
+      },
       includeAssets: ["favicon.svg"],
       manifest: {
         id: "/",
@@ -42,8 +46,9 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
-        navigateFallbackDenylist: [/^\/api\//],
+      injectManifest: {
+        minify: false,
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
       },
     }),
