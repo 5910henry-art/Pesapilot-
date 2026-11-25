@@ -512,6 +512,24 @@ export const loansApi = {
     );
   },
 
+  listIncomingRequests() {
+    return apiRequest("/loans/incoming-requests");
+  },
+
+  approveIncomingRequest(loanId) {
+    return apiRequest(`/loans/${encodeURIComponent(loanId)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  },
+
+  rejectIncomingRequest(loanId, reason = "") {
+    return apiRequest(`/loans/${encodeURIComponent(loanId)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  },
+
   searchCounterparty(query) {
     return apiRequest(
       `/loans/counterparties/search?q=${encodeURIComponent(query)}`

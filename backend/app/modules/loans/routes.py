@@ -179,6 +179,9 @@ def _loan_response(loan):
         "due_date": loan.due_date.isoformat(),
         "status": loan.status,
         "description": loan.description,
+        "decision_reason": loan.decision_reason,
+        "decided_by": str(loan.decided_by) if loan.decided_by else None,
+        "decided_at": loan.decided_at.isoformat() if loan.decided_at else None,
         "created_at": loan.created_at.isoformat(),
         "updated_at": loan.updated_at.isoformat(),
     }
@@ -472,17 +475,27 @@ def create_personal_loan():
             installment_minor=installment,
             start_date=start_date,
             due_date=due_date,
-            status="draft",
+            status=(
+                "pending_approval"
+                if direction == "borrowed" and counterparty_user is not None
+                else "draft"
+            ),
             description=description.strip() if description else None,
         )
 
         db.session.add(loan)
         db.session.flush()
 
+        is_approval_request = (
+            direction == "borrowed" and counterparty_user is not None
+        )
         db.session.add(AuditLog(
             workspace_id=workspace_id,
             user_id=user_id,
-            action="personal_loan_created",
+            action=(
+                "personal_loan_requested"
+                if is_approval_request else "personal_loan_created"
+            ),
             resource_type="personal_loan",
             resource_id=str(loan.id),
             details={
@@ -491,15 +504,38 @@ def create_personal_loan():
                 "principal_minor": principal,
                 "currency": currency_code,
                 "counterparty_name": counterparty_name.strip(),
+                "status": loan.status,
             },
             ip_address=request.remote_addr,
         ))
+
+        if is_approval_request:
+            requester_profile = db.session.get(UserProfile, user_id)
+            requester_name = (
+                f"{requester_profile.first_name} {requester_profile.last_name}".strip()
+                if requester_profile else "A PesaPilot user"
+            )
+            create_notification(
+                user_id=counterparty_user.id,
+                category="loan_application_updates",
+                title="New loan request",
+                body=(
+                    f"{requester_name} has sent you a loan request "
+                    f"in {currency_code}. Please review it."
+                ),
+                target_url="/loans",
+                dedupe_key=f"personal-loan-request:{loan.id}:created",
+            )
 
         db.session.commit()
 
         return jsonify({
             "success": True,
-            "message": "Personal loan recorded successfully.",
+            "message": (
+                "Loan request sent to the selected PesaPilot user for approval."
+                if is_approval_request
+                else "Personal loan recorded successfully."
+            ),
             "loan": _loan_response(loan),
         }), 201
 
@@ -863,6 +899,261 @@ def update_personal_loan(loan_id):
             "message": "Personal loan could not be updated.",
         }), 500
 
+
+
+
+
+def _incoming_loan_response(loan):
+    profile = (
+        db.session.get(UserProfile, loan.created_by)
+        if loan.created_by else None
+    )
+    requester_name = (
+        f"{profile.first_name} {profile.last_name}".strip()
+        if profile else "PesaPilot user"
+    )
+
+    return {
+        "id": str(loan.id),
+        "direction": loan.direction,
+        "requester_name": requester_name,
+        "principal_minor": loan.principal_minor,
+        "currency_code": loan.currency_code,
+        "loan_type": loan.loan_type,
+        "interest_method": loan.interest_method,
+        "interest_rate_percent": str(loan.interest_rate_percent),
+        "repayment_frequency": loan.repayment_frequency,
+        "term_count": loan.term_count,
+        "installment_minor": loan.installment_minor,
+        "start_date": loan.start_date.isoformat(),
+        "due_date": loan.due_date.isoformat(),
+        "status": loan.status,
+        "description": loan.description,
+        "decision_reason": loan.decision_reason,
+        "created_at": loan.created_at.isoformat(),
+    }
+
+
+@loans_bp.get("/incoming-requests")
+@jwt_required()
+def list_incoming_loan_requests():
+    user_id = _user_id()
+
+    if user_id is None:
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    try:
+        loans = (
+            PersonalLoan.query
+            .filter_by(
+                counterparty_user_id=user_id,
+                direction="borrowed",
+                status="pending_approval",
+            )
+            .order_by(PersonalLoan.created_at.desc())
+            .all()
+        )
+
+        return jsonify({
+            "success": True,
+            "count": len(loans),
+            "requests": [
+                _incoming_loan_response(loan)
+                for loan in loans
+            ],
+        }), 200
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Incoming personal loan requests could not be loaded"
+        )
+        return jsonify({
+            "success": False,
+            "message": "Incoming loan requests could not be loaded.",
+        }), 500
+
+
+def _decide_incoming_loan(loan_id, approved):
+    user_id = _user_id()
+
+    if user_id is None:
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    data = request.get_json(silent=True)
+
+    if data is None:
+        data = {}
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "message": "A valid JSON object is required.",
+        }), 400
+
+    reason = data.get("reason") if not approved else None
+
+    if not approved and reason is not None:
+        if not isinstance(reason, str) or len(reason.strip()) > 500:
+            return jsonify({
+                "success": False,
+                "message": "Rejection reason must not exceed 500 characters.",
+            }), 400
+        reason = reason.strip() or None
+
+    try:
+        loan = (
+            PersonalLoan.query
+            .filter_by(
+                id=loan_id,
+                counterparty_user_id=user_id,
+                direction="borrowed",
+            )
+            .with_for_update()
+            .first()
+        )
+
+        # Do not reveal whether a loan exists to a non-lender.
+        if loan is None:
+            return jsonify({
+                "success": False,
+                "message": "Loan request not found.",
+            }), 404
+
+        if loan.status != "pending_approval":
+            return jsonify({
+                "success": False,
+                "message": "This loan request has already been decided or is no longer pending.",
+            }), 409
+
+        schedule = []
+
+        if approved:
+            existing_count = LoanInstallment.query.filter_by(
+                workspace_id=loan.workspace_id,
+                personal_loan_id=loan.id,
+            ).count()
+
+            if existing_count:
+                return jsonify({
+                    "success": False,
+                    "message": "A repayment schedule already exists for this request.",
+                }), 409
+
+            schedule = build_repayment_schedule(loan)
+
+            for item in schedule:
+                db.session.add(LoanInstallment(
+                    workspace_id=loan.workspace_id,
+                    personal_loan_id=loan.id,
+                    installment_number=item["installment_number"],
+                    due_date=item["due_date"],
+                    amount_minor=item["amount_minor"],
+                    principal_minor=item["principal_minor"],
+                    interest_minor=item["interest_minor"],
+                    paid_minor=0,
+                    status="scheduled",
+                ))
+
+            loan.status = "active"
+            loan.decision_reason = None
+            action = "personal_loan_approved"
+            title = "Loan request approved"
+            body = "Your loan request has been approved and is now active."
+            message = "Loan request approved and repayment schedule generated."
+
+        else:
+            loan.status = "rejected"
+            loan.decision_reason = reason
+            action = "personal_loan_rejected"
+            title = "Loan request declined"
+            body = (
+                f"Your loan request was declined: {reason}"
+                if reason else "Your loan request was declined."
+            )
+            body = body[:500]
+            message = "Loan request rejected."
+
+        loan.decided_by = user_id
+        loan.decided_at = datetime.now(timezone.utc)
+
+        db.session.add(AuditLog(
+            workspace_id=loan.workspace_id,
+            user_id=user_id,
+            action=action,
+            resource_type="personal_loan",
+            resource_id=str(loan.id),
+            details={
+                "decision": "approved" if approved else "rejected",
+                "reason": reason,
+                "installment_count": len(schedule),
+            },
+            ip_address=request.remote_addr,
+        ))
+
+        if loan.created_by:
+            create_notification(
+                user_id=loan.created_by,
+                category="loan_application_updates",
+                title=title,
+                body=body,
+                target_url="/loans",
+                dedupe_key=(
+                    f"personal-loan-request:{loan.id}:"
+                    f"{'approved' if approved else 'rejected'}"
+                ),
+            )
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": message,
+            "request": _incoming_loan_response(loan),
+            "installment_count": len(schedule),
+        }), 200
+
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": str(exc),
+        }), 400
+
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "message": "The loan decision could not be saved.",
+        }), 409
+
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Incoming personal loan decision failed"
+        )
+        return jsonify({
+            "success": False,
+            "message": "The loan decision could not be completed.",
+        }), 500
+
+
+@loans_bp.post("/<uuid:loan_id>/approve")
+@jwt_required()
+def approve_incoming_loan_request(loan_id):
+    return _decide_incoming_loan(loan_id, approved=True)
+
+
+@loans_bp.post("/<uuid:loan_id>/reject")
+@jwt_required()
+def reject_incoming_loan_request(loan_id):
+    return _decide_incoming_loan(loan_id, approved=False)
 
 
 @loans_bp.post("/<uuid:loan_id>/activate")

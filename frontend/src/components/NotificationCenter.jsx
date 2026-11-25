@@ -99,8 +99,37 @@ export default function NotificationCenter() {
 
     const interval = window.setInterval(loadNotifications, 60000);
 
-    return () => window.clearInterval(interval);
+    function handleFocus() {
+      loadNotifications();
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        loadNotifications();
+      }
+    }
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [loadNotifications, loadPreferences]);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    loadNotifications();
+
+    const interval = window.setInterval(loadNotifications, 15000);
+
+    return () => window.clearInterval(interval);
+  }, [open, loadNotifications]);
 
   useEffect(() => {
     const supported =

@@ -111,6 +111,8 @@ const LOAN_TYPE_LABELS = {
 
 const STATUS_LABELS = {
   draft: "Draft",
+  pending_approval: "Pending approval",
+  rejected: "Rejected",
   active: "Active",
   paid: "Paid",
   overdue: "Overdue",
@@ -133,6 +135,9 @@ export default function Loans() {
     "KES";
 
   const [loans, setLoans] = useState([]);
+  const [incomingRequests, setIncomingRequests] = useState([]);
+  const [loadingIncoming, setLoadingIncoming] = useState(true);
+  const [decidingRequest, setDecidingRequest] = useState(null);
   const workspaceRequestRef = useRef(0);
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -248,6 +253,26 @@ export default function Loans() {
       }
     }
   }, [workspaceId, showToast]);
+
+  const loadIncomingRequests = useCallback(async () => {
+    setLoadingIncoming(true);
+
+    try {
+      const data = await loansApi.listIncomingRequests();
+      setIncomingRequests(data.requests || []);
+    } catch (err) {
+      showToast(
+        err.message || "Incoming loan requests could not be loaded.",
+        { type: "error" }
+      );
+    } finally {
+      setLoadingIncoming(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadIncomingRequests();
+  }, [loadIncomingRequests]);
 
   useEffect(() => {
     setLoans([]);
@@ -439,6 +464,12 @@ export default function Loans() {
         description: form.description.trim() || null,
       };
 
+      const isLinkedBorrowingRequest =
+        !editingLoan &&
+        form.direction === "borrowed" &&
+        Boolean(form.counterparty_user_id);
+      const linkedLenderName = form.counterparty_name.trim();
+
       requestStarted = true;
 
       if (editingLoan) {
@@ -456,7 +487,9 @@ export default function Loans() {
       showToast(
         editingLoan
           ? "Draft loan updated successfully."
-          : "Loan recorded as a draft. Activate it when the repayment plan is ready.",
+          : isLinkedBorrowingRequest
+            ? `Loan request sent to ${linkedLenderName}. It will become active if they approve.`
+            : "Loan recorded as a draft. Activate it when the repayment plan is ready.",
         { type: "success" }
       );
       await loadLoans(true);
@@ -472,6 +505,42 @@ export default function Loans() {
       }
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleIncomingDecision(request, approved) {
+    const confirmed = window.confirm(
+      approved
+        ? `Approve ${request.requester_name}'s loan request and activate it?`
+        : `Reject ${request.requester_name}'s loan request?`
+    );
+
+    if (!confirmed) return;
+
+    setDecidingRequest(request.id);
+
+    try {
+      if (approved) {
+        await loansApi.approveIncomingRequest(request.id);
+      } else {
+        await loansApi.rejectIncomingRequest(request.id);
+      }
+
+      showToast(
+        approved
+          ? "Loan request approved and repayment schedule generated."
+          : "Loan request rejected.",
+        { type: "success" }
+      );
+
+      await loadIncomingRequests();
+    } catch (err) {
+      showToast(
+        err.message || "The loan request could not be updated.",
+        { type: "error" }
+      );
+    } finally {
+      setDecidingRequest(null);
     }
   }
 
@@ -794,7 +863,10 @@ export default function Loans() {
           <button
             type="button"
             className="loans-secondary-button"
-            onClick={() => loadLoans(true)}
+            onClick={() => {
+              loadLoans(true);
+              loadIncomingRequests();
+            }}
             disabled={refreshing || loading}
           >
             <RefreshCw size={16} className={refreshing ? "loans-spin" : ""} />
@@ -849,6 +921,120 @@ export default function Loans() {
         </button>
       </div>
 
+      {(loadingIncoming || incomingRequests.length > 0) && (
+        <section className="loans-list-section loans-incoming-section">
+          <div className="loans-section-heading">
+            <div>
+              <h2>Incoming loan requests</h2>
+              <p>Review requests from people asking to borrow from you.</p>
+            </div>
+            {!loadingIncoming && (
+              <span className="loans-request-count">
+                {incomingRequests.length}
+              </span>
+            )}
+          </div>
+
+          {loadingIncoming ? (
+            <div className="loans-record-list loans-skeleton-list" aria-hidden="true">
+              {Array.from({ length: 2 }, (_, index) => (
+                <article className="loans-record loans-skeleton-record" key={index}>
+                  <div className="loans-record-main">
+                    <Skeleton width={46} height={46} radius={13} />
+                    <div className="loans-record-info">
+                      <Skeleton width="45%" height={16} />
+                      <Skeleton width="65%" height={11} />
+                      <Skeleton width="75%" height={11} />
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="loans-record-list">
+              {incomingRequests.map((request) => (
+                <article
+                  className="loans-record loans-incoming-record"
+                  key={request.id}
+                >
+                  <div className="loans-incoming-main">
+                    <div className="loans-record-icon borrowed">
+                      <ArrowDownLeft size={21} />
+                    </div>
+
+                    <div className="loans-record-info">
+                      <div className="loans-record-title">
+                        <h3>{request.requester_name}</h3>
+                        <span className="loans-status status-pending_approval">
+                          Pending approval
+                        </span>
+                      </div>
+
+                      <p>
+                        Loan request ·{" "}
+                        {LOAN_TYPE_LABELS[request.loan_type] || request.loan_type}
+                      </p>
+
+                      <div className="loans-record-meta">
+                        <span>
+                          <CalendarDays size={14} />
+                          Due {request.due_date}
+                        </span>
+                        <span>
+                          {request.repayment_frequency.replace("_", " ")}
+                        </span>
+                        {request.interest_method !== "none" && (
+                          <span>
+                            {Number(request.interest_rate_percent || 0).toLocaleString(
+                              undefined,
+                              { maximumFractionDigits: 2 }
+                            )}% annual interest
+                          </span>
+                        )}
+                      </div>
+
+                      {request.description && (
+                        <p className="loans-incoming-description">
+                          {request.description}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="loans-record-amount">
+                      <strong>
+                        {money(request.principal_minor, request.currency_code)}
+                      </strong>
+                      <small>Requested</small>
+                    </div>
+                  </div>
+
+                  <div className="loans-incoming-actions">
+                    <button
+                      type="button"
+                      className="loans-secondary-button"
+                      onClick={() => handleIncomingDecision(request, false)}
+                      disabled={decidingRequest === request.id}
+                    >
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      className="loans-primary-button"
+                      onClick={() => handleIncomingDecision(request, true)}
+                      disabled={decidingRequest === request.id}
+                    >
+                      {decidingRequest === request.id
+                        ? "Processing..."
+                        : "Approve request"}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="loans-list-section">
         <div className="loans-section-heading">
           <div>
@@ -865,6 +1051,8 @@ export default function Loans() {
             <option value="borrowed">Borrowed</option>
             <option value="lent">Lent</option>
             <option value="draft">Draft</option>
+            <option value="pending_approval">Pending approval</option>
+            <option value="rejected">Rejected</option>
             <option value="active">Active</option>
             <option value="overdue">Overdue</option>
             <option value="paid">Paid</option>
@@ -951,6 +1139,11 @@ export default function Loans() {
                           <span>{Number(loan.interest_rate_percent || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}% annual interest</span>
                         )}
                       </div>
+                      {loan.status === "rejected" && loan.decision_reason && (
+                        <p className="loans-rejection-reason">
+                          <strong>Lender's reason:</strong> {loan.decision_reason}
+                        </p>
+                      )}
                     </div>
 
                     <div className="loans-record-amount">

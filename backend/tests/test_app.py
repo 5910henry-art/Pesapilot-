@@ -1479,6 +1479,27 @@ class PesaPilotTestCase(unittest.TestCase):
         )
 
 
+    def create_verified_lender(self):
+        lender = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+            email_verified=True,
+        )
+        db.session.add(lender)
+        db.session.flush()
+
+        db.session.add(UserProfile(
+            user_id=lender.id,
+            first_name="Alex",
+            last_name="Lender",
+        ))
+        db.session.commit()
+
+        token = create_access_token(identity=str(lender.id))
+        headers = {"Authorization": f"Bearer {token}"}
+        return lender, headers
+
     def create_personal_loan(self, **overrides):
         start = date.today()
         payload = {
@@ -8698,6 +8719,221 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         self.assertEqual(response.json["count"], 2)
         self.assertEqual(len(response.json["loans"]), 2)
+
+    def test_linked_borrowed_loan_creates_shared_pending_request(self):
+        lender, lender_headers = self.create_verified_lender()
+
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+        )
+
+        self.assertEqual(response.status_code, 201, response.json)
+        loan_data = response.json["loan"]
+        self.assertEqual(loan_data["status"], "pending_approval")
+
+        loan_id = loan_data["id"]
+        saved = db.session.get(PersonalLoan, UUID(loan_id))
+        self.assertEqual(saved.counterparty_user_id, lender.id)
+        self.assertEqual(saved.created_by, self.user.id)
+
+        incoming = self.client.get(
+            "/api/v1/loans/incoming-requests",
+            headers=lender_headers,
+        )
+        self.assertEqual(incoming.status_code, 200, incoming.json)
+        self.assertEqual(incoming.json["count"], 1)
+        self.assertEqual(incoming.json["requests"][0]["id"], loan_id)
+
+        borrower_list = self.client.get(
+            f"/api/v1/loans?workspace_id={self.workspace.id}",
+            headers=self.headers,
+        )
+        self.assertEqual(borrower_list.status_code, 200)
+        self.assertIn(
+            loan_id,
+            [item["id"] for item in borrower_list.json["loans"]],
+        )
+
+    def test_only_linked_lender_can_view_or_decide_request(self):
+        lender, lender_headers = self.create_verified_lender()
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+        loan_id = response.json["loan"]["id"]
+
+        outsider = User(
+            email=f"{uuid4().hex}@example.invalid",
+            password_hash="test-password-hash",
+            is_active=True,
+        )
+        db.session.add(outsider)
+        db.session.commit()
+        outsider_token = create_access_token(identity=str(outsider.id))
+        outsider_headers = {
+            "Authorization": f"Bearer {outsider_token}",
+        }
+
+        outsider_list = self.client.get(
+            "/api/v1/loans/incoming-requests",
+            headers=outsider_headers,
+        )
+        self.assertEqual(outsider_list.status_code, 200)
+        self.assertEqual(outsider_list.json["count"], 0)
+
+        for headers in (outsider_headers, self.headers):
+            decision = self.client.post(
+                f"/api/v1/loans/{loan_id}/approve",
+                headers=headers,
+                json={},
+            )
+            self.assertEqual(decision.status_code, 404, decision.json)
+
+        saved = db.session.get(PersonalLoan, UUID(loan_id))
+        self.assertEqual(saved.status, "pending_approval")
+
+    def test_lender_approval_activates_loan_and_generates_schedule(self):
+        lender, lender_headers = self.create_verified_lender()
+        start = date.today()
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+            start_date=start.isoformat(),
+            due_date=(start.replace(
+                year=start.year + 1
+            ) if start.month != 2 or start.day <= 28 else
+                date(start.year + 1, 2, 28)).isoformat(),
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+        loan_id = response.json["loan"]["id"]
+
+        approval = self.client.post(
+            f"/api/v1/loans/{loan_id}/approve",
+            headers=lender_headers,
+            json={},
+        )
+        self.assertEqual(approval.status_code, 200, approval.json)
+        self.assertEqual(approval.json["request"]["status"], "active")
+        self.assertEqual(
+            approval.json["installment_count"],
+            12,
+        )
+
+        saved = db.session.get(PersonalLoan, UUID(loan_id))
+        self.assertEqual(saved.status, "active")
+        self.assertEqual(saved.decided_by, lender.id)
+        self.assertIsNotNone(saved.decided_at)
+
+        installments = LoanInstallment.query.filter_by(
+            personal_loan_id=saved.id,
+        ).all()
+        self.assertEqual(len(installments), 12)
+
+        self.assertTrue(all(
+            item.status == "scheduled"
+            for item in installments
+        ))
+
+    def test_borrower_cannot_activate_pending_linked_request(self):
+        lender, _ = self.create_verified_lender()
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+        loan_id = response.json["loan"]["id"]
+
+        activation = self.client.post(
+            f"/api/v1/loans/{loan_id}/activate",
+            headers=self.headers,
+            json={"workspace_id": str(self.workspace.id)},
+        )
+        self.assertEqual(activation.status_code, 409, activation.json)
+
+        saved = db.session.get(PersonalLoan, UUID(loan_id))
+        self.assertEqual(saved.status, "pending_approval")
+        self.assertEqual(
+            LoanInstallment.query.filter_by(
+                personal_loan_id=saved.id,
+            ).count(),
+            0,
+        )
+
+    def test_lender_rejection_records_reason_without_schedule(self):
+        lender, lender_headers = self.create_verified_lender()
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+        loan_id = response.json["loan"]["id"]
+
+        rejection = self.client.post(
+            f"/api/v1/loans/{loan_id}/reject",
+            headers=lender_headers,
+            json={"reason": "Unable to lend at this time."},
+        )
+        self.assertEqual(rejection.status_code, 200, rejection.json)
+        self.assertEqual(rejection.json["request"]["status"], "rejected")
+        self.assertEqual(
+            rejection.json["request"]["decision_reason"],
+            "Unable to lend at this time.",
+        )
+
+        saved = db.session.get(PersonalLoan, UUID(loan_id))
+        self.assertEqual(saved.status, "rejected")
+        self.assertEqual(saved.decided_by, lender.id)
+        self.assertIsNotNone(saved.decided_at)
+        self.assertEqual(
+            LoanInstallment.query.filter_by(
+                personal_loan_id=saved.id,
+            ).count(),
+            0,
+        )
+
+    def test_linked_lent_loan_and_external_borrowed_loan_remain_drafts(self):
+        lender, lender_headers = self.create_verified_lender()
+
+        linked_lent = self.create_personal_loan(
+            direction="lent",
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+        )
+        self.assertEqual(linked_lent.status_code, 201, linked_lent.json)
+        self.assertEqual(linked_lent.json["loan"]["status"], "draft")
+
+        external_borrowed = self.create_personal_loan()
+        self.assertEqual(
+            external_borrowed.status_code,
+            201,
+            external_borrowed.json,
+        )
+        self.assertEqual(
+            external_borrowed.json["loan"]["status"],
+            "draft",
+        )
+
+        incoming = self.client.get(
+            "/api/v1/loans/incoming-requests",
+            headers=lender_headers,
+        )
+        self.assertEqual(incoming.status_code, 200, incoming.json)
+        self.assertEqual(incoming.json["count"], 0)
+
+    def test_user_cannot_link_themselves_as_lender(self):
+        response = self.create_personal_loan(
+            counterparty_user_id=str(self.user.id),
+        )
+
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertEqual(
+            PersonalLoan.query.filter_by(
+                workspace_id=self.workspace.id,
+            ).count(),
+            0,
+        )
 
     def test_viewer_cannot_create_personal_loan(self):
         self.membership.role = "viewer"

@@ -21473,3 +21473,103 @@ button { font: inherit; cursor: pointer; }
     animation: none;
   }
 }
+
+
+/* Incoming personal loan requests */
+.loans-page .loans-incoming-section {
+  margin-bottom: 24px;
+}
+
+.loans-page .loans-request-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 20px;
+  color: #355646;
+  background: #edf5ef;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.loans-page .loans-incoming-main {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 19px;
+}
+
+.loans-page .loans-incoming-description {
+  margin-top: 9px;
+  color: #64776b;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.loans-page .status-pending_approval {
+  color: #8b7138;
+  background: #faf5e8;
+  border-color: #eee5cb;
+}
+
+.loans-page .loans-incoming-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding: 0 19px 17px;
+}
+
+@media (max-width: 520px) {
+  .loans-page .loans-incoming-main {
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 11px;
+    padding: 15px;
+  }
+
+  .loans-page .loans-incoming-main .loans-record-icon {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .loans-page .loans-incoming-main .loans-record-info {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .loans-page .loans-incoming-main .loans-record-amount {
+    grid-column: 2;
+    grid-row: 2;
+    text-align: left;
+    min-width: 0;
+  }
+
+  .loans-page .loans-incoming-actions {
+    padding: 0 15px 15px;
+  }
+
+  .loans-page .loans-incoming-actions button {
+    flex: 1;
+  }
+}
+
+/* Lender rejection explanation */
+.loans-page .loans-rejection-reason {
+  margin-top: 10px !important;
+  padding: 9px 12px;
+  border-left: 3px solid #d69b91;
+  border-radius: 0 7px 7px 0;
+  background: #fff5f3;
+  color: #8d4c43 !important;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.loans-page .loans-rejection-reason strong {
+  font-weight: 700;
+}

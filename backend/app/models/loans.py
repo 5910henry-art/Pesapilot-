@@ -127,6 +127,21 @@ class PersonalLoan(db.Model):
         nullable=True,
     )
 
+    decision_reason: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
@@ -194,8 +209,8 @@ class PersonalLoan(db.Model):
         ),
         CheckConstraint(
             "status IN "
-            "('draft', 'active', 'paid', 'overdue', 'disputed', "
-            "'restructured', 'written_off', 'cancelled')",
+            "('draft', 'pending_approval', 'active', 'paid', 'overdue', "
+            "'disputed', 'restructured', 'written_off', 'cancelled', 'rejected')",
             name="ck_personal_loan_status",
         ),
         Index(
