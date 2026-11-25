@@ -512,6 +512,12 @@ export const loansApi = {
     );
   },
 
+  searchCounterparty(query) {
+    return apiRequest(
+      `/loans/counterparties/search?q=${encodeURIComponent(query)}`
+    );
+  },
+
   getLoan(loanId, workspaceId) {
     return apiRequest(
       `/loans/${encodeURIComponent(loanId)}?workspace_id=${encodeURIComponent(workspaceId)}`

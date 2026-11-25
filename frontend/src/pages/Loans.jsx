@@ -88,6 +88,7 @@ const INITIAL_FORM = {
   direction: "borrowed",
   counterparty_name: "",
   counterparty_phone: "",
+  counterparty_user_id: "",
   loan_type: "personal",
   amount: "",
   interest_method: "none",
@@ -144,6 +145,10 @@ export default function Loans() {
   const [showForm, setShowForm] = useState(false);
   const [editingLoan, setEditingLoan] = useState(null);
   const [form, setForm] = useState(INITIAL_FORM);
+  const [counterpartyLookup, setCounterpartyLookup] = useState("");
+  const [counterpartyMatch, setCounterpartyMatch] = useState(null);
+  const [counterpartySearching, setCounterpartySearching] = useState(false);
+  const [counterpartyLookupMessage, setCounterpartyLookupMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [expandedLoan, setExpandedLoan] = useState(null);
   const [loanDetails, setLoanDetails] = useState({});
@@ -304,14 +309,66 @@ export default function Loans() {
     });
   }
 
+  async function searchCounterparty() {
+    const query = counterpartyLookup.trim();
+
+    if (query.length < 5) {
+      setCounterpartyLookupMessage("Enter a full verified email address or phone number.");
+      setCounterpartyMatch(null);
+      return;
+    }
+
+    setCounterpartySearching(true);
+    setCounterpartyLookupMessage("");
+    setCounterpartyMatch(null);
+
+    try {
+      const response = await loansApi.searchCounterparty(query);
+      const match = response.counterparty;
+
+      if (!match) {
+        setCounterpartyLookupMessage("No verified PesaPilot account matched that email or phone.");
+        return;
+      }
+
+      setCounterpartyMatch(match);
+      updateForm("counterparty_user_id", match.id);
+      updateForm("counterparty_name", match.display_name);
+      setCounterpartyLookupMessage("PesaPilot account found and linked.");
+    } catch (error) {
+      setCounterpartyLookupMessage(
+        error.message || "Could not search for that PesaPilot account."
+      );
+    } finally {
+      setCounterpartySearching(false);
+    }
+  }
+
+  function clearCounterpartyLink() {
+    updateForm("counterparty_user_id", "");
+    setCounterpartyMatch(null);
+    setCounterpartyLookupMessage("External counterparty selected. No PesaPilot account will be notified.");
+  }
+
   function openEditLoan(loan) {
     const digits = digitsFor(loan.currency_code);
 
+    setCounterpartyLookup("");
+    setCounterpartyMatch(
+      loan.counterparty_user_id
+        ? {
+            id: loan.counterparty_user_id,
+            display_name: loan.counterparty_name || "Linked PesaPilot user",
+          }
+        : null
+    );
+    setCounterpartyLookupMessage("");
     setEditingLoan(loan);
     setForm({
       direction: loan.direction,
       counterparty_name: loan.counterparty_name || "",
       counterparty_phone: loan.counterparty_phone || "",
+      counterparty_user_id: loan.counterparty_user_id || "",
       loan_type: loan.loan_type,
       amount: (Number(loan.principal_minor || 0) / (10 ** digits)).toFixed(digits),
       interest_method: loan.interest_method || "none",
@@ -369,6 +426,7 @@ export default function Loans() {
         direction: form.direction,
         counterparty_name: form.counterparty_name.trim(),
         counterparty_phone: form.counterparty_phone.trim() || null,
+        counterparty_user_id: form.counterparty_user_id || null,
         loan_type: form.loan_type,
         principal_minor: principalMinor,
         currency_code: currency,
@@ -390,6 +448,9 @@ export default function Loans() {
       }
 
       setForm({ ...INITIAL_FORM, start_date: todayLocal(), due_date: defaultDueDate() });
+      setCounterpartyLookup("");
+      setCounterpartyMatch(null);
+      setCounterpartyLookupMessage("");
       setEditingLoan(null);
       setShowForm(false);
       showToast(
@@ -1697,6 +1758,43 @@ export default function Loans() {
                     <option value="business">Business</option>
                   </select>
                 </label>
+
+                <div className="loans-field-full">
+                  <label>
+                    Find an existing PesaPilot user (optional)
+                    <input
+                      type="text"
+                      value={counterpartyLookup}
+                      onChange={(event) => setCounterpartyLookup(event.target.value)}
+                      placeholder="Verified email address or phone number"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <div className="loans-form-actions">
+                    <button
+                      type="button"
+                      onClick={searchCounterparty}
+                      disabled={counterpartySearching || counterpartyLookup.trim().length < 5}
+                    >
+                      {counterpartySearching ? "Searching..." : "Find PesaPilot user"}
+                    </button>
+                    {form.counterparty_user_id && (
+                      <button type="button" onClick={clearCounterpartyLink}>
+                        Use external counterparty
+                      </button>
+                    )}
+                  </div>
+                  {counterpartyMatch && (
+                    <p className="loans-form-hint">
+                      Linked account: {counterpartyMatch.display_name}
+                    </p>
+                  )}
+                  {counterpartyLookupMessage && (
+                    <p className="loans-form-hint" role="status">
+                      {counterpartyLookupMessage}
+                    </p>
+                  )}
+                </div>
 
                 <label className="loans-field-full">
                   {form.direction === "borrowed" ? "Lender's name" : "Borrower's name"}

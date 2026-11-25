@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 
 from app.extensions import db
-from app.models import (AuditLog, PersonalLoan, Workspace, WorkspaceMember, FinancialAccount, LedgerAccount, LoanDisbursement, JournalEntry, JournalLine)
+from app.models import (AuditLog, PersonalLoan, Workspace, WorkspaceMember, FinancialAccount, LedgerAccount, LoanDisbursement, JournalEntry, JournalLine, User, UserProfile)
 from app.models.loan_repayments import LoanInstallment, LoanPayment, LoanPaymentAllocation
 from app.services.loan_schedules import build_repayment_schedule
 from app.services.accounting import create_draft_entry, post_entry
@@ -42,6 +42,36 @@ def _user_id():
         return None
 
 
+def _resolve_counterparty_user(value, current_user_id):
+    if value is None or value == "":
+        return None
+
+    if not isinstance(value, str):
+        return False
+
+    try:
+        linked_id = UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+    if linked_id == current_user_id:
+        return False
+
+    account = User.query.filter(
+        User.id == linked_id,
+        User.is_active.is_(True),
+        (
+            User.email_verified.is_(True)
+            | User.phone_verified.is_(True)
+        ),
+    ).first()
+
+    if account is None or db.session.get(UserProfile, linked_id) is None:
+        return False
+
+    return account
+
+
 def _workspace_id(value):
     if not isinstance(value, str):
         return None
@@ -56,6 +86,65 @@ def _membership(workspace_id, user_id):
         workspace_id=workspace_id,
         user_id=user_id,
     ).first()
+
+
+@loans_bp.get("/counterparties/search")
+@jwt_required()
+def search_loan_counterparty():
+    user_id = _user_id()
+
+    if user_id is None:
+        return jsonify({
+            "success": False,
+            "message": "Invalid authentication identity.",
+        }), 401
+
+    query = request.args.get("q", "").strip()
+
+    if len(query) < 5 or len(query) > 255:
+        return jsonify({
+            "success": False,
+            "message": "Enter an exact verified email address or phone number.",
+        }), 400
+
+    account_query = User.query.join(
+        UserProfile,
+        UserProfile.user_id == User.id,
+    ).filter(
+        User.is_active.is_(True),
+        User.id != user_id,
+    )
+
+    if "@" in query:
+        account_query = account_query.filter(
+            User.email_verified.is_(True),
+            func.lower(User.email) == query.lower(),
+        )
+    else:
+        account_query = account_query.filter(
+            User.phone_verified.is_(True),
+            User.phone == query,
+        )
+
+    account = account_query.first()
+
+    if account is None:
+        return jsonify({
+            "success": True,
+            "counterparty": None,
+        }), 200
+
+    profile = db.session.get(UserProfile, account.id)
+
+    return jsonify({
+        "success": True,
+        "counterparty": {
+            "id": str(account.id),
+            "display_name": (
+                f"{profile.first_name} {profile.last_name}".strip()
+            ),
+        },
+    }), 200
 
 
 def _parse_date(value):
@@ -74,6 +163,10 @@ def _loan_response(loan):
         "direction": loan.direction,
         "counterparty_name": loan.counterparty_name,
         "counterparty_phone": loan.counterparty_phone,
+        "counterparty_user_id": (
+            str(loan.counterparty_user_id)
+            if loan.counterparty_user_id else None
+        ),
         "loan_type": loan.loan_type,
         "principal_minor": loan.principal_minor,
         "currency_code": loan.currency_code,
@@ -189,6 +282,17 @@ def create_personal_loan():
     direction = data.get("direction")
     counterparty_name = data.get("counterparty_name")
     counterparty_phone = data.get("counterparty_phone")
+    counterparty_user = _resolve_counterparty_user(
+        data.get("counterparty_user_id"), user_id
+    )
+    if counterparty_user is False:
+        return jsonify({
+            "success": False,
+            "message": "The selected PesaPilot counterparty is invalid or unavailable.",
+        }), 400
+    if counterparty_user:
+        profile = db.session.get(UserProfile, counterparty_user.id)
+        counterparty_name = f"{profile.first_name} {profile.last_name}".strip()
     loan_type = data.get("loan_type")
     principal = data.get("principal_minor")
     interest_method = data.get("interest_method", "none")
@@ -350,6 +454,9 @@ def create_personal_loan():
             workspace_id=workspace_id,
             created_by=user_id,
             direction=direction,
+            counterparty_user_id=(
+                counterparty_user.id if counterparty_user else None
+            ),
             counterparty_name=counterparty_name.strip(),
             counterparty_phone=(
                 counterparty_phone.strip()
@@ -522,6 +629,17 @@ def update_personal_loan(loan_id):
 
     counterparty_name = data.get("counterparty_name")
     counterparty_phone = data.get("counterparty_phone")
+    counterparty_user = _resolve_counterparty_user(
+        data.get("counterparty_user_id"), user_id
+    )
+    if counterparty_user is False:
+        return jsonify({
+            "success": False,
+            "message": "The selected PesaPilot counterparty is invalid or unavailable.",
+        }), 400
+    if counterparty_user:
+        profile = db.session.get(UserProfile, counterparty_user.id)
+        counterparty_name = f"{profile.first_name} {profile.last_name}".strip()
     loan_type = data.get("loan_type")
     principal = data.get("principal_minor")
     interest_method = data.get("interest_method", "none")
@@ -657,6 +775,10 @@ def update_personal_loan(loan_id):
     before = {
         "counterparty_name": loan.counterparty_name,
         "counterparty_phone": loan.counterparty_phone,
+        "counterparty_user_id": (
+            str(loan.counterparty_user_id)
+            if loan.counterparty_user_id else None
+        ),
         "loan_type": loan.loan_type,
         "principal_minor": loan.principal_minor,
         "interest_method": loan.interest_method,
@@ -673,6 +795,9 @@ def update_personal_loan(loan_id):
         loan.counterparty_name = counterparty_name.strip()
         loan.counterparty_phone = (
             counterparty_phone.strip() if counterparty_phone else None
+        )
+        loan.counterparty_user_id = (
+            counterparty_user.id if counterparty_user else None
         )
         loan.loan_type = loan_type
         loan.principal_minor = principal
@@ -696,6 +821,10 @@ def update_personal_loan(loan_id):
                 "after": {
                     "counterparty_name": loan.counterparty_name,
                     "counterparty_phone": loan.counterparty_phone,
+                    "counterparty_user_id": (
+                        str(loan.counterparty_user_id)
+                        if loan.counterparty_user_id else None
+                    ),
                     "loan_type": loan.loan_type,
                     "principal_minor": loan.principal_minor,
                     "interest_method": loan.interest_method,
