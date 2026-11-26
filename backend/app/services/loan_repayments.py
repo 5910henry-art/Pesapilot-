@@ -1,11 +1,13 @@
 from collections import defaultdict
 from datetime import datetime, time, timezone
+from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import func, select
 
 from app.extensions import db
 from app.models import (
     AuditLog,
+    Currency,
     FinancialAccount,
     ExchangeRate,
     JournalEntry,
@@ -19,6 +21,7 @@ from app.models import (
     WorkspaceMember,
 )
 from app.services.accounting import (
+    MAX_MINOR_UNITS,
     AccountingError,
     create_draft_entry,
     post_entry,
@@ -415,6 +418,77 @@ def confirm_loan_payment(
     if principal_total + interest_total != payment.amount_minor:
         raise ValueError("Payment allocation does not balance.")
 
+    source_currency = db.session.get(Currency, loan.currency_code)
+    functional_currency = db.session.get(
+        Currency, workspace.functional_currency
+    )
+
+    if source_currency is None or functional_currency is None:
+        raise ValueError("Repayment currency configuration is unavailable.")
+
+    conversion_rate = (
+        Decimal(str(fx_rate)) if fx_rate is not None else Decimal("1")
+    )
+
+    def convert_repayment_component(amount_minor):
+        if amount_minor == 0:
+            return 0
+
+        converted = (
+            Decimal(amount_minor)
+            * conversion_rate
+            * (
+                Decimal(10)
+                ** (
+                    functional_currency.minor_unit
+                    - source_currency.minor_unit
+                )
+            )
+        )
+        result = int(
+            converted.quantize(
+                Decimal("1"),
+                rounding=ROUND_HALF_UP,
+            )
+        )
+
+        if result < 0 or result > MAX_MINOR_UNITS:
+            raise ValueError(
+                "Repayment functional amount is outside the supported range."
+            )
+
+        return result
+
+    total_functional = convert_repayment_component(payment.amount_minor)
+
+    if total_functional <= 0:
+        raise ValueError("Repayment is too small in functional currency.")
+
+    principal_functional = convert_repayment_component(principal_total)
+    interest_functional = convert_repayment_component(interest_total)
+
+    rounding_difference = (
+        total_functional - principal_functional - interest_functional
+    )
+
+    if abs(rounding_difference) > 1:
+        raise ValueError("Repayment FX rounding difference is unexpected.")
+
+    if rounding_difference:
+        if principal_total >= interest_total:
+            principal_functional += rounding_difference
+        else:
+            interest_functional += rounding_difference
+
+    if (
+        principal_functional < 0
+        or interest_functional < 0
+        or principal_functional > MAX_MINOR_UNITS
+        or interest_functional > MAX_MINOR_UNITS
+        or principal_functional + interest_functional != total_functional
+    ):
+        raise ValueError("Repayment FX allocation is invalid.")
+
     if loan.direction == "borrowed":
         system_accounts = {
             "2000": ("liability", "credit"),
@@ -460,13 +534,19 @@ def confirm_loan_payment(
 
     lines = []
 
-    def add_line(ledger, debit=0, credit=0):
+    def add_line(
+        ledger,
+        debit=0,
+        credit=0,
+        functional_amount_minor=None,
+    ):
         if debit or credit:
             lines.append({
                 "ledger_account_id": str(ledger.id),
                 "debit_minor": debit,
                 "credit_minor": credit,
                 "exchange_rate": fx_rate,
+                "functional_amount_minor": functional_amount_minor,
                 "memo": "Personal loan repayment",
             })
 
@@ -474,10 +554,12 @@ def confirm_loan_payment(
         add_line(
             accounts_by_code["2000"],
             debit=principal_total,
+            functional_amount_minor=principal_functional,
         )
         add_line(
             accounts_by_code["5000"],
             debit=interest_total,
+            functional_amount_minor=interest_functional,
         )
         add_line(
             cash_ledger,
@@ -491,10 +573,12 @@ def confirm_loan_payment(
         add_line(
             accounts_by_code["1200"],
             credit=principal_total,
+            functional_amount_minor=principal_functional,
         )
         add_line(
             accounts_by_code["4000"],
             credit=interest_total,
+            functional_amount_minor=interest_functional,
         )
 
     reference = f"LOAN-PAYMENT-{payment.id}"

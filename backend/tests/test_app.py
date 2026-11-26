@@ -15,6 +15,7 @@ from app.models.notifications import Notification
 from app.models import (
     BusinessProfile,
     Currency,
+    ExchangeRate,
     AuditLog,
     User,
     UserProfile,
@@ -10737,6 +10738,192 @@ class PesaPilotTestCase(unittest.TestCase):
             ).count(),
             0,
         )
+
+    def _create_fx_repayment_case(self, direction):
+        loan, installment, payment = self.create_repayment_case(direction)
+
+        usd = Currency(
+            code="USD",
+            name="US Dollar",
+            minor_unit=2,
+            is_active=True,
+        )
+        db.session.add(usd)
+        db.session.flush()
+
+        effective_at = datetime.combine(
+            payment.payment_date,
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
+
+        db.session.add(
+            ExchangeRate(
+                base_currency="USD",
+                quote_currency="KES",
+                rate=Decimal("130.00005"),
+                effective_at=effective_at,
+                source="FX rounding test",
+            )
+        )
+
+        loan.currency_code = "USD"
+
+        for code in ("1200", "2000", "4000", "5000"):
+            ledger = LedgerAccount.query.filter_by(
+                workspace_id=self.workspace.id,
+                code=code,
+            ).one()
+            ledger.currency_code = "USD"
+
+        usd_account = FinancialAccount(
+            workspace_id=self.workspace.id,
+            name="USD Test Wallet",
+            account_type="mobile_money",
+            currency_code="USD",
+            is_active=True,
+        )
+        db.session.add(usd_account)
+        db.session.flush()
+
+        usd_ledger = LedgerAccount(
+            workspace_id=self.workspace.id,
+            financial_account_id=usd_account.id,
+            code=f"USD-{uuid4().hex[:12]}",
+            name="USD Test Wallet",
+            account_class="asset",
+            normal_balance="debit",
+            currency_code="USD",
+            is_system=False,
+            is_active=True,
+        )
+
+        usd_equity = LedgerAccount(
+            workspace_id=self.workspace.id,
+            financial_account_id=None,
+            code=f"USD-EQ-{uuid4().hex[:10]}",
+            name="USD Opening Balance Equity",
+            account_class="equity",
+            normal_balance="credit",
+            currency_code="USD",
+            is_system=True,
+            is_active=True,
+        )
+
+        db.session.add_all([usd_ledger, usd_equity])
+        db.session.flush()
+
+        opening = create_draft_entry(
+            workspace_id=self.workspace.id,
+            created_by=self.user.id,
+            reference=f"TEST-USD-OPEN-{uuid4().hex}",
+            description="USD test opening balance",
+            transaction_date=effective_at,
+            lines=[
+                {
+                    "ledger_account_id": usd_ledger.id,
+                    "debit_minor": 100000,
+                    "credit_minor": 0,
+                    "exchange_rate": Decimal("130.00005"),
+                },
+                {
+                    "ledger_account_id": usd_equity.id,
+                    "debit_minor": 0,
+                    "credit_minor": 100000,
+                    "exchange_rate": Decimal("130.00005"),
+                },
+            ],
+        )
+
+        post_entry(
+            entry_id=opening.id,
+            workspace_id=self.workspace.id,
+            posted_by=self.user.id,
+        )
+        db.session.commit()
+
+        return loan, installment, payment, usd_account, usd_ledger
+
+    def _confirm_fx_repayment_case(self, direction):
+        loan, installment, payment, account, cash_ledger = (
+            self._create_fx_repayment_case(direction)
+        )
+
+        confirmed = confirm_loan_payment(
+            payment_id=payment.id,
+            workspace_id=self.workspace.id,
+            confirmed_by=self.user.id,
+            financial_account_id=account.id,
+        )
+        db.session.commit()
+
+        lines = JournalLine.query.filter_by(
+            journal_entry_id=confirmed.journal_entry_id
+        ).all()
+
+        amounts = {
+            line.ledger_account_id: (
+                line.functional_debit_minor,
+                line.functional_credit_minor,
+            )
+            for line in lines
+        }
+
+        self.assertEqual(confirmed.status, "confirmed")
+        self.assertEqual(confirmed.principal_minor, 9000)
+        self.assertEqual(confirmed.interest_minor, 1000)
+        self.assertEqual(installment.paid_minor, 10000)
+
+        self.assertEqual(
+            sum(line.functional_debit_minor for line in lines),
+            1300001,
+        )
+        self.assertEqual(
+            sum(line.functional_credit_minor for line in lines),
+            1300001,
+        )
+
+        return loan, installment, confirmed, amounts, cash_ledger
+
+    def test_borrowed_loan_repayment_handles_fx_rounding(self):
+        loan, installment, confirmed, amounts, cash_ledger = (
+            self._confirm_fx_repayment_case("borrowed")
+        )
+
+        payable = LedgerAccount.query.filter_by(
+            workspace_id=self.workspace.id,
+            code="2000",
+        ).one()
+        expense = LedgerAccount.query.filter_by(
+            workspace_id=self.workspace.id,
+            code="5000",
+        ).one()
+
+        self.assertEqual(amounts[cash_ledger.id], (0, 1300001))
+        self.assertEqual(amounts[payable.id], (1170001, 0))
+        self.assertEqual(amounts[expense.id], (130000, 0))
+        self.assertEqual(loan.status, "paid")
+        self.assertEqual(installment.status, "paid")
+
+    def test_lent_loan_repayment_handles_fx_rounding(self):
+        loan, installment, confirmed, amounts, cash_ledger = (
+            self._confirm_fx_repayment_case("lent")
+        )
+
+        receivable = LedgerAccount.query.filter_by(
+            workspace_id=self.workspace.id,
+            code="1200",
+        ).one()
+        income = LedgerAccount.query.filter_by(
+            workspace_id=self.workspace.id,
+            code="4000",
+        ).one()
+
+        self.assertEqual(amounts[cash_ledger.id], (1300001, 0))
+        self.assertEqual(amounts[receivable.id], (0, 1170001))
+        self.assertEqual(amounts[income.id], (0, 130000))
+        self.assertEqual(loan.status, "paid")
+        self.assertEqual(installment.status, "paid")
 
     def test_borrowed_loan_repayment_posts_correct_accounting(self):
         loan, installment, payment = self.create_repayment_case("borrowed")

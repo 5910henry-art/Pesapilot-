@@ -8,7 +8,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 
 from app.extensions import db
-from app.models import (AuditLog, PersonalLoan, Workspace, WorkspaceMember, FinancialAccount, LedgerAccount, LoanDisbursement, JournalEntry, JournalLine, User, UserProfile)
+from app.models import (
+    AuditLog,
+    FinancialAccount,
+    JournalEntry,
+    JournalLine,
+    LedgerAccount,
+    LinkedLoanTransaction,
+    LoanDisbursement,
+    PersonalLoan,
+    User,
+    UserProfile,
+    Workspace,
+    WorkspaceMember,
+)
 from app.models.loan_repayments import LoanInstallment, LoanPayment, LoanPaymentAllocation
 from app.services.loan_schedules import build_repayment_schedule
 from app.services.accounting import create_draft_entry, post_entry
@@ -1696,7 +1709,7 @@ def record_personal_loan_payment(loan_id):
     if membership.role == "viewer":
         return jsonify({"success": False, "message": "You do not have permission to record repayments."}), 403
 
-    loan = PersonalLoan.query.filter_by(id=loan_id, workspace_id=workspace_id).first()
+    loan = PersonalLoan.query.filter_by(id=loan_id, workspace_id=workspace_id).with_for_update().first()
     if not loan:
         return jsonify({"success": False, "message": "Loan not found."}), 404
 
@@ -1735,6 +1748,119 @@ def record_personal_loan_payment(loan_id):
     if notes is not None and (not isinstance(notes, str) or len(notes.strip()) > 2000):
         return jsonify({"success": False, "message": "Payment notes must not exceed 2000 characters."}), 400
 
+    is_linked = (
+        loan.direction == "borrowed"
+        and loan.counterparty_user_id is not None
+    )
+    linked_account = None
+    allocation_amount = amount
+
+    if is_linked:
+        if payment_source != "registered":
+            return jsonify({
+                "success": False,
+                "message": "Linked repayments must use a registered account.",
+            }), 400
+
+        account_id = _workspace_id(data.get("financial_account_id"))
+        if account_id is None:
+            return jsonify({
+                "success": False,
+                "message": "Select the account sending this repayment.",
+            }), 400
+
+        linked_account = FinancialAccount.query.filter_by(
+            id=account_id,
+            workspace_id=workspace_id,
+        ).with_for_update().first()
+
+        if (
+            linked_account is None
+            or not linked_account.is_active
+            or linked_account.account_type not in {"cash", "bank", "mobile_money"}
+            or linked_account.currency_code != loan.currency_code
+        ):
+            return jsonify({
+                "success": False,
+                "message": "Choose an active cash, bank, or mobile money account in the loan currency.",
+            }), 400
+
+        account_ledgers = LedgerAccount.query.filter_by(
+            workspace_id=workspace_id,
+            financial_account_id=linked_account.id,
+            is_active=True,
+        ).with_for_update().all()
+
+        if len(account_ledgers) != 1:
+            return jsonify({
+                "success": False,
+                "message": "The selected account must have exactly one active asset ledger.",
+            }), 400
+
+        cash_ledger = account_ledgers[0]
+        if (
+            not cash_ledger.is_active
+            or cash_ledger.account_class != "asset"
+            or cash_ledger.normal_balance != "debit"
+            or cash_ledger.currency_code != loan.currency_code
+        ):
+            return jsonify({
+                "success": False,
+                "message": "The selected account has no valid active asset ledger.",
+            }), 400
+
+        available_minor = db.session.query(
+            func.coalesce(
+                func.sum(JournalLine.debit_minor - JournalLine.credit_minor),
+                0,
+            )
+        ).join(
+            JournalEntry,
+            JournalEntry.id == JournalLine.journal_entry_id,
+        ).filter(
+            JournalLine.ledger_account_id == cash_ledger.id,
+            JournalEntry.workspace_id == workspace_id,
+            JournalEntry.status == "posted",
+        ).scalar()
+        available_minor = int(available_minor or 0)
+
+        reserved_account_minor = db.session.query(
+            func.coalesce(func.sum(LinkedLoanTransaction.amount_minor), 0)
+        ).filter(
+            LinkedLoanTransaction.transaction_type == "repayment",
+            LinkedLoanTransaction.status == "pending",
+            LinkedLoanTransaction.initiating_workspace_id == workspace_id,
+            LinkedLoanTransaction.initiating_account_id == linked_account.id,
+        ).scalar()
+        reserved_account_minor = int(reserved_account_minor or 0)
+
+        if available_minor < amount + reserved_account_minor:
+            return jsonify({
+                "success": False,
+                "message": "Insufficient available funds after pending linked repayments are reserved.",
+                "available_minor": available_minor,
+                "reserved_minor": reserved_account_minor,
+                "required_minor": amount,
+                "currency_code": loan.currency_code,
+            }), 409
+
+        pending_loan_minor = db.session.query(
+            func.coalesce(func.sum(LinkedLoanTransaction.amount_minor), 0)
+        ).filter(
+            LinkedLoanTransaction.loan_workspace_id == workspace_id,
+            LinkedLoanTransaction.personal_loan_id == loan.id,
+            LinkedLoanTransaction.transaction_type == "repayment",
+            LinkedLoanTransaction.status == "pending",
+        ).scalar()
+        pending_loan_minor = int(pending_loan_minor or 0)
+
+        allocation_amount = amount + pending_loan_minor
+        if allocation_amount > MAX_MINOR_UNITS:
+            return jsonify({
+                "success": False,
+                "message": "Pending repayments exceed the supported amount limit.",
+            }), 400
+
     installments = LoanInstallment.query.filter_by(
         personal_loan_id=loan.id,
         workspace_id=workspace_id,
@@ -1755,7 +1881,7 @@ def record_personal_loan_payment(loan_id):
     )
 
     try:
-        build_payment_allocations(installments, confirmed_allocations, amount)
+        build_payment_allocations(installments, confirmed_allocations, allocation_amount)
 
         payment = LoanPayment(
             workspace_id=workspace_id,
@@ -1774,6 +1900,38 @@ def record_personal_loan_payment(loan_id):
 
         db.session.add(payment)
         db.session.flush()
+
+        linked_transaction = None
+        if is_linked:
+            linked_transaction = LinkedLoanTransaction(
+                loan_workspace_id=workspace_id,
+                personal_loan_id=loan.id,
+                loan_payment_id=payment.id,
+                transaction_type="repayment",
+                amount_minor=amount,
+                transaction_date=payment_date,
+                payment_method=payment_method,
+                reference=reference.strip(),
+                notes=notes.strip() if notes else None,
+                status="pending",
+                initiating_workspace_id=workspace_id,
+                initiating_account_id=linked_account.id,
+                initiated_by=user_id,
+            )
+            db.session.add(linked_transaction)
+            db.session.flush()
+
+            create_notification(
+                user_id=loan.counterparty_user_id,
+                category="loan_repayments",
+                title="Loan repayment awaiting confirmation",
+                body=(
+                    f"A repayment of {loan.currency_code} has been recorded "
+                    "and is awaiting your confirmation."
+                ),
+                target_url="/loans",
+                dedupe_key=f"linked-loan-repayment:{linked_transaction.id}:pending",
+            )
 
         db.session.add(AuditLog(
             workspace_id=workspace_id,
@@ -1807,6 +1965,9 @@ def record_personal_loan_payment(loan_id):
                 "reference": payment.reference,
                 "status": payment.status,
                 "notes": payment.notes,
+                "linked_transaction_id": (
+                    str(linked_transaction.id) if linked_transaction else None
+                ),
             },
         }), 201
 
@@ -1862,6 +2023,19 @@ def update_pending_loan_payment(loan_id, payment_id):
 
     if not payment:
         return jsonify({"success": False, "message": "Repayment not found for this loan."}), 404
+
+    linked_transaction = LinkedLoanTransaction.query.filter_by(
+        loan_workspace_id=workspace_id,
+        personal_loan_id=loan.id,
+        loan_payment_id=payment.id,
+        transaction_type="repayment",
+    ).first()
+
+    if linked_transaction is not None:
+        return jsonify({
+            "success": False,
+            "message": "Linked repayments must be managed through the linked-loan confirmation workflow.",
+        }), 409
 
     if payment.status != "pending":
         return jsonify({"success": False, "message": "Only pending repayments can be edited."}), 409
@@ -2028,6 +2202,19 @@ def delete_pending_loan_payment(loan_id, payment_id):
     if not payment:
         return jsonify({"success": False, "message": "Repayment not found for this loan."}), 404
 
+    linked_transaction = LinkedLoanTransaction.query.filter_by(
+        loan_workspace_id=workspace_id,
+        personal_loan_id=loan.id,
+        loan_payment_id=payment.id,
+        transaction_type="repayment",
+    ).first()
+
+    if linked_transaction is not None:
+        return jsonify({
+            "success": False,
+            "message": "Linked repayments must be managed through the linked-loan confirmation workflow.",
+        }), 409
+
     if payment.status != "pending":
         return jsonify({"success": False, "message": "Only pending repayments can be deleted."}), 409
 
@@ -2122,6 +2309,19 @@ def confirm_personal_loan_payment(loan_id, payment_id):
 
     if not payment:
         return jsonify({"success": False, "message": "Repayment not found for this loan."}), 404
+
+    linked_transaction = LinkedLoanTransaction.query.filter_by(
+        loan_workspace_id=workspace_id,
+        personal_loan_id=loan.id,
+        loan_payment_id=payment.id,
+        transaction_type="repayment",
+    ).first()
+
+    if linked_transaction is not None:
+        return jsonify({
+            "success": False,
+            "message": "Linked repayments must be managed through the linked-loan confirmation workflow.",
+        }), 409
 
     if payment.payment_source == "registered":
         if financial_account_id is None:

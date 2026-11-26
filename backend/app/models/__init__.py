@@ -35,6 +35,7 @@ from .loan_repayments import (
 )
 
 from .loan_disbursements import LoanDisbursement
+from .linked_loan_transactions import LinkedLoanTransaction
 
 from .bills import Bill, BillPayment
 

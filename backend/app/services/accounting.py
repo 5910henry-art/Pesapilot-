@@ -180,6 +180,7 @@ def create_draft_entry(
             "credit": credit,
             "amount": amount,
             "exchange_rate": item.get("exchange_rate"),
+            "functional_amount_minor": item.get("functional_amount_minor"),
             "memo": item.get("memo"),
         })
 
@@ -241,12 +242,51 @@ def create_draft_entry(
             same_currency,
         )
 
-        functional_amount = _functional_minor_units(
-            item["amount"],
-            rate,
-            source_currency.minor_unit,
-            functional_currency.minor_unit,
-        )
+        override = item["functional_amount_minor"]
+
+        if override is None:
+            functional_amount = _functional_minor_units(
+                item["amount"],
+                rate,
+                source_currency.minor_unit,
+                functional_currency.minor_unit,
+            )
+        else:
+            if (
+                isinstance(override, bool)
+                or not isinstance(override, int)
+                or override < 0
+                or override > MAX_MINOR_UNITS
+            ):
+                raise AccountingError(
+                    f"Journal line {index} has an invalid functional amount."
+                )
+
+            expected = (
+                Decimal(item["amount"])
+                * rate
+                * (
+                    Decimal(10)
+                    ** (
+                        functional_currency.minor_unit
+                        - source_currency.minor_unit
+                    )
+                )
+            )
+            expected = int(
+                expected.quantize(
+                    Decimal("1"),
+                    rounding=ROUND_HALF_UP,
+                )
+            )
+
+            if abs(override - expected) > 1:
+                raise AccountingError(
+                    f"Journal line {index} functional amount differs "
+                    "from normal FX rounding by more than one minor unit."
+                )
+
+            functional_amount = override
 
         memo = item["memo"]
 
