@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import requests
 from flask import current_app
@@ -21,10 +22,15 @@ from app.services.push_security import decrypt_subscription_secret
 ALLOWED_PUSH_HOSTS = {
     "fcm.googleapis.com",
     "fcmregistrations.googleapis.com",
+    "updates.push.services.mozilla.com",
 }
 MAX_ATTEMPTS = 5
 RETRY_DELAY = timedelta(minutes=5)
 DEFAULT_BATCH_SIZE = 50
+
+
+class PushEndpointValidationError(ValueError):
+    """Raised when a push endpoint violates the outbound URL restrictions."""
 
 
 class _SafePushSession(requests.Session):
@@ -40,7 +46,9 @@ class _SafePushSession(requests.Session):
             or parsed.username is not None
             or parsed.password is not None
         ):
-            raise ValueError("Push endpoint is not an approved provider.")
+            raise PushEndpointValidationError(
+                "Push endpoint is not an approved provider."
+            )
 
         kwargs["allow_redirects"] = False
         return super().post(url, **kwargs)
@@ -56,7 +64,10 @@ def _retryable_status(status_code):
     return status_code in (408, 425, 429) or status_code >= 500
 
 
-def deliver_pending_push_notifications(batch_size=DEFAULT_BATCH_SIZE):
+def deliver_pending_push_notifications(
+    batch_size=DEFAULT_BATCH_SIZE,
+    subscription_id=None,
+):
     """
     Deliver queued notifications to active subscriptions.
 
@@ -69,6 +80,16 @@ def deliver_pending_push_notifications(batch_size=DEFAULT_BATCH_SIZE):
         or not 1 <= batch_size <= 500
     ):
         raise ValueError("Batch size must be between 1 and 500.")
+
+    if subscription_id is not None:
+        try:
+            subscription_id = (
+                subscription_id
+                if isinstance(subscription_id, UUID)
+                else UUID(str(subscription_id))
+            )
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("Invalid push subscription ID.") from None
 
     private_key = current_app.config.get("VAPID_PRIVATE_KEY")
     subject = current_app.config.get("VAPID_CLAIMS_SUBJECT")
@@ -129,6 +150,11 @@ def deliver_pending_push_notifications(batch_size=DEFAULT_BATCH_SIZE):
                 )
                 .with_for_update(skip_locked=True)
             )
+
+            if subscription_id is not None:
+                query = query.filter(
+                    PushSubscription.id == subscription_id
+                )
 
             row = query.first()
             if row is None:
@@ -213,6 +239,11 @@ def deliver_pending_push_notifications(batch_size=DEFAULT_BATCH_SIZE):
                 else:
                     delivery.status = "failed"
                     failed += 1
+
+            except PushEndpointValidationError:
+                delivery.status = "failed"
+                delivery.error_message = "Push endpoint is not approved."
+                failed += 1
 
             except (ValueError, TypeError):
                 delivery.status = "failed"

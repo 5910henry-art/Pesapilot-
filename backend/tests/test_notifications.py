@@ -573,6 +573,28 @@ class NotificationsTests(unittest.TestCase):
         self.assertEqual(delivery.status, "failed")
         self.assertEqual(delivery.attempt_count, 1)
 
+    def test_push_delivery_rejects_invalid_subscription_id(self):
+        with self.assertRaisesRegex(ValueError, "Invalid push subscription ID"):
+            deliver_pending_push_notifications(
+                batch_size=1,
+                subscription_id="not-a-uuid",
+            )
+
+    @patch("requests.Session.post")
+    def test_push_session_accepts_firefox_autopush_host(self, send):
+        send.return_value = SimpleNamespace(status_code=201)
+
+        with _SafePushSession() as session:
+            response = session.post(
+                "https://updates.push.services.mozilla.com/wpush/v2/test"
+            )
+
+        self.assertEqual(response.status_code, 201)
+        send.assert_called_once_with(
+            "https://updates.push.services.mozilla.com/wpush/v2/test",
+            allow_redirects=False,
+        )
+
     def test_push_session_rejects_unapproved_hosts(self):
         with _SafePushSession() as session:
             with self.assertRaises(ValueError):
