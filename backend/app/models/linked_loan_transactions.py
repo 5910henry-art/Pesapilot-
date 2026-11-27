@@ -96,6 +96,21 @@ class LinkedLoanTransaction(db.Model):
         nullable=True,
     )
 
+    reversal_journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        db.Uuid(as_uuid=True),
+        nullable=True,
+    )
+
+    reversed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    reversed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     initiated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -170,6 +185,11 @@ class LinkedLoanTransaction(db.Model):
             name="fk_linked_transaction_initiating_journal",
         ),
         ForeignKeyConstraint(
+            ["initiating_workspace_id", "reversal_journal_entry_id"],
+            ["journal_entries.workspace_id", "journal_entries.id"],
+            name="fk_linked_transaction_reversal_journal",
+        ),
+        ForeignKeyConstraint(
             ["confirming_workspace_id", "confirming_account_id"],
             ["financial_accounts.workspace_id", "financial_accounts.id"],
             name="fk_linked_transaction_confirming_account",
@@ -198,15 +218,18 @@ class LinkedLoanTransaction(db.Model):
         CheckConstraint(
             "("
             "status = 'confirmed' "
-            "AND initiating_journal_entry_id IS NOT NULL "
             "AND confirming_workspace_id IS NOT NULL "
             "AND confirming_account_id IS NOT NULL "
             "AND confirming_journal_entry_id IS NOT NULL "
-            
-            "AND confirmed_at IS NOT NULL"
+            "AND confirmed_at IS NOT NULL "
+            "AND ("
+            "(transaction_type = 'disbursement' "
+            "AND initiating_journal_entry_id IS NOT NULL) "
+            "OR (transaction_type = 'repayment' "
+            "AND initiating_journal_entry_id IS NULL)"
+            ")"
             ") OR ("
             "status <> 'confirmed' "
-            "AND initiating_journal_entry_id IS NULL "
             "AND confirming_workspace_id IS NULL "
             "AND confirming_account_id IS NULL "
             "AND confirming_journal_entry_id IS NULL "
@@ -214,6 +237,20 @@ class LinkedLoanTransaction(db.Model):
             "AND confirmed_at IS NULL"
             ")",
             name="ck_linked_transaction_confirmation_fields",
+        ),
+        CheckConstraint(
+            "("
+            "reversal_journal_entry_id IS NULL "
+            "AND reversed_by IS NULL "
+            "AND reversed_at IS NULL"
+            ") OR ("
+            "reversal_journal_entry_id IS NOT NULL "
+            "AND reversed_at IS NOT NULL "
+            "AND transaction_type = 'disbursement' "
+            "AND status = 'disputed' "
+            "AND initiating_journal_entry_id IS NOT NULL"
+            ")",
+            name="ck_linked_transaction_reversal_fields",
         ),
         CheckConstraint(
             "("
@@ -263,11 +300,11 @@ class LinkedLoanTransaction(db.Model):
             unique=True,
             postgresql_where=db.text(
                 "transaction_type = 'disbursement' "
-                "AND status <> 'disputed'"
+                "AND (status <> 'disputed' OR reversal_journal_entry_id IS NULL)"
             ),
             sqlite_where=db.text(
                 "transaction_type = 'disbursement' "
-                "AND status <> 'disputed'"
+                "AND (status <> 'disputed' OR reversal_journal_entry_id IS NULL)"
             ),
         ),
     )

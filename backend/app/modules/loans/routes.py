@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from uuid import UUID
 
 from flask import current_app, jsonify, request
@@ -9,7 +9,9 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models import (
+    Currency,
     AuditLog,
+    ExchangeRate,
     FinancialAccount,
     JournalEntry,
     JournalLine,
@@ -24,7 +26,7 @@ from app.models import (
 )
 from app.models.loan_repayments import LoanInstallment, LoanPayment, LoanPaymentAllocation
 from app.services.loan_schedules import build_repayment_schedule
-from app.services.accounting import create_draft_entry, post_entry
+from app.services.accounting import AccountingError, create_draft_entry, post_entry, reverse_entry
 from app.services.loan_repayments import (
     build_payment_allocations,
     confirm_loan_payment,
@@ -1047,7 +1049,6 @@ def _decide_incoming_loan(loan_id, approved):
         }), 401
 
     data = request.get_json(silent=True)
-
     if data is None:
         data = {}
 
@@ -1067,6 +1068,92 @@ def _decide_incoming_loan(loan_id, approved):
             }), 400
         reason = reason.strip() or None
 
+    # Check lender identity before validating disbursement details.
+    authorized_loan = PersonalLoan.query.filter_by(
+        id=loan_id,
+        counterparty_user_id=user_id,
+        direction="borrowed",
+    ).first()
+    if authorized_loan is None:
+        return jsonify({
+            "success": False,
+            "message": "Loan request not found.",
+        }), 404
+
+    lender_workspace_id = None
+    account_id = None
+    disbursement_date = None
+    payment_method = None
+    reference = None
+    notes = None
+
+    if approved:
+        lender_workspace_id = _workspace_id(data.get("workspace_id"))
+        account_id = _workspace_id(data.get("financial_account_id"))
+        disbursement_date = _parse_date(data.get("disbursement_date"))
+        payment_method = data.get("payment_method")
+        reference = data.get("reference")
+        notes = data.get("notes")
+
+        if lender_workspace_id is None or account_id is None:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Valid workspace_id and financial_account_id "
+                    "are required to record the disbursement."
+                ),
+            }), 400
+
+        if disbursement_date is None:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "A valid disbursement_date is required "
+                    "in YYYY-MM-DD format."
+                ),
+            }), 400
+
+        if payment_method not in {
+            "cash", "bank", "mobile_money", "other"
+        }:
+            return jsonify({
+                "success": False,
+                "message": "Invalid payment_method.",
+            }), 400
+
+        if reference is not None:
+            if not isinstance(reference, str) or len(reference.strip()) > 120:
+                return jsonify({
+                    "success": False,
+                    "message": "Reference must not exceed 120 characters.",
+                }), 400
+            reference = reference.strip() or None
+
+        if notes is not None:
+            if not isinstance(notes, str) or len(notes) > 2000:
+                return jsonify({
+                    "success": False,
+                    "message": "Notes must not exceed 2000 characters.",
+                }), 400
+            notes = notes.strip() or None
+
+        membership = _membership(lender_workspace_id, user_id)
+
+        if membership is None:
+            return jsonify({
+                "success": False,
+                "message": "Workspace not found or access denied.",
+            }), 404
+
+        if membership.role not in {"owner", "admin"}:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Only workspace owners and admins can approve "
+                    "and disburse linked loans."
+                ),
+            }), 403
+
     try:
         loan = (
             PersonalLoan.query
@@ -1079,7 +1166,6 @@ def _decide_incoming_loan(loan_id, approved):
             .first()
         )
 
-        # Do not reveal whether a loan exists to a non-lender.
         if loan is None:
             return jsonify({
                 "success": False,
@@ -1089,9 +1175,13 @@ def _decide_incoming_loan(loan_id, approved):
         if loan.status != "pending_approval":
             return jsonify({
                 "success": False,
-                "message": "This loan request has already been decided or is no longer pending.",
+                "message": (
+                    "This loan request has already been decided "
+                    "or is no longer pending."
+                ),
             }), 409
 
+        linked_disbursement = None
         schedule = []
 
         if approved:
@@ -1103,30 +1193,223 @@ def _decide_incoming_loan(loan_id, approved):
             if existing_count:
                 return jsonify({
                     "success": False,
-                    "message": "A repayment schedule already exists for this request.",
+                    "message": (
+                        "A repayment schedule already exists for this request."
+                    ),
                 }), 409
 
-            schedule = build_repayment_schedule(loan)
+            existing_disbursement = LinkedLoanTransaction.query.filter_by(
+                loan_workspace_id=loan.workspace_id,
+                personal_loan_id=loan.id,
+                transaction_type="disbursement",
+            ).filter(
+                LinkedLoanTransaction.status != "disputed"
+            ).first()
 
-            for item in schedule:
-                db.session.add(LoanInstallment(
-                    workspace_id=loan.workspace_id,
-                    personal_loan_id=loan.id,
-                    installment_number=item["installment_number"],
-                    due_date=item["due_date"],
-                    amount_minor=item["amount_minor"],
-                    principal_minor=item["principal_minor"],
-                    interest_minor=item["interest_minor"],
-                    paid_minor=0,
-                    status="scheduled",
-                ))
+            if existing_disbursement is not None:
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "A linked disbursement already exists for this loan."
+                    ),
+                }), 409
 
-            loan.status = "active"
+            lender_workspace = (
+                Workspace.query
+                .filter_by(id=lender_workspace_id)
+                .with_for_update()
+                .first()
+            )
+
+            if lender_workspace is None:
+                return jsonify({
+                    "success": False,
+                    "message": "Lender workspace not found.",
+                }), 404
+
+            if lender_workspace.functional_currency != loan.currency_code:
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "The lender workspace currency must match "
+                        "the loan currency."
+                    ),
+                }), 400
+
+            account = (
+                FinancialAccount.query
+                .filter_by(
+                    id=account_id,
+                    workspace_id=lender_workspace_id,
+                )
+                .with_for_update()
+                .first()
+            )
+
+            if account is None or not account.is_active:
+                return jsonify({
+                    "success": False,
+                    "message": "Financial account not found or inactive.",
+                }), 400
+
+            if account.account_type not in {
+                "cash", "bank", "mobile_money"
+            }:
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "Choose an active cash, bank, or mobile money account."
+                    ),
+                }), 400
+
+            if account.currency_code != loan.currency_code:
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "Financial account currency must match the loan currency."
+                    ),
+                }), 400
+
+            cash_ledger = LedgerAccount.query.filter_by(
+                workspace_id=lender_workspace_id,
+                financial_account_id=account.id,
+            ).with_for_update().first()
+
+            if (
+                cash_ledger is None
+                or not cash_ledger.is_active
+                or cash_ledger.account_class != "asset"
+                or cash_ledger.normal_balance != "debit"
+                or cash_ledger.currency_code != loan.currency_code
+            ):
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "The selected financial account has no valid "
+                        "active asset ledger."
+                    ),
+                }), 400
+
+            receivable_ledger = LedgerAccount.query.filter_by(
+                workspace_id=lender_workspace_id,
+                code="1200",
+                is_system=True,
+            ).with_for_update().first()
+
+            if (
+                receivable_ledger is None
+                or not receivable_ledger.is_active
+                or receivable_ledger.account_class != "asset"
+                or receivable_ledger.normal_balance != "debit"
+                or receivable_ledger.currency_code != loan.currency_code
+                or receivable_ledger.financial_account_id is not None
+            ):
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "Required lender Accounts Receivable ledger "
+                        "1200 is missing or incorrectly configured."
+                    ),
+                }), 400
+
+            available_minor = db.session.query(
+                func.coalesce(
+                    func.sum(
+                        JournalLine.debit_minor - JournalLine.credit_minor
+                    ),
+                    0,
+                )
+            ).join(
+                JournalEntry,
+                JournalEntry.id == JournalLine.journal_entry_id,
+            ).filter(
+                JournalLine.ledger_account_id == cash_ledger.id,
+                JournalEntry.workspace_id == lender_workspace_id,
+                JournalEntry.status.in_(("posted", "reversed")),
+            ).scalar()
+
+            available_minor = int(available_minor or 0)
+            required_minor = int(loan.principal_minor)
+
+            if available_minor < required_minor:
+                db.session.rollback()
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "Insufficient funds in the selected account "
+                        "to disburse this loan."
+                    ),
+                    "available_minor": available_minor,
+                    "required_minor": required_minor,
+                    "currency_code": loan.currency_code,
+                }), 409
+
+            journal = create_draft_entry(
+                workspace_id=lender_workspace_id,
+                created_by=user_id,
+                reference=f"LOAN-DISB-{loan.id.hex}",
+                description=(
+                    f"Linked loan principal disbursement: "
+                    f"{loan.counterparty_name}"
+                ),
+                transaction_date=datetime.combine(
+                    disbursement_date,
+                    datetime.min.time(),
+                    tzinfo=timezone.utc,
+                ),
+                lines=[
+                    {
+                        "ledger_account_id": receivable_ledger.id,
+                        "debit_minor": loan.principal_minor,
+                        "credit_minor": 0,
+                        "memo": "Linked loan principal receivable",
+                    },
+                    {
+                        "ledger_account_id": cash_ledger.id,
+                        "debit_minor": 0,
+                        "credit_minor": loan.principal_minor,
+                        "memo": "Linked loan principal disbursed",
+                    },
+                ],
+            )
+
+            post_entry(
+                entry_id=journal.id,
+                workspace_id=lender_workspace_id,
+                posted_by=user_id,
+            )
+
+            linked_disbursement = LinkedLoanTransaction(
+                loan_workspace_id=loan.workspace_id,
+                personal_loan_id=loan.id,
+                loan_payment_id=None,
+                transaction_type="disbursement",
+                amount_minor=loan.principal_minor,
+                transaction_date=disbursement_date,
+                payment_method=payment_method,
+                reference=reference,
+                notes=notes,
+                status="pending",
+                initiating_workspace_id=lender_workspace_id,
+                initiating_account_id=account.id,
+                initiating_journal_entry_id=journal.id,
+                initiated_by=user_id,
+            )
+            db.session.add(linked_disbursement)
+            db.session.flush()
+
+            loan.status = "awaiting_confirmation"
             loan.decision_reason = None
-            action = "personal_loan_approved"
-            title = "Loan request approved"
-            body = "Your loan request has been approved and is now active."
-            message = "Loan request approved and repayment schedule generated."
+            action = "personal_loan_disbursement_recorded"
+            title = "Loan approved and disbursed"
+            body = (
+                "The lender has approved your loan and recorded the "
+                "disbursement. Confirm receipt or dispute it in PesaPilot."
+            )
+            message = (
+                "Loan approved and lender disbursement recorded. "
+                "Awaiting your confirmation of receipt."
+            )
 
         else:
             loan.status = "rejected"
@@ -1143,17 +1426,29 @@ def _decide_incoming_loan(loan_id, approved):
         loan.decided_by = user_id
         loan.decided_at = datetime.now(timezone.utc)
 
+        audit_details = {
+            "decision": "approved" if approved else "rejected",
+            "reason": reason,
+            "installment_count": len(schedule),
+        }
+
+        if linked_disbursement is not None:
+            audit_details["linked_disbursement_id"] = str(
+                linked_disbursement.id
+            )
+            audit_details["amount_minor"] = loan.principal_minor
+            audit_details["currency"] = loan.currency_code
+            audit_details["disbursement_date"] = (
+                disbursement_date.isoformat()
+            )
+
         db.session.add(AuditLog(
             workspace_id=loan.workspace_id,
             user_id=user_id,
             action=action,
             resource_type="personal_loan",
             resource_id=str(loan.id),
-            details={
-                "decision": "approved" if approved else "rejected",
-                "reason": reason,
-                "installment_count": len(schedule),
-            },
+            details=audit_details,
             ip_address=request.remote_addr,
         ))
 
@@ -1172,12 +1467,28 @@ def _decide_incoming_loan(loan_id, approved):
 
         db.session.commit()
 
-        return jsonify({
+        response = {
             "success": True,
             "message": message,
             "request": _incoming_loan_response(loan),
             "installment_count": len(schedule),
-        }), 200
+        }
+
+        if linked_disbursement is not None:
+            response["disbursement"] = {
+                "id": str(linked_disbursement.id),
+                "loan_id": str(loan.id),
+                "amount_minor": linked_disbursement.amount_minor,
+                "currency_code": loan.currency_code,
+                "disbursement_date": (
+                    linked_disbursement.transaction_date.isoformat()
+                ),
+                "payment_method": linked_disbursement.payment_method,
+                "reference": linked_disbursement.reference,
+                "status": linked_disbursement.status,
+            }
+
+        return jsonify(response), 200
 
     except ValueError as exc:
         db.session.rollback()
@@ -1190,7 +1501,9 @@ def _decide_incoming_loan(loan_id, approved):
         db.session.rollback()
         return jsonify({
             "success": False,
-            "message": "The loan decision could not be saved.",
+            "message": (
+                "The loan decision or linked disbursement could not be saved."
+            ),
         }), 409
 
     except Exception:
@@ -1202,6 +1515,8 @@ def _decide_incoming_loan(loan_id, approved):
             "success": False,
             "message": "The loan decision could not be completed.",
         }), 500
+
+
 
 
 @loans_bp.post("/<uuid:loan_id>/approve")
@@ -1883,6 +2198,9 @@ def record_personal_loan_payment(loan_id):
     try:
         build_payment_allocations(installments, confirmed_allocations, allocation_amount)
 
+        if is_linked:
+            payment_source = "linked"
+
         payment = LoanPayment(
             workspace_id=workspace_id,
             personal_loan_id=loan.id,
@@ -2406,6 +2724,719 @@ def confirm_personal_loan_payment(loan_id, payment_id):
         return jsonify({"success": False, "message": "The repayment could not be confirmed."}), 500
 
 
+@loans_bp.post("/<uuid:loan_id>/linked-disbursement/confirm")
+@jwt_required()
+def confirm_linked_loan_disbursement(loan_id):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"success": False, "message": "A valid JSON request is required."}), 400
+
+    workspace_id = _workspace_id(data.get("workspace_id"))
+    account_id = _workspace_id(data.get("financial_account_id"))
+    user_id = _user_id()
+
+    if workspace_id is None or account_id is None:
+        return jsonify({"success": False, "message": "Valid workspace_id and financial_account_id are required."}), 400
+
+    membership = _membership(workspace_id, user_id)
+    if membership is None:
+        return jsonify({"success": False, "message": "Workspace membership is required."}), 404
+    if membership.role == "viewer":
+        return jsonify({"success": False, "message": "Viewers cannot confirm loan disbursements."}), 403
+
+    try:
+        loan = PersonalLoan.query.filter_by(
+            id=loan_id, workspace_id=workspace_id
+        ).with_for_update().first()
+
+        if loan is None:
+            return jsonify({"success": False, "message": "Loan not found."}), 404
+        if loan.direction != "borrowed" or loan.created_by != user_id:
+            return jsonify({"success": False, "message": "Only the borrower can confirm receipt."}), 403
+        if loan.status != "awaiting_confirmation":
+            return jsonify({"success": False, "message": "This loan is not awaiting disbursement confirmation."}), 409
+
+        linked = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=workspace_id,
+            personal_loan_id=loan.id,
+            transaction_type="disbursement",
+            status="pending",
+        ).with_for_update().first()
+
+        if linked is None or linked.initiating_journal_entry_id is None:
+            return jsonify({"success": False, "message": "No pending disbursement is available to confirm."}), 409
+
+        account = FinancialAccount.query.filter_by(
+            id=account_id, workspace_id=workspace_id
+        ).with_for_update().first()
+
+        if (
+            account is None or not account.is_active
+            or account.account_type not in {"cash", "bank", "mobile_money"}
+            or account.currency_code != loan.currency_code
+        ):
+            return jsonify({"success": False, "message": "Choose an active cash, bank, or mobile-money account in the loan currency."}), 400
+
+        cash_ledger = LedgerAccount.query.filter_by(
+            workspace_id=workspace_id,
+            financial_account_id=account.id,
+        ).with_for_update().first()
+
+        liability = LedgerAccount.query.filter_by(
+            workspace_id=workspace_id,
+            code="2000",
+            is_system=True,
+        ).with_for_update().first()
+
+        if (
+            cash_ledger is None or not cash_ledger.is_active
+            or cash_ledger.account_class != "asset"
+            or cash_ledger.normal_balance != "debit"
+            or cash_ledger.currency_code != loan.currency_code
+        ):
+            return jsonify({"success": False, "message": "The selected account has no valid active asset ledger."}), 400
+
+        if (
+            liability is None or not liability.is_active
+            or liability.account_class != "liability"
+            or liability.normal_balance != "credit"
+            or liability.currency_code != loan.currency_code
+            or liability.financial_account_id is not None
+        ):
+            return jsonify({"success": False, "message": "The required loan payable system ledger is unavailable."}), 400
+
+        workspace = Workspace.query.filter_by(id=workspace_id).first()
+        if workspace is None:
+            return jsonify({"success": False, "message": "Workspace not found."}), 404
+
+        fx_rate = None
+        if workspace.functional_currency != loan.currency_code:
+            rate_record = ExchangeRate.query.filter(
+                ExchangeRate.base_currency == loan.currency_code,
+                ExchangeRate.quote_currency == workspace.functional_currency,
+                ExchangeRate.effective_at <= datetime.combine(
+                    linked.transaction_date, datetime.max.time(), tzinfo=timezone.utc
+                ),
+            ).order_by(ExchangeRate.effective_at.desc()).first()
+
+            if rate_record is None:
+                return jsonify({"success": False, "message": "No exchange rate is configured for the disbursement date."}), 400
+            fx_rate = rate_record.rate
+
+        existing_count = LoanInstallment.query.filter_by(
+            workspace_id=workspace_id,
+            personal_loan_id=loan.id,
+        ).count()
+        if existing_count:
+            return jsonify({"success": False, "message": "A repayment schedule already exists for this loan."}), 409
+
+        schedule = build_repayment_schedule(loan)
+        journal = create_draft_entry(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            reference=f"LINKED-DISB-RECEIPT-{linked.id.hex}",
+            description=f"Receipt of loan principal from {loan.counterparty_name}",
+            transaction_date=datetime.combine(
+                linked.transaction_date, datetime.min.time(), tzinfo=timezone.utc
+            ),
+            lines=[
+                {
+                    "ledger_account_id": cash_ledger.id,
+                    "debit_minor": linked.amount_minor,
+                    "credit_minor": 0,
+                    "exchange_rate": fx_rate,
+                    "memo": "Linked loan principal received",
+                },
+                {
+                    "ledger_account_id": liability.id,
+                    "debit_minor": 0,
+                    "credit_minor": linked.amount_minor,
+                    "exchange_rate": fx_rate,
+                    "memo": "Loan payable recognized",
+                },
+            ],
+        )
+        post_entry(
+            entry_id=journal.id,
+            workspace_id=workspace_id,
+            posted_by=user_id,
+        )
+
+        for item in schedule:
+            db.session.add(LoanInstallment(
+                workspace_id=workspace_id,
+                personal_loan_id=loan.id,
+                installment_number=item["installment_number"],
+                due_date=item["due_date"],
+                amount_minor=item["amount_minor"],
+                principal_minor=item["principal_minor"],
+                interest_minor=item["interest_minor"],
+                paid_minor=0,
+                status="scheduled",
+            ))
+
+        linked.status = "confirmed"
+        linked.confirming_workspace_id = workspace_id
+        linked.confirming_account_id = account.id
+        linked.confirming_journal_entry_id = journal.id
+        linked.confirmed_by = user_id
+        linked.confirmed_at = datetime.now(timezone.utc)
+        loan.status = "active"
+
+        db.session.add(AuditLog(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            action="linked_loan_disbursement_confirmed",
+            resource_type="linked_loan_transaction",
+            resource_id=str(linked.id),
+            details={
+                "loan_id": str(loan.id),
+                "amount_minor": linked.amount_minor,
+                "journal_entry_id": str(journal.id),
+                "installment_count": len(schedule),
+            },
+            ip_address=request.remote_addr,
+        ))
+
+        if loan.counterparty_user_id:
+            create_notification(
+                user_id=loan.counterparty_user_id,
+                category="loan_application_updates",
+                title="Loan receipt confirmed",
+                body="The borrower confirmed receipt of your loan disbursement.",
+                target_url="/loans",
+                dedupe_key=f"linked-disbursement-confirmed:{linked.id}",
+            )
+
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "message": "Loan receipt confirmed and repayment schedule created.",
+            "loan_status": loan.status,
+            "journal_entry_id": str(journal.id),
+            "installment_count": len(schedule),
+        }), 200
+
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except AccountingError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"success": False, "message": "The disbursement could not be confirmed because of a data conflict."}), 409
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Linked loan disbursement confirmation failed.")
+        return jsonify({"success": False, "message": "The disbursement could not be confirmed."}), 500
+
+
+@loans_bp.post("/<uuid:loan_id>/linked-disbursement/dispute")
+@jwt_required()
+def dispute_linked_loan_disbursement(loan_id):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"success": False, "message": "A valid JSON request is required."}), 400
+
+    workspace_id = _workspace_id(data.get("workspace_id"))
+    reason = data.get("reason")
+    user_id = _user_id()
+
+    if workspace_id is None:
+        return jsonify({"success": False, "message": "A valid workspace_id is required."}), 400
+    if not isinstance(reason, str) or not reason.strip() or len(reason.strip()) > 2000:
+        return jsonify({"success": False, "message": "A dispute reason is required and must not exceed 2000 characters."}), 400
+
+    membership = _membership(workspace_id, user_id)
+    if membership is None:
+        return jsonify({"success": False, "message": "Workspace membership is required."}), 404
+    if membership.role == "viewer":
+        return jsonify({"success": False, "message": "Viewers cannot dispute loan disbursements."}), 403
+
+    try:
+        loan = PersonalLoan.query.filter_by(
+            id=loan_id, workspace_id=workspace_id
+        ).with_for_update().first()
+
+        if loan is None:
+            return jsonify({"success": False, "message": "Loan not found."}), 404
+        if loan.direction != "borrowed" or loan.created_by != user_id:
+            return jsonify({"success": False, "message": "Only the borrower can dispute receipt."}), 403
+        if loan.status != "awaiting_confirmation":
+            return jsonify({"success": False, "message": "This loan is not awaiting disbursement confirmation."}), 409
+
+        linked = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=workspace_id,
+            personal_loan_id=loan.id,
+            transaction_type="disbursement",
+            status="pending",
+        ).with_for_update().first()
+
+        if linked is None or linked.initiating_journal_entry_id is None:
+            return jsonify({"success": False, "message": "No pending disbursement is available to dispute."}), 409
+
+        now = datetime.now(timezone.utc)
+        reversal = reverse_entry(
+            entry_id=linked.initiating_journal_entry_id,
+            workspace_id=linked.initiating_workspace_id,
+            reversed_by=user_id,
+            reference=f"LINKED-DISB-DISPUTE-{linked.id.hex}",
+            description=f"Reversal of disputed loan disbursement: {loan.counterparty_name}",
+            transaction_date=now,
+        )
+
+        linked.status = "disputed"
+        linked.reversal_journal_entry_id = reversal.id
+        linked.reversed_by = user_id
+        linked.reversed_at = now
+        linked.disputed_by = user_id
+        linked.dispute_reason = reason.strip()
+        loan.status = "disputed"
+
+        db.session.add(AuditLog(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            action="linked_loan_disbursement_disputed",
+            resource_type="linked_loan_transaction",
+            resource_id=str(linked.id),
+            details={
+                "loan_id": str(loan.id),
+                "reason": reason.strip(),
+                "reversal_journal_entry_id": str(reversal.id),
+            },
+            ip_address=request.remote_addr,
+        ))
+
+        if loan.counterparty_user_id:
+            create_notification(
+                user_id=loan.counterparty_user_id,
+                category="loan_application_updates",
+                title="Loan disbursement disputed",
+                body="The borrower disputed receipt of your loan disbursement. The disbursement accounting entry has been reversed.",
+                target_url="/loans",
+                dedupe_key=f"linked-disbursement-disputed:{linked.id}",
+            )
+
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "message": "Disbursement disputed and lender accounting reversed.",
+            "loan_status": loan.status,
+            "reversal_journal_entry_id": str(reversal.id),
+        }), 200
+
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except AccountingError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"success": False, "message": "The disbursement dispute could not be recorded because of a data conflict."}), 409
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Linked loan disbursement dispute failed.")
+        return jsonify({"success": False, "message": "The disbursement could not be disputed."}), 500
+
+
+
+
+@loans_bp.post("/<uuid:loan_id>/linked-repayments/<uuid:payment_id>/confirm")
+@jwt_required()
+def confirm_linked_loan_repayment(loan_id, payment_id):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"success": False, "message": "A valid JSON request is required."}), 400
+
+    workspace_id = _workspace_id(data.get("workspace_id"))
+    account_id = _workspace_id(data.get("financial_account_id"))
+    user_id = _user_id()
+
+    if workspace_id is None or account_id is None:
+        return jsonify({"success": False, "message": "Valid workspace_id and financial_account_id are required."}), 400
+    if user_id is None:
+        return jsonify({"success": False, "message": "Invalid authentication identity."}), 401
+
+    membership = _membership(workspace_id, user_id)
+    if membership is None:
+        return jsonify({"success": False, "message": "Workspace membership is required."}), 404
+    if membership.role not in {"owner", "admin"}:
+        return jsonify({"success": False, "message": "Only workspace owners or admins can confirm linked repayments."}), 403
+
+    try:
+        loan = PersonalLoan.query.filter_by(
+            id=loan_id,
+            direction="borrowed",
+            counterparty_user_id=user_id,
+        ).with_for_update().first()
+
+        if loan is None:
+            return jsonify({"success": False, "message": "Linked loan not found."}), 404
+
+        if loan.status not in {"active", "overdue", "restructured"}:
+            return jsonify({"success": False, "message": "This loan cannot receive repayments."}), 409
+
+        disbursement = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=loan.workspace_id,
+            personal_loan_id=loan.id,
+            transaction_type="disbursement",
+            status="confirmed",
+        ).first()
+
+        if disbursement is None:
+            return jsonify({"success": False, "message": "The borrower has not confirmed receipt of the loan disbursement."}), 409
+
+        linked = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=loan.workspace_id,
+            personal_loan_id=loan.id,
+            loan_payment_id=payment_id,
+            transaction_type="repayment",
+            status="pending",
+        ).with_for_update().first()
+
+        if linked is None:
+            return jsonify({"success": False, "message": "No pending linked repayment was found."}), 404
+
+        payment = LoanPayment.query.filter_by(
+            id=payment_id,
+            personal_loan_id=loan.id,
+            workspace_id=loan.workspace_id,
+        ).with_for_update().first()
+
+        if payment is None:
+            return jsonify({"success": False, "message": "Repayment not found."}), 404
+
+        if (
+            payment.status != "pending"
+            or payment.payment_source != "linked"
+            or payment.financial_account_id is not None
+            or payment.journal_entry_id is not None
+            or payment.amount_minor != linked.amount_minor
+            or payment.payment_date != linked.transaction_date
+            or payment.payment_method != linked.payment_method
+            or payment.reference != linked.reference
+        ):
+            return jsonify({"success": False, "message": "The pending repayment details are inconsistent."}), 409
+
+        workspace = Workspace.query.filter_by(id=workspace_id).first()
+        if workspace is None:
+            return jsonify({"success": False, "message": "Lender workspace not found."}), 404
+
+        account = FinancialAccount.query.filter_by(
+            id=account_id,
+            workspace_id=workspace_id,
+        ).with_for_update().first()
+
+        if (
+            account is None
+            or not account.is_active
+            or account.account_type not in {"cash", "bank", "mobile_money"}
+            or account.currency_code != loan.currency_code
+        ):
+            return jsonify({"success": False, "message": "Choose an active cash, bank, or mobile-money account in the loan currency."}), 400
+
+        account_ledgers = LedgerAccount.query.filter_by(
+            workspace_id=workspace_id,
+            financial_account_id=account.id,
+            is_active=True,
+        ).with_for_update().all()
+
+        if len(account_ledgers) != 1:
+            return jsonify({"success": False, "message": "The selected account must have exactly one active ledger."}), 400
+
+        cash_ledger = account_ledgers[0]
+        if (
+            cash_ledger.account_class != "asset"
+            or cash_ledger.normal_balance != "debit"
+            or cash_ledger.currency_code != loan.currency_code
+        ):
+            return jsonify({"success": False, "message": "The selected account has no valid active asset ledger."}), 400
+
+        fx_rate = None
+        if workspace.functional_currency != loan.currency_code:
+            rate_record = ExchangeRate.query.filter(
+                ExchangeRate.base_currency == loan.currency_code,
+                ExchangeRate.quote_currency == workspace.functional_currency,
+                ExchangeRate.effective_at <= datetime.combine(
+                    linked.transaction_date,
+                    datetime.max.time(),
+                    tzinfo=timezone.utc,
+                ),
+            ).order_by(ExchangeRate.effective_at.desc()).first()
+
+            if rate_record is None:
+                return jsonify({"success": False, "message": "No exchange rate is configured for the repayment date."}), 400
+            fx_rate = rate_record.rate
+
+        installments = LoanInstallment.query.filter_by(
+            workspace_id=loan.workspace_id,
+            personal_loan_id=loan.id,
+        ).order_by(
+            LoanInstallment.due_date,
+            LoanInstallment.installment_number,
+        ).with_for_update().all()
+
+        if not installments:
+            return jsonify({"success": False, "message": "This loan has no repayment schedule."}), 409
+
+        previous_allocations = LoanPaymentAllocation.query.filter_by(
+            workspace_id=loan.workspace_id,
+            personal_loan_id=loan.id,
+        ).all()
+
+        allocated_by_installment = {item.id: 0 for item in installments}
+        for previous in previous_allocations:
+            if previous.installment_id not in allocated_by_installment:
+                return jsonify({"success": False, "message": "A previous repayment allocation references an invalid installment."}), 409
+            allocated_by_installment[previous.installment_id] += previous.amount_minor
+
+        for installment in installments:
+            if allocated_by_installment[installment.id] != installment.paid_minor:
+                return jsonify({"success": False, "message": "Installment balances do not match their payment allocations."}), 409
+
+        allocations = build_payment_allocations(
+            installments,
+            previous_allocations,
+            payment.amount_minor,
+        )
+
+        principal_total = sum(item["principal_minor"] for item in allocations)
+        interest_total = sum(item["interest_minor"] for item in allocations)
+
+        if principal_total + interest_total != payment.amount_minor:
+            raise ValueError("Repayment allocation does not balance.")
+
+        source_currency = db.session.get(Currency, loan.currency_code)
+        functional_currency = db.session.get(Currency, workspace.functional_currency)
+
+        if source_currency is None or functional_currency is None:
+            raise ValueError("Repayment currency configuration is unavailable.")
+
+        conversion_rate = Decimal(str(fx_rate)) if fx_rate is not None else Decimal("1")
+
+        def convert_component(amount_minor):
+            if amount_minor == 0:
+                return 0
+            converted = (
+                Decimal(amount_minor)
+                * conversion_rate
+                * (
+                    Decimal(10)
+                    ** (
+                        functional_currency.minor_unit
+                        - source_currency.minor_unit
+                    )
+                )
+            )
+            result = int(converted.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            if result < 0 or result > MAX_MINOR_UNITS:
+                raise ValueError("Repayment functional amount is outside the supported range.")
+            return result
+
+        total_functional = convert_component(payment.amount_minor)
+        principal_functional = convert_component(principal_total)
+        interest_functional = convert_component(interest_total)
+
+        if total_functional <= 0:
+            raise ValueError("Repayment is too small in functional currency.")
+
+        rounding_difference = total_functional - principal_functional - interest_functional
+        if abs(rounding_difference) > 1:
+            raise ValueError("Repayment FX rounding difference is unexpected.")
+
+        if rounding_difference:
+            if principal_total >= interest_total:
+                principal_functional += rounding_difference
+            else:
+                interest_functional += rounding_difference
+
+        if (
+            principal_functional < 0
+            or interest_functional < 0
+            or principal_functional + interest_functional != total_functional
+        ):
+            raise ValueError("Repayment FX allocation is invalid.")
+
+        receivable = LedgerAccount.query.filter_by(
+            workspace_id=workspace_id,
+            code="1200",
+            is_system=True,
+            is_active=True,
+        ).with_for_update().first()
+
+        if (
+            receivable is None
+            or receivable.account_class != "asset"
+            or receivable.normal_balance != "debit"
+            or receivable.currency_code != loan.currency_code
+            or receivable.financial_account_id is not None
+        ):
+            return jsonify({"success": False, "message": "The lender's accounts-receivable system ledger is unavailable or incorrectly configured."}), 400
+
+        income = None
+        if interest_total:
+            income = LedgerAccount.query.filter_by(
+                workspace_id=workspace_id,
+                code="4000",
+                is_system=True,
+                is_active=True,
+            ).with_for_update().first()
+
+            if (
+                income is None
+                or income.account_class != "income"
+                or income.normal_balance != "credit"
+                or income.currency_code != loan.currency_code
+                or income.financial_account_id is not None
+            ):
+                return jsonify({"success": False, "message": "The lender's interest-income system ledger is unavailable or incorrectly configured."}), 400
+
+        lines = [
+            {
+                "ledger_account_id": str(cash_ledger.id),
+                "debit_minor": payment.amount_minor,
+                "credit_minor": 0,
+                "exchange_rate": fx_rate,
+                "memo": "Linked loan repayment received",
+            },
+            {
+                "ledger_account_id": str(receivable.id),
+                "debit_minor": 0,
+                "credit_minor": principal_total,
+                "exchange_rate": fx_rate,
+                "functional_amount_minor": principal_functional,
+                "memo": "Loan principal repaid",
+            },
+        ]
+
+        if interest_total:
+            lines.append({
+                "ledger_account_id": str(income.id),
+                "debit_minor": 0,
+                "credit_minor": interest_total,
+                "exchange_rate": fx_rate,
+                "functional_amount_minor": interest_functional,
+                "memo": "Loan interest received",
+            })
+
+        journal = create_draft_entry(
+            workspace_id=workspace_id,
+            created_by=user_id,
+            reference=f"LINKED-LOAN-REPAYMENT-{linked.id.hex}",
+            description=f"Linked loan repayment received from {loan.counterparty_name}",
+            transaction_date=datetime.combine(
+                linked.transaction_date,
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            ),
+            lines=lines,
+        )
+        post_entry(
+            entry_id=journal.id,
+            workspace_id=workspace_id,
+            posted_by=user_id,
+        )
+
+        installments_by_id = {item.id: item for item in installments}
+        for allocation in allocations:
+            installment = installments_by_id[allocation["installment_id"]]
+            db.session.add(LoanPaymentAllocation(
+                workspace_id=loan.workspace_id,
+                personal_loan_id=loan.id,
+                payment_id=payment.id,
+                installment_id=installment.id,
+                amount_minor=allocation["amount_minor"],
+                principal_minor=allocation["principal_minor"],
+                interest_minor=allocation["interest_minor"],
+            ))
+            installment.paid_minor += allocation["amount_minor"]
+
+        for installment in installments:
+            if installment.status == "waived":
+                continue
+            if installment.paid_minor == installment.amount_minor:
+                installment.status = "paid"
+            elif installment.due_date < payment.payment_date:
+                installment.status = "overdue"
+            elif installment.paid_minor > 0:
+                installment.status = "partially_paid"
+            else:
+                installment.status = "scheduled"
+
+        payment.principal_minor = principal_total
+        payment.interest_minor = interest_total
+        payment.status = "confirmed"
+        # Deliberately leave borrower-scoped financial_account_id and
+        # journal_entry_id null. Lender accounting is stored on `linked`.
+
+        linked.status = "confirmed"
+        linked.confirming_workspace_id = workspace_id
+        linked.confirming_account_id = account.id
+        linked.confirming_journal_entry_id = journal.id
+        linked.confirmed_by = user_id
+        linked.confirmed_at = datetime.now(timezone.utc)
+
+        if all(item.status in {"paid", "waived"} for item in installments):
+            loan.status = "paid"
+        elif loan.status != "restructured":
+            loan.status = (
+                "overdue"
+                if any(item.status == "overdue" for item in installments)
+                else "active"
+            )
+
+        db.session.add(AuditLog(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            action="linked_loan_repayment_confirmed",
+            resource_type="linked_loan_transaction",
+            resource_id=str(linked.id),
+            details={
+                "loan_id": str(loan.id),
+                "payment_id": str(payment.id),
+                "amount_minor": payment.amount_minor,
+                "principal_minor": principal_total,
+                "interest_minor": interest_total,
+                "journal_entry_id": str(journal.id),
+            },
+            ip_address=request.remote_addr,
+        ))
+
+        create_notification(
+            user_id=loan.created_by,
+            category="loan_repayments",
+            title="Loan repayment confirmed",
+            body="The lender confirmed receipt of your loan repayment.",
+            target_url="/loans",
+            dedupe_key=f"linked-loan-repayment-confirmed:{linked.id}",
+        )
+
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "message": "Loan repayment confirmed and lender accounting updated.",
+            "loan_status": loan.status,
+            "principal_minor": principal_total,
+            "interest_minor": interest_total,
+            "journal_entry_id": str(journal.id),
+        }), 200
+
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except AccountingError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"success": False, "message": "The repayment could not be confirmed because of a data conflict."}), 409
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Linked loan repayment confirmation failed.")
+        return jsonify({"success": False, "message": "The repayment could not be confirmed."}), 500
+
 
 @loans_bp.get("/<uuid:loan_id>")
 @jwt_required()
@@ -2472,6 +3503,20 @@ def get_personal_loan(loan_id):
             personal_loan_id=loan.id,
         ).first()
 
+        linked_transactions = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=loan.workspace_id,
+            personal_loan_id=loan.id,
+        ).all()
+        linked_disbursement = next(
+            (item for item in linked_transactions if item.transaction_type == "disbursement"),
+            None,
+        )
+        linked_repayments = {
+            item.loan_payment_id: item
+            for item in linked_transactions
+            if item.transaction_type == "repayment" and item.loan_payment_id is not None
+        }
+
         payments = (
             LoanPayment.query
             .filter_by(
@@ -2492,7 +3537,7 @@ def get_personal_loan(loan_id):
             allocation_rows = (
                 LoanPaymentAllocation.query
                 .filter(
-                    LoanPaymentAllocation.workspace_id == workspace_id,
+                    LoanPaymentAllocation.workspace_id == loan.workspace_id,
                     LoanPaymentAllocation.personal_loan_id == loan.id,
                     LoanPaymentAllocation.payment_id.in_(payment_ids),
                 )
@@ -2524,9 +3569,34 @@ def get_personal_loan(loan_id):
                 "notes": disbursement.notes,
             }
 
+        linked_disbursement_data = None
+        if linked_disbursement is not None:
+            linked_disbursement_data = {
+                "id": str(linked_disbursement.id),
+                "amount_minor": linked_disbursement.amount_minor,
+                "transaction_date": linked_disbursement.transaction_date.isoformat(),
+                "payment_method": linked_disbursement.payment_method,
+                "reference": linked_disbursement.reference,
+                "notes": linked_disbursement.notes,
+                "status": linked_disbursement.status,
+                "confirmed_at": (
+                    linked_disbursement.confirmed_at.isoformat()
+                    if linked_disbursement.confirmed_at else None
+                ),
+                "dispute_reason": linked_disbursement.dispute_reason,
+            }
+
         payment_data = [
             {
                 "id": str(payment.id),
+                "linked_transaction_id": (
+                    str(linked_repayments[payment.id].id)
+                    if payment.id in linked_repayments else None
+                ),
+                "linked_status": (
+                    linked_repayments[payment.id].status
+                    if payment.id in linked_repayments else None
+                ),
                 "financial_account_id": (
                     str(payment.financial_account_id)
                     if payment.financial_account_id and not is_counterparty_view
@@ -2562,6 +3632,7 @@ def get_personal_loan(loan_id):
                 else _loan_response(loan)
             ),
             "disbursement": disbursement_data,
+            "linked_disbursement": linked_disbursement_data,
             "installments": [
                 {
                     "id": str(item.id),

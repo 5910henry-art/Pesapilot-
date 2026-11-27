@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 from app import create_app
 from app.extensions import db
 from app.models.loan_repayments import LoanPaymentAllocation
+from app.models.linked_loan_transactions import LinkedLoanTransaction
 from app.models.notifications import Notification
 from app.models import (
     BusinessProfile,
@@ -1515,7 +1516,72 @@ class PesaPilotTestCase(unittest.TestCase):
             user_id=lender.id,
             role="owner",
         ))
+
+        account = FinancialAccount(
+            workspace_id=workspace.id,
+            name="Lender Cash",
+            account_type="cash",
+            currency_code="KES",
+            is_active=True,
+        )
+        db.session.add(account)
+        db.session.flush()
+
+        cash = LedgerAccount(
+            workspace_id=workspace.id,
+            financial_account_id=account.id,
+            code=f"LCASH-{uuid4().hex[:10]}",
+            name="Lender Cash",
+            account_class="asset",
+            normal_balance="debit",
+            currency_code="KES",
+            is_system=False,
+            is_active=True,
+        )
+        receivable = LedgerAccount(
+            workspace_id=workspace.id,
+            financial_account_id=None,
+            code="1200",
+            name="Accounts Receivable",
+            account_class="asset",
+            normal_balance="debit",
+            currency_code="KES",
+            is_system=True,
+            is_active=True,
+        )
+        equity = LedgerAccount(
+            workspace_id=workspace.id,
+            financial_account_id=None,
+            code=f"LEQ-{uuid4().hex[:10]}",
+            name="Opening Balance Equity",
+            account_class="equity",
+            normal_balance="credit",
+            currency_code="KES",
+            is_system=True,
+            is_active=True,
+        )
+        db.session.add_all([cash, receivable, equity])
+        db.session.flush()
+
+        opening = create_draft_entry(
+            workspace_id=workspace.id,
+            created_by=lender.id,
+            reference=f"LENDER-OPEN-{uuid4().hex}",
+            description="Lender test opening balance",
+            transaction_date=datetime.now(timezone.utc),
+            lines=[
+                {"ledger_account_id": cash.id, "debit_minor": 1000000, "credit_minor": 0},
+                {"ledger_account_id": equity.id, "debit_minor": 0, "credit_minor": 1000000},
+            ],
+        )
+        post_entry(
+            entry_id=opening.id,
+            workspace_id=workspace.id,
+            posted_by=lender.id,
+        )
         db.session.commit()
+
+        workspace.test_account_id = account.id
         return workspace
 
     def create_personal_loan(self, **overrides):
@@ -8827,32 +8893,333 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 201, response.json)
         loan_id = response.json["loan"]["id"]
 
+        lender_workspace = self.create_lender_workspace(lender)
         approval = self.client.post(
             f"/api/v1/loans/{loan_id}/approve",
             headers=lender_headers,
-            json={},
+            json={
+                "workspace_id": str(lender_workspace.id),
+                "financial_account_id": str(lender_workspace.test_account_id),
+                "disbursement_date": start.isoformat(),
+                "payment_method": "cash",
+            },
         )
         self.assertEqual(approval.status_code, 200, approval.json)
-        self.assertEqual(approval.json["request"]["status"], "active")
-        self.assertEqual(
-            approval.json["installment_count"],
-            12,
-        )
+        self.assertEqual(approval.json["request"]["status"], "awaiting_confirmation")
 
         saved = db.session.get(PersonalLoan, UUID(loan_id))
-        self.assertEqual(saved.status, "active")
+        self.assertEqual(saved.status, "awaiting_confirmation")
         self.assertEqual(saved.decided_by, lender.id)
         self.assertIsNotNone(saved.decided_at)
 
         installments = LoanInstallment.query.filter_by(
             personal_loan_id=saved.id,
         ).all()
+        self.assertEqual(installments, [])
+
+    def test_borrower_confirms_linked_disbursement_and_schedule_is_created(self):
+        lender, lender_headers = self.create_verified_lender()
+        lender_workspace = self.create_lender_workspace(lender)
+        start = date.today()
+
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+            start_date=start.isoformat(),
+            due_date=(start.replace(year=start.year + 1)
+                      if start.month != 2 or start.day <= 28
+                      else date(start.year + 1, 2, 28)).isoformat(),
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+        loan_id = response.json["loan"]["id"]
+
+        approval = self.client.post(
+            f"/api/v1/loans/{loan_id}/approve",
+            headers=lender_headers,
+            json={
+                "workspace_id": str(lender_workspace.id),
+                "financial_account_id": str(lender_workspace.test_account_id),
+                "disbursement_date": start.isoformat(),
+                "payment_method": "cash",
+            },
+        )
+        self.assertEqual(approval.status_code, 200, approval.json)
+
+        confirmation = self.client.post(
+            f"/api/v1/loans/{loan_id}/linked-disbursement/confirm",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "financial_account_id": str(self.source_account.id),
+            },
+        )
+        self.assertEqual(confirmation.status_code, 200, confirmation.json)
+        self.assertEqual(confirmation.json["loan_status"], "active")
+        self.assertEqual(confirmation.json["installment_count"], 12)
+
+        loan = db.session.get(PersonalLoan, UUID(loan_id))
+        self.assertEqual(loan.status, "active")
+
+        installments = LoanInstallment.query.filter_by(
+            workspace_id=self.workspace.id,
+            personal_loan_id=loan.id,
+        ).all()
         self.assertEqual(len(installments), 12)
 
-        self.assertTrue(all(
-            item.status == "scheduled"
-            for item in installments
+        linked = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=self.workspace.id,
+            personal_loan_id=loan.id,
+            transaction_type="disbursement",
+        ).one()
+        self.assertEqual(linked.status, "confirmed")
+        self.assertEqual(linked.confirming_workspace_id, self.workspace.id)
+        self.assertEqual(linked.confirming_account_id, self.source_account.id)
+        self.assertIsNotNone(linked.initiating_journal_entry_id)
+        self.assertIsNotNone(linked.confirming_journal_entry_id)
+        self.assertIsNotNone(linked.confirmed_at)
+
+    def test_borrower_disputes_linked_disbursement_and_lender_entry_is_reversed(self):
+        lender, lender_headers = self.create_verified_lender()
+        lender_workspace = self.create_lender_workspace(lender)
+        start = date.today()
+
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+            start_date=start.isoformat(),
+            due_date=(start.replace(year=start.year + 1)
+                      if start.month != 2 or start.day <= 28
+                      else date(start.year + 1, 2, 28)).isoformat(),
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+        loan_id = response.json["loan"]["id"]
+
+        approval = self.client.post(
+            f"/api/v1/loans/{loan_id}/approve",
+            headers=lender_headers,
+            json={
+                "workspace_id": str(lender_workspace.id),
+                "financial_account_id": str(lender_workspace.test_account_id),
+                "disbursement_date": start.isoformat(),
+                "payment_method": "cash",
+            },
+        )
+        self.assertEqual(approval.status_code, 200, approval.json)
+
+        dispute = self.client.post(
+            f"/api/v1/loans/{loan_id}/linked-disbursement/dispute",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "reason": "I did not receive the funds.",
+            },
+        )
+        self.assertEqual(dispute.status_code, 200, dispute.json)
+        self.assertEqual(dispute.json["loan_status"], "disputed")
+
+        loan = db.session.get(PersonalLoan, UUID(loan_id))
+        self.assertEqual(loan.status, "disputed")
+
+        linked = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=self.workspace.id,
+            personal_loan_id=loan.id,
+            transaction_type="disbursement",
+        ).one()
+        self.assertEqual(linked.status, "disputed")
+        self.assertEqual(linked.dispute_reason, "I did not receive the funds.")
+        self.assertIsNotNone(linked.initiating_journal_entry_id)
+        self.assertIsNotNone(linked.reversal_journal_entry_id)
+        self.assertIsNotNone(linked.reversed_at)
+        self.assertIsNone(linked.confirming_journal_entry_id)
+        self.assertIsNone(linked.confirmed_at)
+
+        self.assertEqual(
+            LoanInstallment.query.filter_by(
+                workspace_id=self.workspace.id,
+                personal_loan_id=loan.id,
+            ).count(),
+            0,
+        )
+
+    def _create_pending_linked_repayment(self):
+        lender, lender_headers = self.create_verified_lender()
+        lender_workspace = self.create_lender_workspace(lender)
+        start = date.today()
+        due = start + timedelta(days=30)
+
+        response = self.create_personal_loan(
+            counterparty_user_id=str(lender.id),
+            counterparty_name="Alex Lender",
+            principal_minor=100000,
+            interest_method="none",
+            interest_rate_percent="0",
+            repayment_frequency="one_time",
+            term_count=1,
+            installment_minor=100000,
+            start_date=start.isoformat(),
+            due_date=due.isoformat(),
+        )
+        self.assertEqual(response.status_code, 201, response.json)
+        loan_id = response.json["loan"]["id"]
+
+        approval = self.client.post(
+            f"/api/v1/loans/{loan_id}/approve",
+            headers=lender_headers,
+            json={
+                "workspace_id": str(lender_workspace.id),
+                "financial_account_id": str(lender_workspace.test_account_id),
+                "disbursement_date": start.isoformat(),
+                "payment_method": "cash",
+            },
+        )
+        self.assertEqual(approval.status_code, 200, approval.json)
+
+        receipt = self.client.post(
+            f"/api/v1/loans/{loan_id}/linked-disbursement/confirm",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "financial_account_id": str(self.source_account.id),
+            },
+        )
+        self.assertEqual(receipt.status_code, 200, receipt.json)
+
+        repayment = self.client.post(
+            f"/api/v1/loans/{loan_id}/payments",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "amount_minor": 100000,
+                "payment_date": start.isoformat(),
+                "payment_method": "cash",
+                "payment_source": "registered",
+                "financial_account_id": str(self.source_account.id),
+                "reference": "TEST-LINKED-REPAYMENT",
+            },
+        )
+        self.assertEqual(repayment.status_code, 201, repayment.json)
+        self.assertEqual(repayment.json["payment"]["status"], "pending")
+
+        return (
+            lender,
+            lender_headers,
+            lender_workspace,
+            loan_id,
+            repayment.json["payment"]["id"],
+        )
+
+    def test_lender_confirms_linked_repayment_and_posts_lender_journal(self):
+        (
+            lender,
+            lender_headers,
+            lender_workspace,
+            loan_id,
+            payment_id,
+        ) = self._create_pending_linked_repayment()
+
+        confirmation = self.client.post(
+            f"/api/v1/loans/{loan_id}/linked-repayments/{payment_id}/confirm",
+            headers=lender_headers,
+            json={
+                "workspace_id": str(lender_workspace.id),
+                "financial_account_id": str(lender_workspace.test_account_id),
+            },
+        )
+        self.assertEqual(confirmation.status_code, 200, confirmation.json)
+        self.assertEqual(confirmation.json["loan_status"], "paid")
+        self.assertEqual(confirmation.json["principal_minor"], 100000)
+        self.assertEqual(confirmation.json["interest_minor"], 0)
+
+        loan = db.session.get(PersonalLoan, UUID(loan_id))
+        payment = db.session.get(LoanPayment, UUID(payment_id))
+        linked = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=self.workspace.id,
+            personal_loan_id=loan.id,
+            loan_payment_id=payment.id,
+            transaction_type="repayment",
+        ).one()
+
+        self.assertEqual(loan.status, "paid")
+        self.assertEqual(payment.status, "confirmed")
+        self.assertEqual(payment.principal_minor, 100000)
+        self.assertEqual(payment.interest_minor, 0)
+
+        # These fields belong to the borrower's workspace and must stay empty.
+        self.assertIsNone(payment.financial_account_id)
+        self.assertIsNone(payment.journal_entry_id)
+
+        self.assertEqual(linked.status, "confirmed")
+        self.assertEqual(linked.confirming_workspace_id, lender_workspace.id)
+        self.assertEqual(
+            linked.confirming_account_id,
+            lender_workspace.test_account_id,
+        )
+        self.assertEqual(linked.confirmed_by, lender.id)
+        self.assertIsNotNone(linked.confirmed_at)
+        self.assertIsNotNone(linked.confirming_journal_entry_id)
+
+        journal = db.session.get(
+            JournalEntry,
+            linked.confirming_journal_entry_id,
+        )
+        self.assertIsNotNone(journal)
+        self.assertEqual(journal.workspace_id, lender_workspace.id)
+        self.assertEqual(journal.status, "posted")
+
+        allocations = LoanPaymentAllocation.query.filter_by(
+            workspace_id=self.workspace.id,
+            personal_loan_id=loan.id,
+            payment_id=payment.id,
+        ).all()
+        self.assertEqual(sum(item.amount_minor for item in allocations), 100000)
+        self.assertEqual(sum(item.principal_minor for item in allocations), 100000)
+        self.assertEqual(sum(item.interest_minor for item in allocations), 0)
+
+        installment = LoanInstallment.query.filter_by(
+            workspace_id=self.workspace.id,
+            personal_loan_id=loan.id,
+        ).one()
+        self.assertEqual(installment.paid_minor, 100000)
+        self.assertEqual(installment.status, "paid")
+
+    def test_non_admin_cannot_confirm_linked_repayment(self):
+        (
+            lender,
+            lender_headers,
+            lender_workspace,
+            loan_id,
+            payment_id,
+        ) = self._create_pending_linked_repayment()
+
+        db.session.add(WorkspaceMember(
+            workspace_id=lender_workspace.id,
+            user_id=self.user.id,
+            role="viewer",
         ))
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/v1/loans/{loan_id}/linked-repayments/{payment_id}/confirm",
+            headers=self.headers,
+            json={
+                "workspace_id": str(lender_workspace.id),
+                "financial_account_id": str(lender_workspace.test_account_id),
+            },
+        )
+        self.assertEqual(response.status_code, 403, response.json)
+
+        payment = db.session.get(LoanPayment, UUID(payment_id))
+        linked = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=self.workspace.id,
+            personal_loan_id=UUID(loan_id),
+            loan_payment_id=payment.id,
+            transaction_type="repayment",
+        ).one()
+
+        self.assertEqual(payment.status, "pending")
+        self.assertEqual(linked.status, "pending")
+        self.assertIsNone(linked.confirming_journal_entry_id)
+
 
     def test_approved_linked_loan_is_visible_to_borrower_and_lender(self):
         lender, lender_headers = self.create_verified_lender()
@@ -8884,10 +9251,15 @@ class PesaPilotTestCase(unittest.TestCase):
         approval = self.client.post(
             f"/api/v1/loans/{loan_id}/approve",
             headers=lender_headers,
-            json={},
+            json={
+                "workspace_id": str(lender_workspace.id),
+                "financial_account_id": str(lender_workspace.test_account_id),
+                "disbursement_date": start.isoformat(),
+                "payment_method": "cash",
+            },
         )
         self.assertEqual(approval.status_code, 200, approval.json)
-        self.assertEqual(approval.json["request"]["status"], "active")
+        self.assertEqual(approval.json["request"]["status"], "awaiting_confirmation")
 
         # The borrower still sees the original loan in their own workspace.
         borrower_list = self.client.get(
@@ -8927,7 +9299,8 @@ class PesaPilotTestCase(unittest.TestCase):
         )
         self.assertIsNone(lender_loan["counterparty_phone"])
 
-        # The lender can open details and see the repayment schedule.
+        # The lender can view the loan, but the schedule waits for
+        # the borrower to confirm receipt of the disbursement.
         details = self.client.get(
             f"/api/v1/loans/{loan_id}?workspace_id={lender_workspace.id}",
             headers=lender_headers,
@@ -8936,7 +9309,8 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertTrue(details.json["success"])
         self.assertTrue(details.json["loan"]["is_counterparty_view"])
         self.assertEqual(details.json["loan"]["direction"], "lent")
-        self.assertEqual(len(details.json["installments"]), 12)
+        self.assertEqual(details.json["loan"]["status"], "awaiting_confirmation")
+        self.assertEqual(len(details.json["installments"]), 0)
 
         # An unrelated user with their own workspace cannot access the loan.
         outsider = User(

@@ -117,7 +117,7 @@ class PersonalLoan(db.Model):
     )
 
     status: Mapped[str] = mapped_column(
-        String(20),
+        String(32),
         default="draft",
         nullable=False,
     )
@@ -209,8 +209,9 @@ class PersonalLoan(db.Model):
         ),
         CheckConstraint(
             "status IN "
-            "('draft', 'pending_approval', 'active', 'paid', 'overdue', "
-            "'disputed', 'restructured', 'written_off', 'cancelled', 'rejected')",
+            "('draft', 'pending_approval', 'awaiting_confirmation', "
+            "'active', 'paid', 'overdue', 'disputed', 'restructured', "
+            "'written_off', 'cancelled', 'rejected')",
             name="ck_personal_loan_status",
         ),
         Index(

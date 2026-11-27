@@ -198,7 +198,7 @@ class LoanPayment(db.Model):
             name="ck_loan_payment_method",
         ),
         CheckConstraint(
-            "payment_source IN ('registered', 'external')",
+            "payment_source IN ('registered', 'external', 'linked')",
             name="ck_loan_payment_source",
         ),
         CheckConstraint(
@@ -207,9 +207,15 @@ class LoanPayment(db.Model):
         ),
         CheckConstraint(
             "status != 'confirmed' OR "
-            "(journal_entry_id IS NOT NULL AND "
-            "((payment_source = 'registered' AND financial_account_id IS NOT NULL) "
-            "OR (payment_source = 'external' AND financial_account_id IS NULL)))",
+            "((payment_source = 'registered' "
+            "AND financial_account_id IS NOT NULL "
+            "AND journal_entry_id IS NOT NULL) "
+            "OR (payment_source = 'external' "
+            "AND financial_account_id IS NULL "
+            "AND journal_entry_id IS NOT NULL) "
+            "OR (payment_source = 'linked' "
+            "AND financial_account_id IS NULL "
+            "AND journal_entry_id IS NULL))",
             name="ck_loan_payment_confirmed_accounting",
         ),
         Index(

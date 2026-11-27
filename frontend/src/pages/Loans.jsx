@@ -138,8 +138,17 @@ export default function Loans() {
   const [incomingRequests, setIncomingRequests] = useState([]);
   const [loadingIncoming, setLoadingIncoming] = useState(true);
   const [decidingRequest, setDecidingRequest] = useState(null);
+  const [incomingDisbursementRequest, setIncomingDisbursementRequest] = useState(null);
+  const [incomingDisbursementForm, setIncomingDisbursementForm] = useState({
+    financial_account_id: "",
+    disbursement_date: todayLocal(),
+    payment_method: "cash",
+    reference: "",
+    notes: "",
+  });
   const workspaceRequestRef = useRef(0);
   const [filter, setFilter] = useState("all");
+  const [activeTab, setActiveTab] = useState("all");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -174,12 +183,19 @@ export default function Loans() {
     payment_date: todayLocal(),
     payment_method: "cash",
     payment_source: "registered",
+    financial_account_id: "",
     reference: "",
     notes: "",
   });
   const [savingPayment, setSavingPayment] = useState(false);
   const [confirmingPayment, setConfirmingPayment] = useState(null);
   const [paymentAccountSelections, setPaymentAccountSelections] = useState({});
+  const [confirmingLinkedDisbursement, setConfirmingLinkedDisbursement] = useState(null);
+  const [linkedDisbursementAccountSelections, setLinkedDisbursementAccountSelections] = useState({});
+  const [disputingLinkedDisbursement, setDisputingLinkedDisbursement] = useState(null);
+  const [linkedDisbursementDisputeReasons, setLinkedDisbursementDisputeReasons] = useState({});
+  const [confirmingLinkedRepayment, setConfirmingLinkedRepayment] = useState(null);
+  const [linkedRepaymentAccountSelections, setLinkedRepaymentAccountSelections] = useState({});
   const [editingPaymentId, setEditingPaymentId] = useState(null);
   const [paymentEditForm, setPaymentEditForm] = useState({
     amount: "",
@@ -290,28 +306,49 @@ export default function Loans() {
 
 
   const visibleLoans = useMemo(() => {
-    if (filter === "all") return loans;
-    if (filter === "borrowed" || filter === "lent") {
-      return loans.filter((loan) => loan.direction === filter);
+    let result = loans;
+
+    if (activeTab === "borrowed" || activeTab === "lent") {
+      result = result.filter((loan) => loan.direction === activeTab);
     }
-    return loans.filter((loan) => loan.status === filter);
-  }, [loans, filter]);
+
+    if (filter === "borrowed" || filter === "lent") {
+      return result.filter((loan) => loan.direction === filter);
+    }
+
+    if (filter !== "all") {
+      return result.filter((loan) => loan.status === filter);
+    }
+
+    return result;
+  }, [loans, filter, activeTab]);
 
   const totals = useMemo(() => {
     const borrowed = loans
       .filter((loan) => loan.direction === "borrowed")
-      .reduce((sum, loan) => sum + Number(loan.principal_minor || 0), 0);
+      .reduce(
+        (sum, loan) => sum + Number(loan.principal_minor || 0),
+        0
+      );
 
     const lent = loans
       .filter((loan) => loan.direction === "lent")
-      .reduce((sum, loan) => sum + Number(loan.principal_minor || 0), 0);
+      .reduce(
+        (sum, loan) => sum + Number(loan.principal_minor || 0),
+        0
+      );
 
     const active = loans.filter((loan) =>
       ["active", "overdue", "restructured"].includes(loan.status)
     ).length;
 
-    return { borrowed, lent, active };
-  }, [loans]);
+    return {
+      borrowed,
+      lent,
+      active,
+      pendingRequests: incomingRequests.length,
+    };
+  }, [loans, incomingRequests]);
 
   function updateForm(field, value) {
     setForm((current) => {
@@ -509,34 +546,101 @@ export default function Loans() {
   }
 
   async function handleIncomingDecision(request, approved) {
-    const confirmed = window.confirm(
-      approved
-        ? `Approve ${request.requester_name}'s loan request and activate it?`
-        : `Reject ${request.requester_name}'s loan request?`
-    );
+    if (approved) {
+      const eligibleAccounts = paymentAccounts.filter((account) => (
+        account.is_active &&
+        account.currency === request.currency_code &&
+        ["cash", "bank", "mobile_money"].includes(account.account_type)
+      ));
+      const cashAccount = eligibleAccounts.find(
+        (account) => account.account_type === "cash"
+      );
 
+      setIncomingDisbursementRequest(request);
+      setIncomingDisbursementForm({
+        financial_account_id: cashAccount?.id || eligibleAccounts[0]?.id || "",
+        disbursement_date: todayLocal(),
+        payment_method: "cash",
+        reference: "",
+        notes: "",
+      });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Reject ${request.requester_name}'s loan request?`
+    );
     if (!confirmed) return;
 
     setDecidingRequest(request.id);
 
     try {
-      if (approved) {
-        await loansApi.approveIncomingRequest(request.id);
-      } else {
-        await loansApi.rejectIncomingRequest(request.id);
-      }
-
-      showToast(
-        approved
-          ? "Loan request approved and repayment schedule generated."
-          : "Loan request rejected.",
-        { type: "success" }
-      );
-
+      await loansApi.rejectIncomingRequest(request.id);
+      showToast("Loan request rejected.", { type: "success" });
       await loadIncomingRequests();
     } catch (err) {
       showToast(
-        err.message || "The loan request could not be updated.",
+        err.message || "The loan request could not be rejected.",
+        { type: "error" }
+      );
+    } finally {
+      setDecidingRequest(null);
+    }
+  }
+
+  async function handleApproveIncomingRequest(request) {
+    const eligibleAccounts = paymentAccounts.filter((account) => (
+      account.is_active &&
+      account.currency === request.currency_code &&
+      ["cash", "bank", "mobile_money"].includes(account.account_type) &&
+      (
+        incomingDisbursementForm.payment_method === "other" ||
+        account.account_type === incomingDisbursementForm.payment_method
+      )
+    ));
+
+    const selectedAccount = eligibleAccounts.find(
+      (account) => account.id === incomingDisbursementForm.financial_account_id
+    );
+
+    if (!selectedAccount) {
+      showToast(
+        "Select an active matching account before approving and recording the disbursement.",
+        { type: "error" }
+      );
+      return;
+    }
+
+    if (!incomingDisbursementForm.disbursement_date) {
+      showToast("Enter the disbursement date.", { type: "error" });
+      return;
+    }
+
+    setDecidingRequest(request.id);
+
+    try {
+      await loansApi.approveIncomingRequest(request.id, {
+        workspace_id: workspaceId,
+        financial_account_id: selectedAccount.id,
+        disbursement_date: incomingDisbursementForm.disbursement_date,
+        payment_method: incomingDisbursementForm.payment_method,
+        reference: incomingDisbursementForm.reference.trim() || null,
+        notes: incomingDisbursementForm.notes.trim() || null,
+      });
+
+      setIncomingDisbursementRequest(null);
+      showToast(
+        "Loan approved and disbursement recorded. Awaiting the borrower's confirmation of receipt.",
+        { type: "success" }
+      );
+
+      await Promise.all([
+        loadIncomingRequests(),
+        loadLoans(true),
+      ]);
+    } catch (err) {
+      showToast(
+        err.message || "The loan could not be approved and disbursed.",
         { type: "error" }
       );
     } finally {
@@ -657,12 +761,24 @@ export default function Loans() {
   }
 
   function openRepaymentForm(loan) {
+    const isLinkedBorrowing =
+      loan.direction === "borrowed" && Boolean(loan.counterparty_user_id);
+
+    const eligibleAccounts = isLinkedBorrowing
+      ? paymentAccounts.filter((account) => (
+          account.is_active &&
+          account.currency === loan.currency_code &&
+          ["cash", "bank", "mobile_money"].includes(account.account_type)
+        ))
+      : [];
+
     setRepaymentLoan(loan.id);
     setRepaymentForm({
       amount: "",
       payment_date: todayLocal(),
       payment_method: "cash",
       payment_source: "registered",
+      financial_account_id: eligibleAccounts[0]?.id || "",
       reference: "",
       notes: "",
     });
@@ -670,6 +786,27 @@ export default function Loans() {
   }
 
   async function handleRecordLoanPayment(loan) {
+    const isLinkedBorrowing =
+      loan.direction === "borrowed" && Boolean(loan.counterparty_user_id);
+
+    const selectedAccount = isLinkedBorrowing
+      ? paymentAccounts.find((account) => (
+          account.id === repaymentForm.financial_account_id &&
+          account.is_active &&
+          account.currency === loan.currency_code &&
+          ["cash", "bank", "mobile_money"].includes(account.account_type)
+        ))
+      : null;
+
+    if (isLinkedBorrowing && !selectedAccount) {
+      setLoanMessage(
+        loan.id,
+        "error",
+        "Select an active cash, bank, or mobile-money account in the loan currency."
+      );
+      return;
+    }
+
     setSavingPayment(true);
     setLoanMessage(loan.id, null, "");
 
@@ -684,7 +821,12 @@ export default function Loans() {
         amount_minor: amountMinor,
         payment_date: repaymentForm.payment_date,
         payment_method: repaymentForm.payment_method,
-        payment_source: repaymentForm.payment_source,
+        payment_source: isLinkedBorrowing
+          ? "registered"
+          : repaymentForm.payment_source,
+        ...(isLinkedBorrowing
+          ? { financial_account_id: selectedAccount.id }
+          : {}),
         reference: repaymentForm.reference.trim(),
         notes: repaymentForm.notes.trim() || null,
       });
@@ -695,6 +837,7 @@ export default function Loans() {
         payment_date: todayLocal(),
         payment_method: "cash",
         payment_source: "registered",
+        financial_account_id: "",
         reference: "",
         notes: "",
       });
@@ -850,6 +993,111 @@ export default function Loans() {
     }
   }
 
+  async function handleConfirmLinkedDisbursement(loan) {
+    const eligibleAccounts = paymentAccounts.filter((account) => (
+      account.is_active &&
+      account.currency === loan.currency_code &&
+      ["cash", "bank", "mobile_money"].includes(account.account_type)
+    ));
+    const selectedId = linkedDisbursementAccountSelections[loan.id];
+    const accountId = eligibleAccounts.some((account) => account.id === selectedId)
+      ? selectedId
+      : eligibleAccounts[0]?.id || "";
+
+    if (!workspaceId || !accountId) {
+      showToast("Select an active matching account to receive this loan.", { type: "error" });
+      return;
+    }
+
+    setConfirmingLinkedDisbursement(loan.id);
+
+    try {
+      await loansApi.confirmLinkedDisbursement(loan.id, {
+        workspace_id: workspaceId,
+        financial_account_id: accountId,
+      });
+
+      showToast("Loan receipt confirmed and repayment schedule created.", { type: "success" });
+
+      const refreshed = await loansApi.getLoan(loan.id, workspaceId);
+      setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
+      await loadLoans(true);
+    } catch (err) {
+      showToast(err.message || "Loan receipt could not be confirmed.", { type: "error" });
+    } finally {
+      setConfirmingLinkedDisbursement(null);
+    }
+  }
+
+  async function handleDisputeLinkedDisbursement(loan) {
+    const reason = (linkedDisbursementDisputeReasons[loan.id] || "").trim();
+
+    if (!reason) {
+      showToast("Enter a reason for disputing this disbursement.", { type: "error" });
+      return;
+    }
+
+    if (!window.confirm("Dispute this loan disbursement? The lender's disbursement entry will be reversed.")) {
+      return;
+    }
+
+    setDisputingLinkedDisbursement(loan.id);
+
+    try {
+      await loansApi.disputeLinkedDisbursement(loan.id, {
+        workspace_id: workspaceId,
+        reason,
+      });
+
+      showToast("Disbursement disputed. The lender's accounting entry has been reversed.", { type: "success" });
+
+      const refreshed = await loansApi.getLoan(loan.id, workspaceId);
+      setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
+      await loadLoans(true);
+    } catch (err) {
+      showToast(err.message || "The disbursement could not be disputed.", { type: "error" });
+    } finally {
+      setDisputingLinkedDisbursement(null);
+    }
+  }
+
+  async function handleConfirmLinkedRepayment(loan, payment) {
+    const eligibleAccounts = paymentAccounts.filter((account) => (
+      account.is_active &&
+      account.currency === loan.currency_code &&
+      ["cash", "bank", "mobile_money"].includes(account.account_type)
+    ));
+    const selectedId = linkedRepaymentAccountSelections[payment.id];
+    const accountId = eligibleAccounts.some((account) => account.id === selectedId)
+      ? selectedId
+      : eligibleAccounts[0]?.id || "";
+
+    if (!workspaceId || !accountId) {
+      setPaymentMessage(payment.id, "error", "Select an active matching account to receive this repayment.");
+      return;
+    }
+
+    setConfirmingLinkedRepayment(payment.id);
+    setPaymentMessage(payment.id, null, "");
+
+    try {
+      await loansApi.confirmLinkedRepayment(loan.id, payment.id, {
+        workspace_id: workspaceId,
+        financial_account_id: accountId,
+      });
+
+      showToast("Repayment confirmed and lender accounting updated.", { type: "success" });
+
+      const refreshed = await loansApi.getLoan(loan.id, workspaceId);
+      setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
+      await loadLoans(true);
+    } catch (err) {
+      setPaymentMessage(payment.id, "error", err.message || "The linked repayment could not be confirmed.");
+    } finally {
+      setConfirmingLinkedRepayment(null);
+    }
+  }
+
   return (
     <div className="page-content loans-page">
       <div className="loans-header">
@@ -871,17 +1119,6 @@ export default function Loans() {
           >
             <RefreshCw size={16} className={refreshing ? "loans-spin" : ""} />
             Refresh
-          </button>
-          <button
-            type="button"
-            className="loans-primary-button"
-            onClick={() => {
-              setFormMessage(null);
-              setShowForm(true);
-            }}
-          >
-            <Plus size={17} />
-            Record loan
           </button>
         </div>
       </div>
@@ -913,15 +1150,66 @@ export default function Loans() {
           <strong>{loading ? <Skeleton width="55px" height={23} /> : totals.active}</strong>
           <small>Active, overdue or restructured</small>
         </div>
+
       </div>
 
-      <div className="loans-workspace-tabs">
-        <button type="button" className="active">
-          My Loans
+      <div className="loans-workspace-tabs" role="tablist" aria-label="Loan views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "all"}
+          className={activeTab === "all" ? "active" : ""}
+          onClick={() => {
+            setActiveTab("all");
+            setFilter("all");
+          }}
+        >
+          All
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "borrowed"}
+          className={activeTab === "borrowed" ? "active" : ""}
+          onClick={() => {
+            setActiveTab("borrowed");
+            setFilter("all");
+          }}
+        >
+          Borrowed
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "lent"}
+          className={activeTab === "lent" ? "active" : ""}
+          onClick={() => {
+            setActiveTab("lent");
+            setFilter("all");
+          }}
+        >
+          Lent
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "requests"}
+          className={activeTab === "requests" ? "active" : ""}
+          onClick={() => {
+            setActiveTab("requests");
+            setFilter("all");
+          }}
+        >
+          Requests
+          {totals.pendingRequests > 0 && (
+            <span className="loans-request-count">
+              {totals.pendingRequests}
+            </span>
+          )}
         </button>
       </div>
 
-      {(loadingIncoming || incomingRequests.length > 0) && (
+      {activeTab === "requests" && (
         <section className="loans-list-section loans-incoming-section">
           <div className="loans-section-heading">
             <div>
@@ -951,6 +1239,7 @@ export default function Loans() {
               ))}
             </div>
           ) : (
+            <>
             <div className="loans-record-list">
               {incomingRequests.map((request) => (
                 <article
@@ -1008,33 +1297,208 @@ export default function Loans() {
                     </div>
                   </div>
 
-                  <div className="loans-incoming-actions">
-                    <button
-                      type="button"
-                      className="loans-secondary-button"
-                      onClick={() => handleIncomingDecision(request, false)}
-                      disabled={decidingRequest === request.id}
+                  {incomingDisbursementRequest?.id === request.id ? (
+                    <form
+                      className="loans-repayment-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        handleApproveIncomingRequest(request);
+                      }}
                     >
-                      Reject
-                    </button>
-                    <button
-                      type="button"
-                      className="loans-primary-button"
-                      onClick={() => handleIncomingDecision(request, true)}
-                      disabled={decidingRequest === request.id}
-                    >
-                      {decidingRequest === request.id
-                        ? "Processing..."
-                        : "Approve request"}
-                    </button>
-                  </div>
+                      <h4>Approve and record disbursement</h4>
+                      <p className="loans-muted">
+                        Select the account you will lend from. The borrower must confirm receipt before the loan becomes active.
+                      </p>
+
+                      <label>
+                        Disbursement account
+                        <select
+                          required
+                          value={incomingDisbursementForm.financial_account_id}
+                          onChange={(event) => setIncomingDisbursementForm((current) => ({
+                            ...current,
+                            financial_account_id: event.target.value,
+                          }))}
+                        >
+                          <option value="">Select an account</option>
+                          {paymentAccounts
+                            .filter((account) => (
+                              account.is_active &&
+                              account.currency === request.currency_code &&
+                              ["cash", "bank", "mobile_money"].includes(account.account_type) &&
+                              (
+                                incomingDisbursementForm.payment_method === "other" ||
+                                account.account_type === incomingDisbursementForm.payment_method
+                              )
+                            ))
+                            .map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {account.name || account.account_name || account.account_type}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+
+                      <label>
+                        Disbursement date
+                        <input
+                          type="date"
+                          required
+                          value={incomingDisbursementForm.disbursement_date}
+                          onChange={(event) => setIncomingDisbursementForm((current) => ({
+                            ...current,
+                            disbursement_date: event.target.value,
+                          }))}
+                        />
+                      </label>
+
+                      <label>
+                        Payment method
+                        <select
+                          value={incomingDisbursementForm.payment_method}
+                          onChange={(event) => {
+                            const method = event.target.value;
+                            const matchingAccounts = paymentAccounts.filter((account) => (
+                              account.is_active &&
+                              account.currency === request.currency_code &&
+                              ["cash", "bank", "mobile_money"].includes(account.account_type) &&
+                              (
+                                method === "other" ||
+                                account.account_type === method
+                              )
+                            ));
+
+                            setIncomingDisbursementForm((current) => ({
+                              ...current,
+                              payment_method: method,
+                              financial_account_id: matchingAccounts.some(
+                                (account) => account.id === current.financial_account_id
+                              )
+                                ? current.financial_account_id
+                                : matchingAccounts[0]?.id || "",
+                            }));
+                          }}
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="bank">Bank</option>
+                          <option value="mobile_money">Mobile money</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </label>
+
+                      <label>
+                        Transaction reference (optional)
+                        <input
+                          type="text"
+                          maxLength={120}
+                          value={incomingDisbursementForm.reference}
+                          onChange={(event) => setIncomingDisbursementForm((current) => ({
+                            ...current,
+                            reference: event.target.value,
+                          }))}
+                          placeholder="M-PESA code or bank reference"
+                        />
+                      </label>
+
+                      <label>
+                        Notes (optional)
+                        <textarea
+                          rows={2}
+                          maxLength={2000}
+                          value={incomingDisbursementForm.notes}
+                          onChange={(event) => setIncomingDisbursementForm((current) => ({
+                            ...current,
+                            notes: event.target.value,
+                          }))}
+                          placeholder="Add a note about the disbursement..."
+                        />
+                      </label>
+
+                      {!paymentAccounts.some((account) => (
+                        account.is_active &&
+                        account.currency === request.currency_code &&
+                        ["cash", "bank", "mobile_money"].includes(account.account_type) &&
+                        (
+                          incomingDisbursementForm.payment_method === "other" ||
+                          account.account_type === incomingDisbursementForm.payment_method
+                        )
+                      )) && (
+                        <small className="loans-muted">
+                          No eligible active account is available in {request.currency_code} for this payment method.
+                        </small>
+                      )}
+
+                      <div className="loans-incoming-actions">
+                        <button
+                          type="button"
+                          className="loans-secondary-button"
+                          onClick={() => setIncomingDisbursementRequest(null)}
+                          disabled={decidingRequest === request.id}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="loans-primary-button"
+                          disabled={
+                            decidingRequest === request.id ||
+                            !incomingDisbursementForm.financial_account_id ||
+                            !paymentAccounts.some((account) => (
+                              account.id === incomingDisbursementForm.financial_account_id &&
+                              account.is_active &&
+                              account.currency === request.currency_code &&
+                              ["cash", "bank", "mobile_money"].includes(account.account_type) &&
+                              (
+                                incomingDisbursementForm.payment_method === "other" ||
+                                account.account_type === incomingDisbursementForm.payment_method
+                              )
+                            ))
+                          }
+                        >
+                          {decidingRequest === request.id
+                            ? "Processing..."
+                            : "Approve & record disbursement"}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="loans-incoming-actions">
+                      <button
+                        type="button"
+                        className="loans-secondary-button"
+                        onClick={() => handleIncomingDecision(request, false)}
+                        disabled={decidingRequest === request.id}
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        className="loans-primary-button"
+                        onClick={() => handleIncomingDecision(request, true)}
+                        disabled={decidingRequest === request.id}
+                      >
+                        Approve & record disbursement
+                      </button>
+                    </div>
+                  )}
                 </article>
               ))}
             </div>
+            {incomingRequests.length === 0 && (
+              <div className="loans-empty">
+                <div className="loans-empty-icon">
+                  <HandCoins size={26} />
+                </div>
+                <h3>No pending requests</h3>
+                <p>Loan requests from other people will appear here.</p>
+              </div>
+            )}
+            </>
           )}
         </section>
       )}
 
+      {activeTab !== "requests" && (
       <section className="loans-list-section">
         <div className="loans-section-heading">
           <div>
@@ -1042,11 +1506,24 @@ export default function Loans() {
             <p>Manage your personal borrowing and lending.</p>
           </div>
 
-          <select
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            aria-label="Filter loans"
-          >
+          <div className="loans-list-controls">
+            <button
+              type="button"
+              className="loans-primary-button"
+              onClick={() => {
+                setFormMessage(null);
+                setShowForm(true);
+              }}
+            >
+              <Plus size={17} />
+              Record loan
+            </button>
+
+            <select
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              aria-label="Filter loans"
+            >
             <option value="all">All loans</option>
             <option value="borrowed">Borrowed</option>
             <option value="lent">Lent</option>
@@ -1055,8 +1532,9 @@ export default function Loans() {
             <option value="rejected">Rejected</option>
             <option value="active">Active</option>
             <option value="overdue">Overdue</option>
-            <option value="paid">Paid</option>
-          </select>
+              <option value="paid">Paid</option>
+            </select>
+          </div>
         </div>
 
         {loading ? (
@@ -1240,7 +1718,136 @@ export default function Loans() {
                           <section className="loans-disbursement-section">
                             <h4>Loan disbursement</h4>
 
-                            {details.disbursement ? (
+                            {details.linked_disbursement ? (
+                              <div className="loans-disbursement-record">
+                                <div>
+                                  <span>Amount</span>
+                                  <strong>{money(details.linked_disbursement.amount_minor, loan.currency_code)}</strong>
+                                </div>
+                                <div>
+                                  <span>Date</span>
+                                  <strong>{details.linked_disbursement.transaction_date}</strong>
+                                </div>
+                                <div>
+                                  <span>Payment method</span>
+                                  <strong>{(details.linked_disbursement.payment_method || "other").replace("_", " ")}</strong>
+                                </div>
+                                {details.linked_disbursement.reference && (
+                                  <p className="loans-muted">Reference: {details.linked_disbursement.reference}</p>
+                                )}
+                                {details.linked_disbursement.notes && (
+                                  <p className="loans-muted">{details.linked_disbursement.notes}</p>
+                                )}
+                                <small className={`loans-payment-status status-${details.linked_disbursement.status}`}>
+                                  {details.linked_disbursement.status === "confirmed"
+                                    ? "Receipt confirmed"
+                                    : details.linked_disbursement.status === "disputed"
+                                      ? "Disputed"
+                                      : "Awaiting borrower confirmation"}
+                                </small>
+
+                                {details.linked_disbursement.status === "disputed" && details.linked_disbursement.dispute_reason && (
+                                  <p className="loans-muted">
+                                    Dispute reason: {details.linked_disbursement.dispute_reason}
+                                  </p>
+                                )}
+
+                                {!isCounterpartyView &&
+                                  loan.direction === "borrowed" &&
+                                  details.linked_disbursement.status === "pending" && (
+                                  <div className="loans-confirm-payment">
+                                    <h4>Confirm receipt of loan</h4>
+                                    <p className="loans-muted">
+                                      Select the account where you received the money. Your repayment schedule will be created after confirmation.
+                                    </p>
+                                    <label htmlFor={`linked-disbursement-account-${loan.id}`}>
+                                      Receive into account
+                                    </label>
+                                    <select
+                                      id={`linked-disbursement-account-${loan.id}`}
+                                      value={
+                                        paymentAccounts.some((account) => (
+                                          account.id === linkedDisbursementAccountSelections[loan.id] &&
+                                          account.is_active &&
+                                          account.currency === loan.currency_code &&
+                                          ["cash", "bank", "mobile_money"].includes(account.account_type)
+                                        ))
+                                          ? linkedDisbursementAccountSelections[loan.id]
+                                          : paymentAccounts.find((account) => (
+                                            account.is_active &&
+                                            account.currency === loan.currency_code &&
+                                            ["cash", "bank", "mobile_money"].includes(account.account_type)
+                                          ))?.id || ""
+                                      }
+                                      onChange={(event) => setLinkedDisbursementAccountSelections((current) => ({
+                                        ...current,
+                                        [loan.id]: event.target.value,
+                                      }))}
+                                    >
+                                      <option value="">Choose an account</option>
+                                      {paymentAccounts
+                                        .filter((account) => (
+                                          account.is_active &&
+                                          account.currency === loan.currency_code &&
+                                          ["cash", "bank", "mobile_money"].includes(account.account_type)
+                                        ))
+                                        .map((account) => (
+                                          <option key={account.id} value={account.id}>
+                                            {account.name} ({account.account_type.replace("_", " ")})
+                                          </option>
+                                        ))}
+                                    </select>
+                                    {!paymentAccounts.some((account) => (
+                                      account.is_active &&
+                                      account.currency === loan.currency_code &&
+                                      ["cash", "bank", "mobile_money"].includes(account.account_type)
+                                    )) && (
+                                      <small className="loans-muted">
+                                        Add an active cash, bank or mobile-money account in {loan.currency_code} before confirming receipt.
+                                      </small>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="loans-primary-button"
+                                      onClick={() => handleConfirmLinkedDisbursement(loan)}
+                                      disabled={
+                                        confirmingLinkedDisbursement === loan.id ||
+                                        !paymentAccounts.some((account) => (
+                                          account.is_active &&
+                                          account.currency === loan.currency_code &&
+                                          ["cash", "bank", "mobile_money"].includes(account.account_type)
+                                        ))
+                                      }
+                                    >
+                                      {confirmingLinkedDisbursement === loan.id ? "Confirming..." : "Confirm receipt"}
+                                    </button>
+
+                                    <label htmlFor={`linked-disbursement-reason-${loan.id}`}>
+                                      Dispute reason
+                                    </label>
+                                    <textarea
+                                      id={`linked-disbursement-reason-${loan.id}`}
+                                      rows={3}
+                                      maxLength={2000}
+                                      value={linkedDisbursementDisputeReasons[loan.id] || ""}
+                                      onChange={(event) => setLinkedDisbursementDisputeReasons((current) => ({
+                                        ...current,
+                                        [loan.id]: event.target.value,
+                                      }))}
+                                      placeholder="Explain why you did not receive the stated amount..."
+                                    />
+                                    <button
+                                      type="button"
+                                      className="loans-secondary-button"
+                                      onClick={() => handleDisputeLinkedDisbursement(loan)}
+                                      disabled={disputingLinkedDisbursement === loan.id}
+                                    >
+                                      {disputingLinkedDisbursement === loan.id ? "Submitting dispute..." : "Dispute disbursement"}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ) : details.disbursement ? (
                               <div className="loans-disbursement-record">
                                 <div>
                                   <span>Amount</span>
@@ -1542,7 +2149,68 @@ export default function Loans() {
                                       <p className="loans-muted">{payment.notes}</p>
                                     )}
 
-                                    {!isCounterpartyView && payment.status === "pending" && (
+                                    {payment.linked_status === "pending" && isCounterpartyView && (
+                                      <div className="loans-confirm-payment">
+                                        <h4>Confirm repayment received</h4>
+                                        <p className="loans-muted">
+                                          Confirm receipt into an account in your workspace.
+                                        </p>
+                                        <label htmlFor={`linked-repayment-account-${payment.id}`}>
+                                          Receive into account
+                                        </label>
+                                        <select
+                                          id={`linked-repayment-account-${payment.id}`}
+                                          value={
+                                            eligibleAccounts.some((account) => (
+                                              account.id === linkedRepaymentAccountSelections[payment.id]
+                                            ))
+                                              ? linkedRepaymentAccountSelections[payment.id]
+                                              : eligibleAccounts[0]?.id || ""
+                                          }
+                                          onChange={(event) => setLinkedRepaymentAccountSelections((current) => ({
+                                            ...current,
+                                            [payment.id]: event.target.value,
+                                          }))}
+                                        >
+                                          <option value="">Choose an account</option>
+                                          {eligibleAccounts.map((account) => (
+                                            <option key={account.id} value={account.id}>
+                                              {account.name} ({account.account_type.replace("_", " ")})
+                                            </option>
+                                          ))}
+                                        </select>
+                                        {!eligibleAccounts.length && (
+                                          <small className="loans-muted">
+                                            No active cash, bank or mobile-money account is available in {loan.currency_code}.
+                                          </small>
+                                        )}
+                                        <button
+                                          type="button"
+                                          className="loans-primary-button"
+                                          onClick={() => handleConfirmLinkedRepayment(loan, payment)}
+                                          disabled={
+                                            confirmingLinkedRepayment === payment.id ||
+                                            !eligibleAccounts.length
+                                          }
+                                        >
+                                          {confirmingLinkedRepayment === payment.id ? "Confirming..." : "Confirm repayment"}
+                                        </button>
+                                      </div>
+                                    )}
+
+                                    {payment.linked_status === "pending" && !isCounterpartyView && (
+                                      <p className="loans-muted">
+                                        Awaiting lender confirmation. This repayment will update your loan balance after the lender confirms receipt.
+                                      </p>
+                                    )}
+
+                                    {payment.linked_status === "confirmed" && (
+                                      <p className="loans-muted">
+                                        <CheckCircle2 size={14} /> Lender confirmed receipt.
+                                      </p>
+                                    )}
+
+                                    {!payment.linked_status && !isCounterpartyView && payment.status === "pending" && (
                                       <div className="loans-confirm-payment">
                                         {editingPaymentId === payment.id ? (
                                           <form
@@ -1789,19 +2457,59 @@ export default function Loans() {
                                       }))}
                                     />
                                   </label>
-                                  <label>
-                                    Payment source
-                                    <select
-                                      value={repaymentForm.payment_source}
+                                  {loan.direction === "borrowed" &&
+                                    loan.counterparty_user_id && (
+                                    <label>
+                                      Pay from account
+                                      <select
+                                        required
+                                        value={repaymentForm.financial_account_id}
+                                        onChange={(event) => setRepaymentForm((current) => ({
+                                          ...current,
+                                          financial_account_id: event.target.value,
+                                        }))}
+                                      >
+                                        <option value="">Select an account</option>
+                                        {paymentAccounts
+                                          .filter((account) => (
+                                            account.is_active &&
+                                            account.currency === loan.currency_code &&
+                                            ["cash", "bank", "mobile_money"].includes(account.account_type)
+                                          ))
+                                          .map((account) => (
+                                            <option key={account.id} value={account.id}>
+                                              {account.name} ({account.account_type.replace("_", " ")})
+                                            </option>
+                                          ))}
+                                      </select>
+                                      {!paymentAccounts.some((account) => (
+                                        account.is_active &&
+                                        account.currency === loan.currency_code &&
+                                        ["cash", "bank", "mobile_money"].includes(account.account_type)
+                                      )) && (
+                                        <small className="loans-muted">
+                                          Add an active cash, bank, or mobile-money account in {loan.currency_code} before recording this repayment.
+                                        </small>
+                                      )}
+                                    </label>
+                                  )}
+
+                                  {!(loan.direction === "borrowed" &&
+                                    loan.counterparty_user_id) && (
+                                    <label>
+                                      Payment source
+                                      <select
+                                        value={repaymentForm.payment_source}
                                       onChange={(event) => setRepaymentForm((current) => ({
                                         ...current,
                                         payment_source: event.target.value,
                                       }))}
                                     >
                                       <option value="registered">Registered PesaPilot account</option>
-                                      <option value="external">Other / external payment</option>
-                                    </select>
-                                  </label>
+                                        <option value="external">Other / external payment</option>
+                                      </select>
+                                    </label>
+                                  )}
                                   <label>
                                     Payment method
                                     <select
@@ -1854,7 +2562,19 @@ export default function Loans() {
                                     <button
                                       type="submit"
                                       className="loans-primary-button"
-                                      disabled={savingPayment}
+                                      disabled={
+                                        savingPayment ||
+                                        (
+                                          loan.direction === "borrowed" &&
+                                          Boolean(loan.counterparty_user_id) &&
+                                          !paymentAccounts.some((account) => (
+                                            account.id === repaymentForm.financial_account_id &&
+                                            account.is_active &&
+                                            account.currency === loan.currency_code &&
+                                            ["cash", "bank", "mobile_money"].includes(account.account_type)
+                                          ))
+                                        )
+                                      }
                                     >
                                       {savingPayment ? "Recording..." : "Record repayment"}
                                     </button>
@@ -1902,6 +2622,7 @@ export default function Loans() {
           </div>
         )}
       </section>
+      )}
 
       {showForm && (
         <div className="loans-modal-backdrop" onMouseDown={(event) => {

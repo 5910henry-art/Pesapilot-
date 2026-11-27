@@ -516,11 +516,41 @@ export const loansApi = {
     return apiRequest("/loans/incoming-requests");
   },
 
-  approveIncomingRequest(loanId) {
+  approveIncomingRequest(loanId, payload) {
     return apiRequest(`/loans/${encodeURIComponent(loanId)}/approve`, {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(payload),
     });
+  },
+
+  confirmLinkedDisbursement(loanId, payload) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/linked-disbursement/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  disputeLinkedDisbursement(loanId, payload) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/linked-disbursement/dispute`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  confirmLinkedRepayment(loanId, paymentId, payload) {
+    return apiRequest(
+      `/loans/${encodeURIComponent(loanId)}/linked-repayments/${encodeURIComponent(paymentId)}/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
   },
 
   rejectIncomingRequest(loanId, reason = "") {
