@@ -9144,9 +9144,24 @@ class PesaPilotTestCase(unittest.TestCase):
         self.assertEqual(payment.principal_minor, 100000)
         self.assertEqual(payment.interest_minor, 0)
 
-        # These fields belong to the borrower's workspace and must stay empty.
-        self.assertIsNone(payment.financial_account_id)
-        self.assertIsNone(payment.journal_entry_id)
+        # Borrower-side repayment account and journal must be recorded.
+        self.assertEqual(
+            payment.financial_account_id,
+            self.source_account.id,
+        )
+        self.assertIsNotNone(payment.journal_entry_id)
+        self.assertEqual(
+            linked.initiating_journal_entry_id,
+            payment.journal_entry_id,
+        )
+
+        borrower_journal = db.session.get(
+            JournalEntry,
+            payment.journal_entry_id,
+        )
+        self.assertIsNotNone(borrower_journal)
+        self.assertEqual(borrower_journal.workspace_id, self.workspace.id)
+        self.assertEqual(borrower_journal.status, "posted")
 
         self.assertEqual(linked.status, "confirmed")
         self.assertEqual(linked.confirming_workspace_id, lender_workspace.id)

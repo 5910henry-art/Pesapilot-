@@ -2191,6 +2191,7 @@ def record_personal_loan_payment(loan_id):
             payment_date=payment_date,
             payment_method=payment_method,
             payment_source=payment_source,
+            financial_account_id=linked_account.id if is_linked else None,
             reference=reference.strip(),
             status="pending",
             recorded_by=user_id,
@@ -3104,8 +3105,13 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
         if (
             payment.status != "pending"
             or payment.payment_source != "linked"
-            or payment.financial_account_id is not None
             or payment.journal_entry_id is not None
+            or (
+                payment.financial_account_id is not None
+                and payment.financial_account_id != linked.initiating_account_id
+            )
+            or linked.initiating_workspace_id != loan.workspace_id
+            or linked.initiating_account_id is None
             or payment.amount_minor != linked.amount_minor
             or payment.payment_date != linked.transaction_date
             or payment.payment_method != linked.payment_method
@@ -3364,6 +3370,290 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
             posted_by=user_id,
         )
 
+        # Record the borrower's own repayment in the borrower's workspace.
+        # This is intentionally deferred until lender confirmation.
+        borrower_workspace_id = loan.workspace_id
+        borrower_workspace = Workspace.query.filter_by(
+            id=borrower_workspace_id,
+        ).first()
+
+        if borrower_workspace is None:
+            raise ValueError("Borrower workspace is unavailable.")
+
+        borrower_account_id = (
+            payment.financial_account_id or linked.initiating_account_id
+        )
+
+        borrower_account = FinancialAccount.query.filter_by(
+            id=borrower_account_id,
+            workspace_id=borrower_workspace_id,
+        ).with_for_update().first()
+
+        if (
+            borrower_account is None
+            or not borrower_account.is_active
+            or borrower_account.account_type not in {"cash", "bank", "mobile_money"}
+            or borrower_account.currency_code != loan.currency_code
+        ):
+            raise ValueError(
+                "The borrower's repayment account is unavailable or invalid."
+            )
+
+        # Preserve reservations belonging to other pending linked repayments.
+        other_pending = db.session.query(
+            func.coalesce(func.sum(LinkedLoanTransaction.amount_minor), 0)
+        ).filter(
+            LinkedLoanTransaction.initiating_workspace_id == borrower_workspace_id,
+            LinkedLoanTransaction.initiating_account_id == borrower_account.id,
+            LinkedLoanTransaction.status == "pending",
+            LinkedLoanTransaction.id != linked.id,
+        ).scalar() or 0
+
+        borrower_account_ledgers = LedgerAccount.query.filter_by(
+            workspace_id=borrower_workspace_id,
+            financial_account_id=borrower_account.id,
+            is_active=True,
+        ).with_for_update().all()
+
+        if len(borrower_account_ledgers) != 1:
+            raise ValueError(
+                "The borrower's repayment account must have exactly one active ledger."
+            )
+
+        borrower_cash_ledger = borrower_account_ledgers[0]
+
+        if (
+            borrower_cash_ledger.account_class != "asset"
+            or borrower_cash_ledger.normal_balance != "debit"
+            or borrower_cash_ledger.currency_code != loan.currency_code
+        ):
+            raise ValueError(
+                "The borrower's repayment account has no valid active asset ledger."
+            )
+
+        # Calculate the posted balance of the borrower's selected account.
+        borrower_balance_row = db.session.query(
+            func.coalesce(func.sum(JournalLine.debit_minor), 0),
+            func.coalesce(func.sum(JournalLine.credit_minor), 0),
+        ).join(
+            JournalEntry,
+            JournalEntry.id == JournalLine.journal_entry_id,
+        ).filter(
+            JournalLine.ledger_account_id == borrower_cash_ledger.id,
+            JournalEntry.workspace_id == borrower_workspace_id,
+            JournalEntry.status == "posted",
+        ).first()
+
+        borrower_debits = int(borrower_balance_row[0] or 0)
+        borrower_credits = int(borrower_balance_row[1] or 0)
+        borrower_available = borrower_debits - borrower_credits - int(other_pending)
+
+        if borrower_available < payment.amount_minor:
+            raise ValueError(
+                "The borrower's account no longer has enough available funds "
+                "after other pending repayments are reserved."
+            )
+
+        borrower_fx_rate = None
+
+        if borrower_workspace.functional_currency != loan.currency_code:
+            borrower_rate_record = ExchangeRate.query.filter(
+                ExchangeRate.base_currency == loan.currency_code,
+                ExchangeRate.quote_currency == borrower_workspace.functional_currency,
+                ExchangeRate.effective_at <= datetime.combine(
+                    linked.transaction_date,
+                    datetime.max.time(),
+                    tzinfo=timezone.utc,
+                ),
+            ).order_by(ExchangeRate.effective_at.desc()).first()
+
+            if borrower_rate_record is None:
+                raise ValueError(
+                    "No exchange rate is configured for the borrower's repayment date."
+                )
+
+            borrower_fx_rate = borrower_rate_record.rate
+
+        borrower_source_currency = db.session.get(
+            Currency, loan.currency_code
+        )
+        borrower_functional_currency = db.session.get(
+            Currency, borrower_workspace.functional_currency
+        )
+
+        if (
+            borrower_source_currency is None
+            or borrower_functional_currency is None
+        ):
+            raise ValueError(
+                "Borrower repayment currency configuration is unavailable."
+            )
+
+        borrower_conversion_rate = (
+            Decimal(str(borrower_fx_rate))
+            if borrower_fx_rate is not None
+            else Decimal("1")
+        )
+
+        def borrower_convert_component(amount_minor):
+            if amount_minor == 0:
+                return 0
+
+            converted = (
+                Decimal(amount_minor)
+                * borrower_conversion_rate
+                * (
+                    Decimal(10)
+                    ** (
+                        borrower_functional_currency.minor_unit
+                        - borrower_source_currency.minor_unit
+                    )
+                )
+            )
+
+            result = int(
+                converted.quantize(
+                    Decimal("1"),
+                    rounding=ROUND_HALF_UP,
+                )
+            )
+
+            if result < 0 or result > MAX_MINOR_UNITS:
+                raise ValueError(
+                    "Borrower repayment functional amount is outside the supported range."
+                )
+
+            return result
+
+        borrower_total_functional = borrower_convert_component(
+            payment.amount_minor
+        )
+        borrower_principal_functional = borrower_convert_component(
+            principal_total
+        )
+        borrower_interest_functional = borrower_convert_component(
+            interest_total
+        )
+
+        if borrower_total_functional <= 0:
+            raise ValueError(
+                "Borrower repayment is too small in functional currency."
+            )
+
+        borrower_rounding_difference = (
+            borrower_total_functional
+            - borrower_principal_functional
+            - borrower_interest_functional
+        )
+
+        if abs(borrower_rounding_difference) > 1:
+            raise ValueError(
+                "Borrower repayment FX rounding difference is unexpected."
+            )
+
+        if borrower_rounding_difference:
+            if principal_total >= interest_total:
+                borrower_principal_functional += borrower_rounding_difference
+            else:
+                borrower_interest_functional += borrower_rounding_difference
+
+        if (
+            borrower_principal_functional < 0
+            or borrower_interest_functional < 0
+            or borrower_principal_functional
+                + borrower_interest_functional
+                != borrower_total_functional
+        ):
+            raise ValueError("Borrower repayment FX allocation is invalid.")
+
+        borrower_payable = LedgerAccount.query.filter_by(
+            workspace_id=borrower_workspace_id,
+            code="2000",
+            is_system=True,
+            is_active=True,
+        ).with_for_update().first()
+
+        if (
+            borrower_payable is None
+            or borrower_payable.account_class != "liability"
+            or borrower_payable.normal_balance != "credit"
+            or borrower_payable.currency_code != loan.currency_code
+            or borrower_payable.financial_account_id is not None
+        ):
+            raise ValueError(
+                "The borrower's loan-payable system ledger is unavailable or incorrectly configured."
+            )
+
+        borrower_lines = [
+            {
+                "ledger_account_id": str(borrower_payable.id),
+                "debit_minor": principal_total,
+                "credit_minor": 0,
+                "exchange_rate": borrower_fx_rate,
+                "functional_amount_minor": borrower_principal_functional,
+                "memo": "Linked loan principal repaid",
+            },
+            {
+                "ledger_account_id": str(borrower_cash_ledger.id),
+                "debit_minor": 0,
+                "credit_minor": payment.amount_minor,
+                "exchange_rate": borrower_fx_rate,
+                "functional_amount_minor": borrower_total_functional,
+                "memo": "Repayment sent by borrower",
+            },
+        ]
+
+        if interest_total:
+            borrower_interest_expense = LedgerAccount.query.filter_by(
+                workspace_id=borrower_workspace_id,
+                code="5000",
+                is_system=True,
+                is_active=True,
+            ).with_for_update().first()
+
+            if (
+                borrower_interest_expense is None
+                or borrower_interest_expense.account_class != "expense"
+                or borrower_interest_expense.normal_balance != "debit"
+                or borrower_interest_expense.currency_code != loan.currency_code
+                or borrower_interest_expense.financial_account_id is not None
+            ):
+                raise ValueError(
+                    "The borrower's interest-expense system ledger is unavailable or incorrectly configured."
+                )
+
+            borrower_lines.append({
+                "ledger_account_id": str(borrower_interest_expense.id),
+                "debit_minor": interest_total,
+                "credit_minor": 0,
+                "exchange_rate": borrower_fx_rate,
+                "functional_amount_minor": borrower_interest_functional,
+                "memo": "Interest paid on linked loan",
+            })
+
+        borrower_journal = create_draft_entry(
+            workspace_id=borrower_workspace_id,
+            created_by=payment.recorded_by or user_id,
+            reference=f"LINKED-LOAN-REPAYMENT-BORROWER-{linked.id.hex}",
+            description=f"Linked loan repayment sent to {loan.counterparty_name}",
+            transaction_date=datetime.combine(
+                linked.transaction_date,
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            ),
+            lines=borrower_lines,
+        )
+
+        post_entry(
+            entry_id=borrower_journal.id,
+            workspace_id=borrower_workspace_id,
+            posted_by=user_id,
+        )
+
+        payment.financial_account_id = borrower_account.id
+        payment.journal_entry_id = borrower_journal.id
+        linked.initiating_journal_entry_id = borrower_journal.id
+
         for allocation in pending_allocations:
             installment = installments_by_id[allocation.installment_id]
             allocation.status = "confirmed"
@@ -3446,6 +3736,9 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
         db.session.rollback()
         return jsonify({"success": False, "message": str(exc)}), 400
     except IntegrityError:
+        current_app.logger.exception(
+            "Linked loan repayment confirmation integrity failure."
+        )
         db.session.rollback()
         return jsonify({"success": False, "message": "The repayment could not be confirmed because of a data conflict."}), 409
     except Exception:
