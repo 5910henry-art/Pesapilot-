@@ -2068,7 +2068,6 @@ def record_personal_loan_payment(loan_id):
         and loan.counterparty_user_id is not None
     )
     linked_account = None
-    allocation_amount = amount
 
     if is_linked:
         if payment_source != "registered":
@@ -2159,23 +2158,6 @@ def record_personal_loan_payment(loan_id):
                 "currency_code": loan.currency_code,
             }), 409
 
-        pending_loan_minor = db.session.query(
-            func.coalesce(func.sum(LinkedLoanTransaction.amount_minor), 0)
-        ).filter(
-            LinkedLoanTransaction.loan_workspace_id == workspace_id,
-            LinkedLoanTransaction.personal_loan_id == loan.id,
-            LinkedLoanTransaction.transaction_type == "repayment",
-            LinkedLoanTransaction.status == "pending",
-        ).scalar()
-        pending_loan_minor = int(pending_loan_minor or 0)
-
-        allocation_amount = amount + pending_loan_minor
-        if allocation_amount > MAX_MINOR_UNITS:
-            return jsonify({
-                "success": False,
-                "message": "Pending repayments exceed the supported amount limit.",
-            }), 400
-
     installments = LoanInstallment.query.filter_by(
         personal_loan_id=loan.id,
         workspace_id=workspace_id,
@@ -2184,19 +2166,18 @@ def record_personal_loan_payment(loan_id):
         LoanInstallment.installment_number,
     ).all()
 
-    confirmed_allocations = (
-        db.session.query(LoanPaymentAllocation)
-        .join(LoanPayment, LoanPayment.id == LoanPaymentAllocation.payment_id)
-        .filter(
-            LoanPayment.personal_loan_id == loan.id,
-            LoanPayment.workspace_id == workspace_id,
-            LoanPayment.status == "confirmed",
-        )
-        .all()
-    )
+    existing_allocations = LoanPaymentAllocation.query.filter(
+        LoanPaymentAllocation.workspace_id == workspace_id,
+        LoanPaymentAllocation.personal_loan_id == loan.id,
+        LoanPaymentAllocation.status.in_(("pending", "confirmed")),
+    ).all()
 
     try:
-        build_payment_allocations(installments, confirmed_allocations, allocation_amount)
+        allocations = build_payment_allocations(
+            installments,
+            existing_allocations,
+            amount,
+        )
 
         if is_linked:
             payment_source = "linked"
@@ -2221,6 +2202,18 @@ def record_personal_loan_payment(loan_id):
 
         linked_transaction = None
         if is_linked:
+            for allocation in allocations:
+                db.session.add(LoanPaymentAllocation(
+                    workspace_id=workspace_id,
+                    personal_loan_id=loan.id,
+                    payment_id=payment.id,
+                    installment_id=allocation["installment_id"],
+                    amount_minor=allocation["amount_minor"],
+                    principal_minor=allocation["principal_minor"],
+                    interest_minor=allocation["interest_minor"],
+                    status="pending",
+                ))
+
             linked_transaction = LinkedLoanTransaction(
                 loan_workspace_id=workspace_id,
                 personal_loan_id=loan.id,
@@ -3181,32 +3174,64 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
         if not installments:
             return jsonify({"success": False, "message": "This loan has no repayment schedule."}), 409
 
-        previous_allocations = LoanPaymentAllocation.query.filter_by(
+        confirmed_allocations = LoanPaymentAllocation.query.filter_by(
             workspace_id=loan.workspace_id,
             personal_loan_id=loan.id,
+            status="confirmed",
         ).all()
 
         allocated_by_installment = {item.id: 0 for item in installments}
-        for previous in previous_allocations:
+        for previous in confirmed_allocations:
             if previous.installment_id not in allocated_by_installment:
-                return jsonify({"success": False, "message": "A previous repayment allocation references an invalid installment."}), 409
+                return jsonify({"success": False, "message": "A confirmed repayment allocation references an invalid installment."}), 409
             allocated_by_installment[previous.installment_id] += previous.amount_minor
 
         for installment in installments:
             if allocated_by_installment[installment.id] != installment.paid_minor:
-                return jsonify({"success": False, "message": "Installment balances do not match their payment allocations."}), 409
+                return jsonify({"success": False, "message": "Installment balances do not match confirmed payment allocations."}), 409
 
-        allocations = build_payment_allocations(
-            installments,
-            previous_allocations,
-            payment.amount_minor,
+        pending_allocations = LoanPaymentAllocation.query.filter_by(
+            workspace_id=loan.workspace_id,
+            personal_loan_id=loan.id,
+            payment_id=payment.id,
+            status="pending",
+        ).with_for_update().all()
+
+        if not pending_allocations:
+            return jsonify({"success": False, "message": "The repayment has no reserved installment allocations."}), 409
+
+        principal_total = sum(
+            item.principal_minor for item in pending_allocations
+        )
+        interest_total = sum(
+            item.interest_minor for item in pending_allocations
+        )
+        allocation_total = sum(
+            item.amount_minor for item in pending_allocations
         )
 
-        principal_total = sum(item["principal_minor"] for item in allocations)
-        interest_total = sum(item["interest_minor"] for item in allocations)
+        if (
+            allocation_total != payment.amount_minor
+            or principal_total + interest_total != payment.amount_minor
+        ):
+            return jsonify({"success": False, "message": "Reserved repayment allocations do not match the payment amount."}), 409
 
-        if principal_total + interest_total != payment.amount_minor:
-            raise ValueError("Repayment allocation does not balance.")
+        installments_by_id = {item.id: item for item in installments}
+
+        for allocation in pending_allocations:
+            installment = installments_by_id.get(allocation.installment_id)
+
+            if installment is None:
+                return jsonify({"success": False, "message": "A reserved allocation references an invalid installment."}), 409
+
+            if (
+                allocation.amount_minor != (
+                    allocation.principal_minor + allocation.interest_minor
+                )
+                or installment.paid_minor + allocation.amount_minor
+                > installment.amount_minor
+            ):
+                return jsonify({"success": False, "message": "A reserved allocation exceeds the installment balance."}), 409
 
         source_currency = db.session.get(Currency, loan.currency_code)
         functional_currency = db.session.get(Currency, workspace.functional_currency)
@@ -3339,19 +3364,10 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
             posted_by=user_id,
         )
 
-        installments_by_id = {item.id: item for item in installments}
-        for allocation in allocations:
-            installment = installments_by_id[allocation["installment_id"]]
-            db.session.add(LoanPaymentAllocation(
-                workspace_id=loan.workspace_id,
-                personal_loan_id=loan.id,
-                payment_id=payment.id,
-                installment_id=installment.id,
-                amount_minor=allocation["amount_minor"],
-                principal_minor=allocation["principal_minor"],
-                interest_minor=allocation["interest_minor"],
-            ))
-            installment.paid_minor += allocation["amount_minor"]
+        for allocation in pending_allocations:
+            installment = installments_by_id[allocation.installment_id]
+            allocation.status = "confirmed"
+            installment.paid_minor += allocation.amount_minor
 
         for installment in installments:
             if installment.status == "waived":

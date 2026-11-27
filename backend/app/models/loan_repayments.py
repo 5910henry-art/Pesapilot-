@@ -213,9 +213,10 @@ class LoanPayment(db.Model):
             "OR (payment_source = 'external' "
             "AND financial_account_id IS NULL "
             "AND journal_entry_id IS NOT NULL) "
-            "OR (payment_source = 'linked' "
-            "AND financial_account_id IS NULL "
-            "AND journal_entry_id IS NULL))",
+            "OR (payment_source = 'linked' AND ("
+            "(financial_account_id IS NULL AND journal_entry_id IS NULL) "
+            "OR (financial_account_id IS NOT NULL AND journal_entry_id IS NOT NULL)"
+            ")))",
             name="ck_loan_payment_confirmed_accounting",
         ),
         Index(
@@ -223,6 +224,7 @@ class LoanPayment(db.Model):
             "workspace_id", "payment_date",
         ),
     )
+
 
 
 class LoanPaymentAllocation(db.Model):
@@ -254,6 +256,12 @@ class LoanPaymentAllocation(db.Model):
     interest_minor: Mapped[int] = mapped_column(
         db.BigInteger, default=0, nullable=False
     )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="confirmed",
+        server_default="confirmed",
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -282,6 +290,10 @@ class LoanPaymentAllocation(db.Model):
         UniqueConstraint(
             "payment_id", "installment_id",
             name="uq_loan_payment_installment",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'confirmed')",
+            name="ck_loan_allocation_status",
         ),
         CheckConstraint(
             "amount_minor > 0 AND principal_minor >= 0 "

@@ -384,6 +384,7 @@ def confirm_loan_payment(
         .where(
             LoanPaymentAllocation.workspace_id == workspace_id,
             LoanPaymentAllocation.personal_loan_id == loan.id,
+            LoanPaymentAllocation.status == "confirmed",
         )
     ).scalars().all()
 
