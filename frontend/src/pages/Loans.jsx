@@ -93,6 +93,7 @@ const INITIAL_FORM = {
   amount: "",
   interest_method: "none",
   interest_rate_percent: "0",
+  interest_rate_period: "monthly",
   repayment_frequency: "monthly",
   term_count: "1",
   start_date: todayLocal(),
@@ -435,6 +436,7 @@ export default function Loans() {
       amount: (Number(loan.principal_minor || 0) / (10 ** digits)).toFixed(digits),
       interest_method: loan.interest_method || "none",
       interest_rate_percent: String(loan.interest_rate_percent ?? "0"),
+      interest_rate_period: loan.interest_rate_period || "monthly",
       repayment_frequency: loan.repayment_frequency,
       term_count: String(loan.term_count || 1),
       start_date: loan.start_date,
@@ -466,7 +468,7 @@ export default function Loans() {
       }
 
       if (!Number.isFinite(rate) || rate < 0 || rate > 1000) {
-        throw new Error("Enter a valid annual interest rate.");
+        throw new Error("Enter a valid interest rate.");
       }
 
       if (form.interest_method === "none" && rate !== 0) {
@@ -494,6 +496,7 @@ export default function Loans() {
         currency_code: currency,
         interest_method: form.interest_method,
         interest_rate_percent: String(rate),
+        interest_rate_period: form.interest_rate_period,
         repayment_frequency: form.repayment_frequency,
         term_count: termCount,
         start_date: form.start_date,
@@ -1277,7 +1280,7 @@ export default function Loans() {
                             {Number(request.interest_rate_percent || 0).toLocaleString(
                               undefined,
                               { maximumFractionDigits: 2 }
-                            )}% annual interest
+                            )}% {request.interest_rate_period || "monthly"} interest
                           </span>
                         )}
                       </div>
@@ -1615,7 +1618,7 @@ export default function Loans() {
                         <span><CalendarDays size={14} /> Due {loan.due_date}</span>
                         <span>{loan.repayment_frequency.replace("_", " ")}</span>
                         {loan.interest_method !== "none" && (
-                          <span>{Number(loan.interest_rate_percent || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}% annual interest</span>
+                          <span>{Number(loan.interest_rate_percent || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}% {loan.interest_rate_period || "monthly"} interest</span>
                         )}
                       </div>
                       {loan.status === "rejected" && loan.decision_reason && (
@@ -2766,7 +2769,7 @@ export default function Loans() {
                 </label>
 
                 <label>
-                  Annual interest rate (%)
+                  Interest rate (%)
                   <input
                     type="number"
                     min="0"
@@ -2776,6 +2779,18 @@ export default function Loans() {
                     onChange={(event) => updateForm("interest_rate_percent", event.target.value)}
                     disabled={form.interest_method === "none" || form.loan_type === "interest_free"}
                   />
+                </label>
+
+                <label>
+                  Rate period
+                  <select
+                    value={form.interest_rate_period}
+                    onChange={(event) => updateForm("interest_rate_period", event.target.value)}
+                    disabled={form.interest_method === "none" || form.loan_type === "interest_free"}
+                  >
+                    <option value="monthly">Monthly</option>
+                    <option value="annual">Annual</option>
+                  </select>
                 </label>
 
                 <label>
@@ -2841,7 +2856,7 @@ export default function Loans() {
 
               <div className="loans-form-note">
                 <Clock3 size={16} />
-                Interest rates are annual. The final repayment date must match the repayment schedule.
+                Annual rates are divided by 12 for monthly schedule calculations. The final repayment date must match the repayment schedule.
               </div>
 
               {renderFeedback(formMessage)}

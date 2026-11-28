@@ -600,7 +600,7 @@ export default function PlatformOwnerLoans() {
             </div>
 
             <div className="platform-loan-detail-facts">
-              <span><b>Interest:</b> {loan.interest_method} · {loan.interest_rate_percent}%</span>
+              <span><b>Interest:</b> {loan.interest_method} · {loan.interest_rate_percent}% {loan.interest_rate_period || "monthly"}</span>
               <span><b>Frequency:</b> {loan.repayment_frequency}</span>
               <span><b>Term:</b> {loan.term_count}</span>
               <span><b>Start:</b> {dateText(loan.start_date)}</span>

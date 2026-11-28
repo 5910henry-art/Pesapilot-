@@ -87,6 +87,13 @@ class PlatformLoan(db.Model):
         nullable=False,
     )
 
+    interest_rate_period: Mapped[str] = mapped_column(
+        String(10),
+        default="monthly",
+        server_default="monthly",
+        nullable=False,
+    )
+
     interest_rate_percent: Mapped[Decimal] = mapped_column(
         Numeric(12, 6),
         default=Decimal("0"),

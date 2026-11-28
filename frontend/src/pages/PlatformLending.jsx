@@ -675,7 +675,7 @@ export default function PlatformLending() {
                 <div className="lending-info-grid">
                   <div><span>Approved principal</span><strong>{money(detailLoan.approved_principal_minor, detailLoan.currency_code)}</strong></div>
                   <div><span>Interest method</span><strong>{statusLabel(detailLoan.interest_method)}</strong></div>
-                  <div><span>Interest rate</span><strong>{detailLoan.interest_rate_percent}%</strong></div>
+                  <div><span>Interest rate</span><strong>{detailLoan.interest_rate_percent}% {detailLoan.interest_rate_period || "monthly"}</strong></div>
                   <div><span>Repayment frequency</span><strong>{statusLabel(detailLoan.repayment_frequency)}</strong></div>
                   <div><span>Term</span><strong>{detailLoan.term_count} periods</strong></div>
                   <div><span>Due date</span><strong>{dateLabel(detailLoan.due_date)}</strong></div>
@@ -790,7 +790,7 @@ export default function PlatformLending() {
                         </strong>
                       </div>
                       <div className="lending-product-meta">
-                        <div><span>Interest</span><strong>{product.interest_rate_percent}% · {statusLabel(product.interest_method)}</strong></div>
+                        <div><span>Interest</span><strong>{product.interest_rate_percent}% {product.interest_rate_period || "monthly"} · {statusLabel(product.interest_method)}</strong></div>
                         <div><span>Repayment</span><strong>{statusLabel(product.repayment_frequency)}</strong></div>
                         <div><span>Term range</span><strong>{product.min_term_count}–{product.max_term_count} periods</strong></div>
                         <div><span>Origination fee</span><strong>{money(product.origination_fee_minor, product.currency_code)}</strong></div>

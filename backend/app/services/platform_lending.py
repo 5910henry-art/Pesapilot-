@@ -382,6 +382,7 @@ def create_platform_loan_from_application(*, application_id):
         currency_code=product.currency_code,
         interest_method=product.interest_method,
         interest_rate_percent=product.interest_rate_percent,
+        interest_rate_period=product.interest_rate_period,
         repayment_frequency=product.repayment_frequency,
         one_time_due_days=product.one_time_due_days,
         term_count=application.term_count,
@@ -878,6 +879,7 @@ def disburse_platform_loan(
                 "repayment_frequency": loan.repayment_frequency,
                 "interest_rate_percent": loan.interest_rate_percent,
                 "interest_method": loan.interest_method,
+                "interest_rate_period": loan.interest_rate_period,
             },
         )()
 

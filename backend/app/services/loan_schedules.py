@@ -191,7 +191,7 @@ def build_repayment_schedule(loan):
     """
     Build a repayment schedule without writing to the database.
 
-    Interest rates are monthly percentages. Interest is prorated using
+    Interest rates may be monthly or nominal annual percentages. Annual rates are converted to monthly rates by dividing by 12. Interest is prorated using actual period days divided by 30. All amounts are integer minor units. Interest is prorated using
     actual period days divided by 30. All amounts are integer minor units.
     """
 
@@ -204,7 +204,15 @@ def build_repayment_schedule(loan):
     if loan.due_date < loan.start_date:
         raise ValueError("Final due date cannot precede the start date.")
 
-    monthly_rate = Decimal(str(loan.interest_rate_percent)) / Decimal("100")
+    rate_period = getattr(loan, "interest_rate_period", "monthly")
+    if rate_period not in ("monthly", "annual"):
+        raise ValueError("Interest rate period must be monthly or annual.")
+
+    monthly_rate_percent = Decimal(str(loan.interest_rate_percent))
+    if rate_period == "annual":
+        monthly_rate_percent /= Decimal("12")
+
+    monthly_rate = monthly_rate_percent / Decimal("100")
 
     if not monthly_rate.is_finite() or monthly_rate < ZERO:
         raise ValueError("Monthly interest rate must be valid and non-negative.")

@@ -113,6 +113,7 @@ def estimate_affordable_principal(
     repayment_frequency,
     interest_method,
     interest_rate_percent,
+    interest_rate_period="monthly",
 ):
     """Find the largest principal whose actual repayment schedule fits capacity.
 
@@ -161,6 +162,7 @@ def estimate_affordable_principal(
             repayment_frequency=repayment_frequency,
             interest_method=interest_method,
             interest_rate_percent=Decimal(str(interest_rate_percent)),
+            interest_rate_period=interest_rate_period,
         )
 
         try:

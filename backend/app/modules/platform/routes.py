@@ -1093,6 +1093,7 @@ def create_owner_platform_loan(application_id):
                 "currency_code": loan.currency_code,
                 "interest_method": loan.interest_method,
                 "interest_rate_percent": str(loan.interest_rate_percent),
+                "interest_rate_period": loan.interest_rate_period,
                 "repayment_frequency": loan.repayment_frequency,
                 "one_time_due_days": loan.one_time_due_days,
                 "term_count": loan.term_count,
@@ -1848,6 +1849,7 @@ def list_owner_platform_loans():
                 "currency_code": loan.currency_code,
                 "interest_method": loan.interest_method,
                 "interest_rate_percent": str(loan.interest_rate_percent),
+                "interest_rate_period": loan.interest_rate_period,
                 "repayment_frequency": loan.repayment_frequency,
                 "one_time_due_days": loan.one_time_due_days,
                 "term_count": loan.term_count,
@@ -2001,6 +2003,7 @@ def get_owner_platform_loan(loan_id):
             "currency_code": loan.currency_code,
             "interest_method": loan.interest_method,
             "interest_rate_percent": str(loan.interest_rate_percent),
+            "interest_rate_period": loan.interest_rate_period,
             "repayment_frequency": loan.repayment_frequency,
             "one_time_due_days": loan.one_time_due_days,
             "term_count": loan.term_count,
@@ -3103,6 +3106,7 @@ def list_customer_platform_loans():
             "currency_code": loan.currency_code,
             "interest_method": loan.interest_method,
             "interest_rate_percent": str(loan.interest_rate_percent),
+            "interest_rate_period": loan.interest_rate_period,
             "repayment_frequency": loan.repayment_frequency,
             "one_time_due_days": loan.one_time_due_days,
             "term_count": loan.term_count,
@@ -3217,6 +3221,7 @@ def get_customer_platform_loan(loan_id):
                 "currency_code": loan.currency_code,
                 "interest_method": loan.interest_method,
                 "interest_rate_percent": str(loan.interest_rate_percent),
+                "interest_rate_period": loan.interest_rate_period,
                 "repayment_frequency": loan.repayment_frequency,
                 "one_time_due_days": loan.one_time_due_days,
                 "term_count": loan.term_count,
@@ -3482,6 +3487,7 @@ def _owner_product_response(product):
         "max_principal_minor": product.max_principal_minor,
         "interest_method": product.interest_method,
         "interest_rate_percent": str(product.interest_rate_percent),
+        "interest_rate_period": product.interest_rate_period,
         "repayment_frequency": product.repayment_frequency,
         "one_time_due_days": product.one_time_due_days,
         "min_term_count": product.min_term_count,
@@ -3502,7 +3508,7 @@ def _validate_owner_product_payload(data, existing=None):
     allowed = {
         "name", "code", "description", "currency_code",
         "min_principal_minor", "max_principal_minor",
-        "interest_method", "interest_rate_percent",
+        "interest_method", "interest_rate_percent", "interest_rate_period",
         "repayment_frequency", "one_time_due_days",
         "min_term_count", "max_term_count",
         "origination_fee_minor", "late_payment_fee_minor",
@@ -3528,6 +3534,7 @@ def _validate_owner_product_payload(data, existing=None):
         "one_time_due_days": None,
         "origination_fee_minor": 0,
         "late_payment_fee_minor": 0,
+        "interest_rate_period": "monthly",
         "allow_early_repayment": True,
         "is_active": True,
     }
@@ -3588,6 +3595,8 @@ def _validate_owner_product_payload(data, existing=None):
         raise ValueError("Maximum term count cannot be below minimum term count.")
 
     method = values.get("interest_method")
+    if values.get("interest_rate_period") not in {"monthly", "annual"}:
+        raise ValueError("Interest rate period must be monthly or annual.")
     if method not in {"none", "flat", "reducing"}:
         raise ValueError("Invalid interest method.")
 
@@ -4315,6 +4324,7 @@ def check_customer_platform_eligibility():
                     "interest_rate_percent": str(
                         product.interest_rate_percent
                     ),
+                    "interest_rate_period": product.interest_rate_period,
                     "repayment_frequency": product.repayment_frequency,
                     "one_time_due_days": product.one_time_due_days,
                     "min_term_count": product.min_term_count,
@@ -4828,6 +4838,7 @@ def submit_platform_application():
             repayment_frequency=product.repayment_frequency,
             interest_method=product.interest_method,
             interest_rate_percent=product.interest_rate_percent,
+            interest_rate_period=product.interest_rate_period,
         )
 
         affordable_principal = estimate[

@@ -187,6 +187,7 @@ def _loan_response(loan):
         "currency_code": loan.currency_code,
         "interest_method": loan.interest_method,
         "interest_rate_percent": str(loan.interest_rate_percent),
+        "interest_rate_period": loan.interest_rate_period,
         "repayment_frequency": loan.repayment_frequency,
         "term_count": loan.term_count,
         "installment_minor": loan.installment_minor,
@@ -362,6 +363,7 @@ def create_personal_loan():
     principal = data.get("principal_minor")
     interest_method = data.get("interest_method", "none")
     interest_rate_value = data.get("interest_rate_percent", "0")
+    interest_rate_period = data.get("interest_rate_period", "monthly")
     frequency = data.get("repayment_frequency")
     term_count = data.get("term_count")
     installment = data.get("installment_minor")
@@ -417,6 +419,12 @@ def create_personal_loan():
         return jsonify({
             "success": False,
             "message": "Invalid interest method.",
+        }), 400
+
+    if interest_rate_period not in {"monthly", "annual"}:
+        return jsonify({
+            "success": False,
+            "message": "Interest rate period must be monthly or annual.",
         }), 400
 
     try:
@@ -532,6 +540,7 @@ def create_personal_loan():
             currency_code=currency_code,
             interest_method=interest_method,
             interest_rate_percent=interest_rate,
+            interest_rate_period=interest_rate_period,
             repayment_frequency=frequency,
             term_count=term_count,
             installment_minor=installment,
@@ -742,6 +751,7 @@ def update_personal_loan(loan_id):
     principal = data.get("principal_minor")
     interest_method = data.get("interest_method", "none")
     interest_rate_value = data.get("interest_rate_percent", "0")
+    interest_rate_period = data.get("interest_rate_period", "monthly")
     frequency = data.get("repayment_frequency")
     term_count = data.get("term_count")
     installment = data.get("installment_minor")
@@ -787,6 +797,12 @@ def update_personal_loan(loan_id):
         return jsonify({
             "success": False,
             "message": "Invalid interest method.",
+        }), 400
+
+    if interest_rate_period not in {"monthly", "annual"}:
+        return jsonify({
+            "success": False,
+            "message": "Interest rate period must be monthly or annual.",
         }), 400
 
     try:
@@ -881,6 +897,7 @@ def update_personal_loan(loan_id):
         "principal_minor": loan.principal_minor,
         "interest_method": loan.interest_method,
         "interest_rate_percent": str(loan.interest_rate_percent),
+        "interest_rate_period": loan.interest_rate_period,
         "repayment_frequency": loan.repayment_frequency,
         "term_count": loan.term_count,
         "installment_minor": loan.installment_minor,
@@ -901,6 +918,7 @@ def update_personal_loan(loan_id):
         loan.principal_minor = principal
         loan.interest_method = interest_method
         loan.interest_rate_percent = interest_rate
+        loan.interest_rate_period = interest_rate_period
         loan.repayment_frequency = frequency
         loan.term_count = term_count
         loan.installment_minor = installment
@@ -927,6 +945,7 @@ def update_personal_loan(loan_id):
                     "principal_minor": loan.principal_minor,
                     "interest_method": loan.interest_method,
                     "interest_rate_percent": str(loan.interest_rate_percent),
+                    "interest_rate_period": loan.interest_rate_period,
                     "repayment_frequency": loan.repayment_frequency,
                     "term_count": loan.term_count,
                     "installment_minor": loan.installment_minor,
@@ -984,6 +1003,7 @@ def _incoming_loan_response(loan):
         "loan_type": loan.loan_type,
         "interest_method": loan.interest_method,
         "interest_rate_percent": str(loan.interest_rate_percent),
+        "interest_rate_period": loan.interest_rate_period,
         "repayment_frequency": loan.repayment_frequency,
         "term_count": loan.term_count,
         "installment_minor": loan.installment_minor,

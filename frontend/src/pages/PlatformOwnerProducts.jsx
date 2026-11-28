@@ -12,6 +12,7 @@ const EMPTY_FORM = {
   max_principal_minor: "10000000",
   interest_method: "reducing",
   interest_rate: "10",
+  interest_rate_period: "monthly",
   repayment_frequency: "monthly",
   one_time_due_days: "",
   min_term_count: "1",
@@ -153,6 +154,12 @@ function ProductForm({ initial, onClose, onSave, saving }) {
             <Field label="Interest rate (%)">
               <input type="number" min="0" step="0.000001" required value={form.interest_rate} onChange={(e) => update("interest_rate", e.target.value)} />
             </Field>
+            <Field label="Rate period">
+              <select value={form.interest_rate_period} onChange={(e) => update("interest_rate_period", e.target.value)}>
+                <option value="monthly">Monthly</option>
+                <option value="annual">Annual</option>
+              </select>
+            </Field>
             <Field label="Repayment frequency">
               <select value={form.repayment_frequency} onChange={(e) => update("repayment_frequency", e.target.value)}>
                 {FREQUENCIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -284,6 +291,7 @@ export default function PlatformOwnerProducts() {
       max_principal_minor: String(product.max_principal_minor ?? 0),
       interest_method: product.interest_method || "none",
       interest_rate: String(product.interest_rate_percent ?? 0),
+      interest_rate_period: product.interest_rate_period || "monthly",
       repayment_frequency: product.repayment_frequency || "monthly",
       one_time_due_days: product.one_time_due_days == null
         ? ""
@@ -349,7 +357,7 @@ export default function PlatformOwnerProducts() {
               <p className="platform-owner-product-description">{product.description || "No description provided."}</p>
               <div className="platform-owner-product-details">
                 <div><span>Principal range</span><strong>{money(product.min_principal_minor, product.currency_code)} – {money(product.max_principal_minor, product.currency_code)}</strong></div>
-                <div><span>Interest</span><strong>{product.interest_method === "none" ? "No interest" : `${product.interest_rate_percent}% · ${product.interest_method}`}</strong></div>
+                <div><span>Interest</span><strong>{product.interest_method === "none" ? "No interest" : `${product.interest_rate_percent}% ${product.interest_rate_period || "monthly"} · ${product.interest_method}`}</strong></div>
                 <div>
                   <span>Repayment</span>
                   <strong>
