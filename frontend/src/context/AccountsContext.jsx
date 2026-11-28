@@ -81,10 +81,7 @@ export function AccountsProvider({ children }) {
           balances: balanceData.accounts || [],
         };
 
-        if (
-          requestGeneration !== cacheGenerationRef.current ||
-          requestsRef.current.get(workspaceId) !== request
-        ) {
+        if (requestGeneration !== cacheGenerationRef.current) {
           return result;
         }
 
@@ -104,7 +101,6 @@ export function AccountsProvider({ children }) {
       .catch((error) => {
         if (
           requestGeneration === cacheGenerationRef.current &&
-          requestsRef.current.get(workspaceId) === request &&
           currentWorkspaceRef.current === workspaceId
         ) {
           setData((previous) => ({
