@@ -72,6 +72,7 @@ export default function Accounts() {
   const [refreshing, setRefreshing] = useState(false);
   const [createMessage, setCreateMessage] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [showTransactionDrawer, setShowTransactionDrawer] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingAccountId, setEditingAccountId] = useState(null);
   const [editForm, setEditForm] = useState({
@@ -113,6 +114,20 @@ export default function Accounts() {
 
   const totalAccounts = accounts.length;
   const activeAccounts = accounts.filter((item) => item.is_active).length;
+
+  const totalMoneyHeld = useMemo(() => {
+    return accounts.reduce((total, account) => {
+      if (!account.is_active || account.account_type === "credit") {
+        return total;
+      }
+
+      const ledger = account.ledger_account
+        ? balanceByLedger.get(account.ledger_account.id)
+        : null;
+
+      return total + Number(ledger?.functional_balance_minor || 0);
+    }, 0);
+  }, [accounts, balanceByLedger]);
 
   async function handleCreate(event) {
     event.preventDefault();
@@ -280,48 +295,93 @@ export default function Accounts() {
 
 
 
-      <section className="accounts-summary">
+      <section className="accounts-summary accounts-summary-featured">
         <article className="accounts-summary-card">
-          <div className="accounts-summary-icon">
+          <div className="accounts-summary-icon active-icon">
             <Wallet size={21} />
           </div>
           <div>
-            <span>Total accounts</span>
-            <strong>{loading ? <Skeleton width="48px" height={22} /> : totalAccounts}</strong>
-          </div>
-        </article>
-
-        <article className="accounts-summary-card">
-          <div className="accounts-summary-icon active-icon">
-            <CheckCircle2 size={21} />
-          </div>
-          <div>
-            <span>Active accounts</span>
-            <strong>{loading ? <Skeleton width="48px" height={22} /> : activeAccounts}</strong>
+            <span>Total money held</span>
+            <strong>
+              {loading ? (
+                <Skeleton width="120px" height={22} />
+              ) : (
+                formatMoney(totalMoneyHeld, workspaceCurrency)
+              )}
+            </strong>
           </div>
         </article>
       </section>
 
-      <TransactionEntryForm
-        allowedTypes={["income", "transfer", "opening"]}
-        initialType="income"
-        title="Record account activity"
-        description="Record income, transfer money between accounts, or enter an opening balance."
-        onRecorded={() => loadAccounts(true)}
-        footerAction={
+      <section className="accounts-activity-toolbar">
+        <div>
+          <h2>Account activity</h2>
+          <p>Record money received, transfers and opening balances.</p>
+        </div>
+        <div className="accounts-activity-actions">
           <button
-            className="primary-button"
+            className="secondary-button"
             type="button"
             onClick={() => {
               setCreateMessage(null);
               setShowForm((value) => !value);
             }}
           >
-            {showForm ? <X size={17} /> : <Plus size={18} />}
+            {showForm ? <X size={17} /> : <Plus size={17} />}
             {showForm ? "Close" : "Add account"}
           </button>
-        }
-      />
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => setShowTransactionDrawer(true)}
+          >
+            <Plus size={18} />
+            Record transaction
+          </button>
+        </div>
+      </section>
+
+      {showTransactionDrawer && (
+        <div
+          className="accounts-transaction-overlay"
+          onClick={() => setShowTransactionDrawer(false)}
+        >
+          <aside
+            className="accounts-transaction-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Record account activity"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="accounts-transaction-drawer-heading">
+              <div>
+                <span className="eyebrow">ACCOUNT ACTIVITY</span>
+                <h2>Record transaction</h2>
+                <p>Add income, transfer funds or enter an opening balance.</p>
+              </div>
+              <button
+                type="button"
+                className="accounts-transaction-drawer-close"
+                onClick={() => setShowTransactionDrawer(false)}
+                aria-label="Close transaction drawer"
+              >
+                <X size={21} />
+              </button>
+            </div>
+
+            <TransactionEntryForm
+              allowedTypes={["income", "transfer", "opening"]}
+              initialType="income"
+              title="Transaction details"
+              description="Complete the details below to update your account balances."
+              onRecorded={() => {
+                loadAccounts(true);
+                setShowTransactionDrawer(false);
+              }}
+            />
+          </aside>
+        </div>
+      )}
 
       {showForm && (
         <section className="panel account-form-panel">

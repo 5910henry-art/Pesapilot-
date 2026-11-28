@@ -7,15 +7,28 @@ import { useAccounts } from "../context/AccountsContext";
 import { financeApi } from "../api/client";
 import { Skeleton } from "../components/Skeleton";
 
-function formatDate(value) {
-  if (!value) return "—";
-  const date = new Date(value);
+function formatDateTime(entry) {
+  const timestamp = entry.created_at || entry.posted_at;
+  const value = timestamp || entry.transaction_date;
 
-  return Number.isNaN(date.getTime())
-    ? "—"
-    : date.toLocaleDateString(undefined, {
-        day: "numeric", month: "short", year: "numeric",
-      });
+  if (!value) return { date: "—", time: "Time unavailable" };
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return { date: "—", time: "Time unavailable" };
+  }
+
+  return {
+    date: date.toLocaleDateString(undefined, {
+      day: "numeric", month: "short", year: "numeric",
+    }),
+    time: timestamp
+      ? date.toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : "Time unavailable",
+  };
 }
 
 function formatMinorAmount(amountMinor, currency) {
@@ -95,6 +108,74 @@ export default function Transactions() {
         account.account_type,
       ])
   );
+
+  const accountByLedgerId = new Map(
+    accounts
+      .filter((account) => account.ledger_account?.id)
+      .map((account) => [
+        String(account.ledger_account.id),
+        account,
+      ])
+  );
+
+  function getMoneyMovement(entry) {
+    const moneyLines = (entry.lines || []).filter((line) => {
+      const account = accountByLedgerId.get(
+        String(line.ledger_account_id)
+      );
+      return account && account.account_type !== "credit";
+    });
+
+    const debitTotal = moneyLines.reduce(
+      (sum, line) => sum + Number(line.functional_debit_minor || 0),
+      0
+    );
+
+    const creditTotal = moneyLines.reduce(
+      (sum, line) => sum + Number(line.functional_credit_minor || 0),
+      0
+    );
+
+    const fromAccounts = [...new Set(
+      moneyLines
+        .filter((line) => Number(line.functional_credit_minor || 0) > 0)
+        .map((line) => accountByLedgerId.get(
+          String(line.ledger_account_id)
+        )?.name)
+        .filter(Boolean)
+    )];
+
+    const toAccounts = [...new Set(
+      moneyLines
+        .filter((line) => Number(line.functional_debit_minor || 0) > 0)
+        .map((line) => accountByLedgerId.get(
+          String(line.ledger_account_id)
+        )?.name)
+        .filter(Boolean)
+    )];
+
+    if (debitTotal > 0 && creditTotal > 0) {
+      return {
+        kind: "transfer",
+        label: `${fromAccounts.join(", ") || "Account"} → ${toAccounts.join(", ") || "Account"}`,
+        amount: Math.min(debitTotal, creditTotal),
+      };
+    }
+
+    if (debitTotal > 0) {
+      return { kind: "in", label: "Money in", amount: debitTotal };
+    }
+
+    if (creditTotal > 0) {
+      return { kind: "out", label: "Money out", amount: creditTotal };
+    }
+
+    return {
+      kind: "neutral",
+      label: "No account movement",
+      amount: 0,
+    };
+  }
 
   const availableAccountTypes = [
     "cash",
@@ -335,8 +416,8 @@ export default function Transactions() {
                 <tr>
                   <th>DESCRIPTION</th>
                   <th>REFERENCE</th>
-                  <th>DATE</th>
-                  <th className="transaction-amount-heading">AMOUNT</th>
+                  <th>DATE &amp; TIME</th>
+                  <th className="transaction-amount-heading">DIRECTION / AMOUNT</th>
                   <th>STATUS</th>
                   <th>ACTION</th>
                 </tr>
@@ -369,8 +450,8 @@ export default function Transactions() {
                 <tr>
                   <th>DESCRIPTION</th>
                   <th>REFERENCE</th>
-                  <th>DATE</th>
-                  <th className="transaction-amount-heading">AMOUNT</th>
+                  <th>DATE &amp; TIME</th>
+                  <th className="transaction-amount-heading">DIRECTION / AMOUNT</th>
                   <th>STATUS</th>
                   <th>ACTION</th>
                 </tr>
@@ -387,15 +468,28 @@ export default function Transactions() {
                         <span>{entry.reference || "No reference"}</span>
                       </details>
                     </td>
-                    <td>{formatDate(entry.transaction_date)}</td>
+                    <td className="transaction-date-cell">
+                      <strong>{formatDateTime(entry).date}</strong>
+                      <span>{formatDateTime(entry).time}</span>
+                    </td>
                     <td className="transaction-amount">
-                      {formatMinorAmount(
-                        (entry.lines || []).reduce(
-                          (total, line) => total + Number(line.functional_debit_minor || 0),
-                          0
-                        ),
-                        workspaceCurrency
-                      )}
+                      {(() => {
+                        const movement = getMoneyMovement(entry);
+                        return (
+                          <div className="transaction-movement">
+                            {movement.kind === "transfer" && (
+                              <span className="transaction-direction direction-transfer">
+                                {movement.label}
+                              </span>
+                            )}
+                            <strong className={`transaction-value direction-${movement.kind}`}>
+                              {movement.kind === "in" ? "+" :
+                               movement.kind === "out" ? "−" : ""}
+                              {formatMinorAmount(movement.amount, workspaceCurrency)}
+                            </strong>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td>
                       <span className={`transaction-status status-${entry.status}`}>

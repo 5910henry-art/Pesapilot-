@@ -771,10 +771,34 @@ def _journal_entry_response(entry, include_lines=False):
             .all()
         )
 
+        ledger_ids = {line.ledger_account_id for line in lines}
+        ledger_accounts = {
+            account.id: account
+            for account in LedgerAccount.query.filter(
+                LedgerAccount.id.in_(ledger_ids)
+            ).all()
+        } if ledger_ids else {}
+
         result["lines"] = [
             {
                 "id": str(line.id),
                 "ledger_account_id": str(line.ledger_account_id),
+                "ledger_account_name": (
+                    ledger_accounts[line.ledger_account_id].name
+                    if line.ledger_account_id in ledger_accounts else None
+                ),
+                "ledger_account_code": (
+                    ledger_accounts[line.ledger_account_id].code
+                    if line.ledger_account_id in ledger_accounts else None
+                ),
+                "ledger_account_class": (
+                    ledger_accounts[line.ledger_account_id].account_class
+                    if line.ledger_account_id in ledger_accounts else None
+                ),
+                "normal_balance": (
+                    ledger_accounts[line.ledger_account_id].normal_balance
+                    if line.ledger_account_id in ledger_accounts else None
+                ),
                 "currency": line.currency_code,
                 "debit_minor": line.debit_minor,
                 "credit_minor": line.credit_minor,

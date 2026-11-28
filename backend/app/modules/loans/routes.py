@@ -3332,15 +3332,17 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
                 "exchange_rate": fx_rate,
                 "memo": "Linked loan repayment received",
             },
-            {
+        ]
+
+        if principal_total:
+            lines.append({
                 "ledger_account_id": str(receivable.id),
                 "debit_minor": 0,
                 "credit_minor": principal_total,
                 "exchange_rate": fx_rate,
                 "functional_amount_minor": principal_functional,
                 "memo": "Loan principal repaid",
-            },
-        ]
+            })
 
         if interest_total:
             lines.append({

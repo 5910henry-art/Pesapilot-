@@ -75,6 +75,8 @@ export default function TransactionEntryForm({
   description = "Entries are posted to your double-entry ledger.",
   onRecorded,
   footerAction = null,
+  collapsible = false,
+  initiallyCollapsed = false,
 }) {
   const { activeWorkspace } = useAuth();
   const workspaceId = activeWorkspace?.id;
@@ -101,6 +103,7 @@ export default function TransactionEntryForm({
   const { showToast } = useToast();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [isExpanded, setIsExpanded] = useState(!initiallyCollapsed);
 
   const [form, setForm] = useState({
     type: startingType,
@@ -433,8 +436,27 @@ export default function TransactionEntryForm({
           <h3>{title}</h3>
           <p>{description}</p>
         </div>
+        {collapsible && (
+          <button
+            className="secondary-button transaction-collapse-toggle"
+            type="button"
+            onClick={() => setIsExpanded((value) => !value)}
+            aria-expanded={isExpanded}
+          >
+            {!isExpanded && <Plus size={16} />}
+            {isExpanded ? "Hide form" : "Record transaction"}
+          </button>
+        )}
       </div>
 
+      {collapsible && !isExpanded && (
+        <div className="transaction-collapsed-actions">
+          {footerAction}
+        </div>
+      )}
+
+      {(!collapsible || isExpanded) && (
+        <>
       {error && (
         <div className="accounts-message error-message" role="alert">
           <AlertCircle size={17} />{error}
@@ -658,6 +680,8 @@ export default function TransactionEntryForm({
             </div>
           </div>
         </form>
+      )}
+        </>
       )}
     </section>
   );
