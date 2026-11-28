@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Wallet, CheckCircle, X } from "lucide-react";
 import { platformOwnerApi } from "../api/client";
 import { useToast } from "../context/ToastContext";
+import { useAccounts } from "../context/AccountsContext";
 
 const ZERO_DECIMAL = new Set([
   "JPY", "UGX", "RWF", "BIF", "DJF", "GNF", "KMF", "XAF", "XOF",
@@ -297,6 +298,7 @@ function LateFeeActionModal({ payment, accounts, mode, onClose, onSubmit, saving
 }
 
 export default function PlatformOwnerCollections() {
+  const { refreshAccounts } = useAccounts();
   const [pending, setPending] = useState([]);
   const [pendingFees, setPendingFees] = useState([]);
   const [confirmedFees, setConfirmedFees] = useState([]);
@@ -351,6 +353,10 @@ export default function PlatformOwnerCollections() {
       } else {
         await platformOwnerApi.reversePayment(paymentId, payload);
         showToast("Repayment reversed successfully.", { type: "success" });
+      }
+
+      if (selected.mode !== "reject") {
+        try { await refreshAccounts(); } catch {}
       }
 
       setSelected(null);

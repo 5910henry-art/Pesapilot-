@@ -55,7 +55,7 @@ export default function Transactions() {
   const { activeWorkspace } = useAuth();
   const workspaceId = activeWorkspace?.id;
   const workspaceCurrency = activeWorkspace?.currency || "KES";
-  const { accounts } = useAccounts();
+  const { accounts, refreshAccounts } = useAccounts();
 
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -297,6 +297,7 @@ export default function Transactions() {
     try {
       await financeApi.reverseEntry(entry.id, workspaceId);
       await loadData(true);
+      try { await refreshAccounts(); } catch {}
       setRowMessages((current) => ({
         ...current,
         [entry.id]: {

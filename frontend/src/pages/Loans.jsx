@@ -177,7 +177,7 @@ export default function Loans() {
     payment_method: "cash",
     notes: "",
   });
-  const { accounts: paymentAccounts } = useAccounts();
+  const { accounts: paymentAccounts, refreshAccounts } = useAccounts();
   const [repaymentLoan, setRepaymentLoan] = useState(null);
   const [repaymentForm, setRepaymentForm] = useState({
     amount: "",
@@ -981,6 +981,7 @@ export default function Loans() {
       });
 
       showToast("Repayment confirmed and accounting updated.", { type: "success" });
+      try { await refreshAccounts(); } catch {}
 
       try {
         const refreshed = await loansApi.getLoan(loan.id, workspaceId);
@@ -1021,6 +1022,7 @@ export default function Loans() {
       });
 
       showToast("Loan receipt confirmed and repayment schedule created.", { type: "success" });
+      try { await refreshAccounts(); } catch {}
 
       const refreshed = await loansApi.getLoan(loan.id, workspaceId);
       setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
@@ -1090,6 +1092,7 @@ export default function Loans() {
       });
 
       showToast("Repayment confirmed and lender accounting updated.", { type: "success" });
+      try { await refreshAccounts(); } catch {}
 
       const refreshed = await loansApi.getLoan(loan.id, workspaceId);
       setLoanDetails((current) => ({ ...current, [loan.id]: refreshed }));
