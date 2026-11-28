@@ -375,7 +375,6 @@ export default function Accounts() {
               title="Transaction details"
               description="Complete the details below to update your account balances."
               onRecorded={() => {
-                loadAccounts(true);
                 setShowTransactionDrawer(false);
               }}
             />
