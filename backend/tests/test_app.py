@@ -9006,6 +9006,20 @@ class PesaPilotTestCase(unittest.TestCase):
         )
         self.assertEqual(approval.status_code, 200, approval.json)
 
+        # Direct reversal of a linked disbursement must be blocked.
+        linked_before_dispute = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=self.workspace.id,
+            personal_loan_id=UUID(loan_id),
+            transaction_type="disbursement",
+        ).one()
+
+        direct_reversal = self.client.post(
+            f"/api/v1/finance/entries/{linked_before_dispute.initiating_journal_entry_id}/reverse",
+            headers=lender_headers,
+            json={"workspace_id": str(lender_workspace.id)},
+        )
+        self.assertEqual(direct_reversal.status_code, 409, direct_reversal.json)
+
         dispute = self.client.post(
             f"/api/v1/loans/{loan_id}/linked-disbursement/dispute",
             headers=self.headers,
@@ -9019,6 +9033,26 @@ class PesaPilotTestCase(unittest.TestCase):
 
         loan = db.session.get(PersonalLoan, UUID(loan_id))
         self.assertEqual(loan.status, "disputed")
+
+        # A disputed linked loan must not accept a new repayment.
+        blocked_repayment = self.client.post(
+            f"/api/v1/loans/{loan_id}/payments",
+            headers=self.headers,
+            json={
+                "workspace_id": str(self.workspace.id),
+                "amount_minor": 1000,
+                "payment_date": start.isoformat(),
+                "payment_method": "cash",
+                "payment_source": "registered",
+                "financial_account_id": str(self.source_account.id),
+                "reference": "TEST-DISPUTED-LOAN-REPAYMENT",
+            },
+        )
+        self.assertEqual(
+            blocked_repayment.status_code,
+            400,
+            blocked_repayment.json,
+        )
 
         linked = LinkedLoanTransaction.query.filter_by(
             loan_workspace_id=self.workspace.id,
@@ -9196,6 +9230,47 @@ class PesaPilotTestCase(unittest.TestCase):
         ).one()
         self.assertEqual(installment.paid_minor, 100000)
         self.assertEqual(installment.status, "paid")
+
+    def test_lender_cannot_confirm_pending_repayment_after_disbursement_reversal(self):
+        (
+            lender,
+            lender_headers,
+            lender_workspace,
+            loan_id,
+            payment_id,
+        ) = self._create_pending_linked_repayment()
+
+        loan = db.session.get(PersonalLoan, UUID(loan_id))
+        disbursement = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=self.workspace.id,
+            personal_loan_id=loan.id,
+            transaction_type="disbursement",
+        ).one()
+
+        original_entry = db.session.get(
+            JournalEntry,
+            disbursement.initiating_journal_entry_id,
+        )
+        self.assertIsNotNone(original_entry)
+        self.assertEqual(original_entry.status, "posted")
+
+        # Simulate the original disbursement being reversed.
+        original_entry.status = "reversed"
+        db.session.commit()
+
+        confirmation = self.client.post(
+            f"/api/v1/loans/{loan_id}/linked-repayments/{payment_id}/confirm",
+            headers=lender_headers,
+            json={
+                "workspace_id": str(lender_workspace.id),
+                "financial_account_id": str(lender_workspace.test_account_id),
+            },
+        )
+
+        self.assertEqual(confirmation.status_code, 409, confirmation.json)
+
+        payment = db.session.get(LoanPayment, UUID(payment_id))
+        self.assertEqual(payment.status, "pending")
 
     def test_non_admin_cannot_confirm_linked_repayment(self):
         (

@@ -26,6 +26,7 @@ from app.models import (
 
 from . import finance_bp
 from app.models.loan_disbursements import LoanDisbursement
+from app.models.linked_loan_transactions import LinkedLoanTransaction
 from app.services.accounting import (
     AccountingError,
     create_draft_entry,
@@ -1490,6 +1491,34 @@ def reverse_journal_entry(entry_id):
             "success": False,
             "message": "You do not have permission to reverse transactions.",
         }), 403
+
+    # Prevent direct reversal of linked loan transactions.
+    linked_transaction = LinkedLoanTransaction.query.filter(
+        (
+            (LinkedLoanTransaction.initiating_workspace_id == workspace_id)
+            & (LinkedLoanTransaction.initiating_journal_entry_id == parsed_entry_id)
+        )
+        |
+        (
+            (LinkedLoanTransaction.confirming_workspace_id == workspace_id)
+            & (LinkedLoanTransaction.confirming_journal_entry_id == parsed_entry_id)
+        )
+    ).first()
+
+    linked_payment = LoanPayment.query.filter_by(
+        workspace_id=workspace_id,
+        journal_entry_id=parsed_entry_id,
+        payment_source="linked",
+    ).first()
+
+    if linked_transaction or linked_payment:
+        return jsonify({
+            "success": False,
+            "message": (
+                "Linked loan transactions cannot be reversed directly. "
+                "Use the linked loan dispute or approval process."
+            ),
+        }), 409
 
     date_value = data.get("transaction_date")
     transaction_date = None

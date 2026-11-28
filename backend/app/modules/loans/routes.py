@@ -2087,6 +2087,44 @@ def record_personal_loan_payment(loan_id):
         loan.direction == "borrowed"
         and loan.counterparty_user_id is not None
     )
+
+    if is_linked:
+        disbursement = LinkedLoanTransaction.query.filter_by(
+            loan_workspace_id=loan.workspace_id,
+            personal_loan_id=loan.id,
+            transaction_type="disbursement",
+            status="confirmed",
+        ).first()
+
+        if (
+            disbursement is None
+            or disbursement.initiating_journal_entry_id is None
+            or disbursement.confirming_journal_entry_id is None
+            or disbursement.initiating_workspace_id is None
+            or disbursement.confirming_workspace_id is None
+        ):
+            return jsonify({
+                "success": False,
+                "message": "Repayments are unavailable because the loan disbursement is not fully confirmed.",
+            }), 409
+
+        initiating_entry = JournalEntry.query.filter_by(
+            id=disbursement.initiating_journal_entry_id,
+            workspace_id=disbursement.initiating_workspace_id,
+            status="posted",
+        ).first()
+        confirming_entry = JournalEntry.query.filter_by(
+            id=disbursement.confirming_journal_entry_id,
+            workspace_id=disbursement.confirming_workspace_id,
+            status="posted",
+        ).first()
+
+        if initiating_entry is None or confirming_entry is None:
+            return jsonify({
+                "success": False,
+                "message": "Repayments are blocked because the original loan disbursement has been reversed or is no longer posted.",
+            }), 409
+
     linked_account = None
 
     if is_linked:
@@ -3101,6 +3139,34 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
 
         if disbursement is None:
             return jsonify({"success": False, "message": "The borrower has not confirmed receipt of the loan disbursement."}), 409
+
+        if (
+            disbursement.initiating_journal_entry_id is None
+            or disbursement.confirming_journal_entry_id is None
+            or disbursement.initiating_workspace_id is None
+            or disbursement.confirming_workspace_id is None
+        ):
+            return jsonify({
+                "success": False,
+                "message": "The original loan disbursement is not fully confirmed. This repayment cannot be approved.",
+            }), 409
+
+        initiating_entry = JournalEntry.query.filter_by(
+            id=disbursement.initiating_journal_entry_id,
+            workspace_id=disbursement.initiating_workspace_id,
+            status="posted",
+        ).first()
+        confirming_entry = JournalEntry.query.filter_by(
+            id=disbursement.confirming_journal_entry_id,
+            workspace_id=disbursement.confirming_workspace_id,
+            status="posted",
+        ).first()
+
+        if initiating_entry is None or confirming_entry is None:
+            return jsonify({
+                "success": False,
+                "message": "The original loan disbursement has been reversed or is no longer posted. This repayment cannot be approved.",
+            }), 409
 
         linked = LinkedLoanTransaction.query.filter_by(
             loan_workspace_id=loan.workspace_id,
