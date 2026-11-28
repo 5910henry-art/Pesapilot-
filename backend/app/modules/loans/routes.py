@@ -3588,14 +3588,6 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
 
         borrower_lines = [
             {
-                "ledger_account_id": str(borrower_payable.id),
-                "debit_minor": principal_total,
-                "credit_minor": 0,
-                "exchange_rate": borrower_fx_rate,
-                "functional_amount_minor": borrower_principal_functional,
-                "memo": "Linked loan principal repaid",
-            },
-            {
                 "ledger_account_id": str(borrower_cash_ledger.id),
                 "debit_minor": 0,
                 "credit_minor": payment.amount_minor,
@@ -3604,6 +3596,16 @@ def confirm_linked_loan_repayment(loan_id, payment_id):
                 "memo": "Repayment sent by borrower",
             },
         ]
+
+        if principal_total:
+            borrower_lines.append({
+                "ledger_account_id": str(borrower_payable.id),
+                "debit_minor": principal_total,
+                "credit_minor": 0,
+                "exchange_rate": borrower_fx_rate,
+                "functional_amount_minor": borrower_principal_functional,
+                "memo": "Linked loan principal repaid",
+            })
 
         if interest_total:
             borrower_interest_expense = LedgerAccount.query.filter_by(
