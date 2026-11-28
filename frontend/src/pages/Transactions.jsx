@@ -7,6 +7,14 @@ import { useAccounts } from "../context/AccountsContext";
 import { financeApi } from "../api/client";
 import { Skeleton } from "../components/Skeleton";
 
+function getEntrySortTime(entry) {
+  const value = entry.created_at || entry.posted_at || entry.transaction_date;
+  if (!value) return 0;
+
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
 function formatDateTime(entry) {
   const timestamp = entry.created_at || entry.posted_at;
   const value = timestamp || entry.transaction_date;
@@ -78,7 +86,10 @@ export default function Transactions() {
         { limit: 100 }
       );
 
-      setEntries(entryData.entries || []);
+      const sortedEntries = [...(entryData.entries || [])].sort(
+        (a, b) => getEntrySortTime(b) - getEntrySortTime(a)
+      );
+      setEntries(sortedEntries);
     } catch (err) {
       setError(err.message || "Could not load your transactions.");
     } finally {
